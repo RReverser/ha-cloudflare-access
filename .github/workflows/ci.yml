@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -48,7 +49,7 @@ jobs:
     # with the integration's own code, proves the edge behaviour the relay depends on
     # (tests/live), deletes the token. Skipped when the two secrets are absent (forks).
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     concurrency: live-cloudflare
     env:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
