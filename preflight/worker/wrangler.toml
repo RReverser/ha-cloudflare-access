@@ -1,0 +1,6 @@
+name = "test-host"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# Route the throwaway hostname to this Worker, e.g.:
+# routes = [{ pattern = "cfa-test.example.com/*", zone_name = "example.com" }]

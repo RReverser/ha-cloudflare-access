@@ -1,0 +1,109 @@
+"""Verification of Cloudflare Access application tokens against the team JWKS."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import aiohttp
+import jwt
+
+_LOGGER = logging.getLogger(__name__)
+
+ALGORITHM = "RS256"
+CERTS_URL_FMT = "https://{team_domain}/cdn-cgi/access/certs"
+
+
+class JwtVerifyError(Exception):
+    """The token was rejected; `reason` is safe to show and log."""
+
+    def __init__(self, reason: str, kid: str | None = None) -> None:
+        """Initialise with a human-readable reason."""
+        super().__init__(reason)
+        self.reason = reason
+        self.kid = kid
+
+
+class JwksVerifier:
+    """Fetches and caches the team's signing keys, keyed by `kid`."""
+
+    def __init__(self, session: aiohttp.ClientSession, team_domain: str) -> None:
+        """Initialise for one team domain (host only, no scheme)."""
+        self._session = session
+        self.issuer = f"https://{team_domain}"
+        self.certs_url = CERTS_URL_FMT.format(team_domain=team_domain)
+        self._keys: dict[str, Any] = {}
+
+    async def refresh(self) -> None:
+        """Replace the key cache from the certs endpoint."""
+        try:
+            async with self._session.get(
+                self.certs_url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    raise JwtVerifyError(f"JWKS fetch failed with HTTP {resp.status}")
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise JwtVerifyError(f"JWKS fetch failed: {err}") from err
+        keys: dict[str, Any] = {}
+        for jwk in data.get("keys") or []:
+            if jwk.get("kty") != "RSA" or not jwk.get("kid"):
+                continue
+            try:
+                keys[jwk["kid"]] = jwt.PyJWK(jwk, algorithm=ALGORITHM).key
+            except jwt.PyJWKError as err:  # pragma: no cover - defensive
+                _LOGGER.debug("Skipping unusable JWK %s: %s", jwk.get("kid"), err)
+        self._keys = keys
+        _LOGGER.debug("Loaded %d signing keys from %s", len(keys), self.certs_url)
+
+    async def _key_for(self, kid: str) -> Any:
+        if kid not in self._keys:
+            await self.refresh()
+        if kid not in self._keys:
+            raise JwtVerifyError("unknown signing key (kid)", kid)
+        return self._keys[kid]
+
+    async def verify(self, token: str, audience: str) -> dict[str, Any]:
+        """Verify signature, issuer, audience and expiry; return claims."""
+        try:
+            header = jwt.get_unverified_header(token)
+        except jwt.PyJWTError as err:
+            raise JwtVerifyError(f"malformed token header: {err}") from err
+        kid = header.get("kid")
+        if header.get("alg") != ALGORITHM:
+            raise JwtVerifyError(f"unsupported alg {header.get('alg')!r}", kid)
+        if not isinstance(kid, str) or not kid:
+            raise JwtVerifyError("token header has no kid")
+        key = await self._key_for(kid)
+        try:
+            claims: dict[str, Any] = jwt.decode(
+                token,
+                key,
+                algorithms=[ALGORITHM],
+                audience=audience,
+                issuer=self.issuer,
+                options={"require": ["exp", "iat", "aud", "iss"]},
+                leeway=5,
+            )
+        except jwt.ExpiredSignatureError as err:
+            raise JwtVerifyError("token expired", kid) from err
+        except jwt.InvalidAudienceError as err:
+            raise JwtVerifyError("audience mismatch", kid) from err
+        except jwt.InvalidIssuerError as err:
+            raise JwtVerifyError("issuer mismatch", kid) from err
+        except jwt.InvalidSignatureError as err:
+            raise JwtVerifyError("bad signature", kid) from err
+        except jwt.PyJWTError as err:
+            raise JwtVerifyError(f"invalid token: {err}", kid) from err
+        return claims
+
+
+def unverified_claims(token: str) -> dict[str, Any] | None:
+    """Decode a token payload without verifying it (for expiry display only)."""
+    try:
+        claims: dict[str, Any] = jwt.decode(
+            token, options={"verify_signature": False, "verify_exp": False}
+        )
+    except jwt.PyJWTError:
+        return None
+    return claims

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python -r requirements_test.txt
+      - run: .venv/bin/ruff check .
+      - run: .venv/bin/ruff format --check .
+      - run: .venv/bin/mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pinned
+            install: "-r requirements_test.txt"
+            allow_failure: false
+          - name: latest
+            install: "homeassistant pytest-homeassistant-custom-component playwright"
+            allow_failure: true
+    continue-on-error: ${{ matrix.allow_failure }}
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python ${{ matrix.install }}
+      - name: Install the frontend package pinned by this core version
+        run: |
+          reqs=$(.venv/bin/python -c "import json, pathlib, homeassistant.components.frontend as f; print(' '.join(json.loads((pathlib.Path(f.__file__).parent / 'manifest.json').read_text())['requirements']))")
+          uv pip install --python .venv/bin/python $reqs
+          .venv/bin/python -c "import homeassistant.const as c; print('home assistant', c.__version__)"
+      - run: .venv/bin/python -m playwright install --with-deps chromium
+      - run: .venv/bin/python -m pytest -q --timeout=300
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands

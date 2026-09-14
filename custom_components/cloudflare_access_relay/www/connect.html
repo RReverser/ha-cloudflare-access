@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect to Cloudflare Access</title>
+<style>
+body{font-family:system-ui,-apple-system,Roboto,sans-serif;background:#f4f6f8;color:#1f2933;margin:0;padding:24px 16px;display:flex;justify-content:center}
+main{max-width:520px;width:100%;background:#fff;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+h1{font-size:1.25rem;margin:0 0 12px}p{line-height:1.5}
+.btn{display:inline-block;margin:8px 8px 0 0;padding:10px 16px;border-radius:8px;border:0;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;background:#03a9f4;color:#fff}
+.btn.secondary{background:#e0e4e8;color:#1f2933}
+.muted{color:#6b7480;font-size:.9rem}.error{color:#b00020}
+#status{min-height:1.5em}
+@media (prefers-color-scheme:dark){body{background:#111417;color:#e6e9ec}main{background:#1c2126}.btn.secondary{background:#2a3138;color:#e6e9ec}.muted{color:#9aa4ae}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Connect this app to Cloudflare Access</h1>
+  <p id="intro">Cloudflare Access protects this Home Assistant. The app needs a copy of the Access session so its own requests pass the gate.</p>
+  <p id="status" class="muted">Preparing…</p>
+  <div id="actions"></div>
+  <p class="muted">Signing in opens your browser; this page finishes on its own when you come back. Each attempt is valid for ten minutes.</p>
+</main>
+<script>
+(() => {
+  "use strict";
+  const ORIGIN = window.location.origin;
+  const CONNECT_PATH = "/cloudflare_access_relay/connect";
+  const API = "/api/cloudflare_access_relay";
+  const SNOOZE_KEY = "cloudflare_access_relay_snooze_until";
+  const POLL_MS = 2000;
+  const POLL_MAX_MS = 10 * 60 * 1000;
+  const statusEl = document.getElementById("status");
+  const actionsEl = document.getElementById("actions");
+  const params = new URLSearchParams(window.location.search);
+
+  const setStatus = (text, cls) => { statusEl.textContent = text; statusEl.className = cls || "muted"; };
+  const clearActions = () => { actionsEl.textContent = ""; };
+  const button = (label, onClick, secondary) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.className = "btn" + (secondary ? " secondary" : "");
+    b.addEventListener("click", onClick); actionsEl.appendChild(b); return b;
+  };
+  const storage = {
+    get(k) { try { return window.localStorage.getItem(k); } catch (_e) { return null; } },
+    set(k, v) { try { window.localStorage.setItem(k, v); } catch (_e) {} },
+  };
+
+  /* ---- 1. Obtain a Home Assistant access token ---------------------------- */
+
+  function tokenFromAndroidBridge() {
+    if (!window.externalApp || typeof window.externalApp.getExternalAuth !== "function") return null;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 8000);
+      window.externalAuthSetToken = (ok, data) => {
+        clearTimeout(timer);
+        resolve(ok && data && data.access_token ? data.access_token : null);
+      };
+      window.externalApp.getExternalAuth(JSON.stringify({ callback: "externalAuthSetToken", force: false }));
+    });
+  }
+
+  function tokenFromIosBridge() {
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.getExternalAuth;
+    if (!h) return null;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 8000);
+      window.externalAuthSetToken = (ok, data) => {
+        clearTimeout(timer);
+        resolve(ok && data && data.access_token ? data.access_token : null);
+      };
+      h.postMessage({ callback: "externalAuthSetToken", force: false });
+    });
+  }
+
+  async function tokenRequest(form) {
+    const resp = await fetch("/auth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(form).toString(),
+      credentials: "same-origin",
+    });
+    if (!resp.ok) return null;
+    return resp.json();
+  }
+
+  async function tokenFromLocalStorage() {
+    const raw = storage.get("hassTokens");
+    if (!raw) return null;
+    let tokens;
+    try { tokens = JSON.parse(raw); } catch (_e) { return null; }
+    if (!tokens || !tokens.access_token) return null;
+    if (tokens.expires && tokens.expires > Date.now() + 30000) return tokens.access_token;
+    if (!tokens.refresh_token) return null;
+    const data = await tokenRequest({
+      grant_type: "refresh_token",
+      refresh_token: tokens.refresh_token,
+      client_id: tokens.clientId || ORIGIN + "/",
+    });
+    return data && data.access_token ? data.access_token : null;
+  }
+
+  async function tokenFromAuthCode() {
+    const code = params.get("code");
+    if (!code) return null;
+    const data = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: ORIGIN + "/",
+    });
+    // Strip the one-time code from the URL so a reload does not reuse it.
+    const clean = new URL(window.location.href);
+    clean.searchParams.delete("code");
+    clean.searchParams.delete("state");
+    window.history.replaceState(null, "", clean.toString());
+    return data && data.access_token ? data.access_token : null;
+  }
+
+  function redirectToLogin() {
+    const state = params.get("flow") || "";
+    const url = new URL("/auth/authorize", ORIGIN);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", ORIGIN + "/");
+    url.searchParams.set("redirect_uri", ORIGIN + CONNECT_PATH + (state ? "?flow=" + encodeURIComponent(state) : ""));
+    if (state) url.searchParams.set("state", state);
+    window.location.assign(url.toString());
+  }
+
+  async function getToken() {
+    setStatus("Getting a Home Assistant session…");
+    for (const source of [tokenFromAndroidBridge, tokenFromIosBridge, tokenFromAuthCode, tokenFromLocalStorage]) {
+      try {
+        const t = await source();
+        if (t) return t;
+      } catch (err) { console.warn("[cloudflare_access_relay] token source failed", err); }
+    }
+    return null;
+  }
+
+  /* ---- 2. Drive the relay flow ------------------------------------------- */
+
+  async function api(token, method, path) {
+    const resp = await fetch(API + path, {
+      method,
+      headers: { Authorization: "Bearer " + token },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    let body = null;
+    try { body = await resp.json(); } catch (_e) {}
+    return { status: resp.status, body };
+  }
+
+  function showSkip() {
+    button("Skip for now", () => {
+      storage.set(SNOOZE_KEY, String(Date.now() + 6 * 3600 * 1000));
+      window.location.replace("/");
+    }, true);
+  }
+
+  async function poll(token, flowId) {
+    const started = Date.now();
+    while (Date.now() - started < POLL_MAX_MS) {
+      const { status, body } = await api(token, "GET", "/status?flow=" + encodeURIComponent(flowId));
+      if (status === 200 && body && body.ok) {
+        setStatus("Connected. The app's Access session is valid until " + new Date(body.exp * 1000).toLocaleString() + ".");
+        clearActions();
+        setTimeout(() => window.location.replace("/"), 1500);
+        return;
+      }
+      if (status === 404 || status === 403) {
+        throw new Error(status === 404 ? "The connect attempt expired or was already used." : "This connect attempt belongs to another user.");
+      }
+      if (status !== 200) throw new Error("Unexpected response " + status + " while waiting.");
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+    throw new Error("Timed out after ten minutes.");
+  }
+
+  async function run() {
+    const token = await getToken();
+    if (!token) {
+      setStatus("Sign in to Home Assistant to continue.", "muted");
+      clearActions();
+      button("Sign in", redirectToLogin);
+      showSkip();
+      return;
+    }
+    let flowId = params.get("flow");
+    let callback = null;
+    if (!flowId) {
+      const { status, body } = await api(token, "POST", "/flow");
+      if (status !== 200 || !body || !body.flow) {
+        setStatus("Could not start a connect attempt (HTTP " + status + ").", "error");
+        clearActions();
+        button("Retry", () => window.location.reload());
+        showSkip();
+        return;
+      }
+      flowId = body.flow;
+      callback = body.callback;
+      const clean = new URL(window.location.href);
+      clean.searchParams.set("flow", flowId);
+      window.history.replaceState(null, "", clean.toString());
+    }
+    clearActions();
+    if (callback) {
+      setStatus("Tap “Sign in with Cloudflare”. Your browser opens; when it says “Connected”, come back here.");
+      button("Sign in with Cloudflare", () => {
+        setStatus("Waiting for the Cloudflare sign-in to finish in your browser…");
+        window.location.assign(callback);
+      });
+    } else {
+      setStatus("Waiting for the Cloudflare sign-in to finish…");
+    }
+    showSkip();
+    try {
+      await poll(token, flowId);
+    } catch (err) {
+      setStatus(String(err.message || err), "error");
+      clearActions();
+      button("Try again", () => {
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete("flow");
+        window.location.replace(clean.toString());
+      });
+      showSkip();
+    }
+  }
+
+  run().catch((err) => {
+    setStatus("Unexpected error: " + (err && err.message ? err.message : err), "error");
+    clearActions();
+    button("Retry", () => window.location.reload());
+  });
+})();
+</script>
+</body>
+</html>
