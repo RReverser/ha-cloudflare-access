@@ -41,13 +41,15 @@ jobs:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_TEST_HOST: test-host.example.com
-      CF_TEST_EMAIL: ${{ vars.CF_TEST_EMAIL }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - run: uv sync --frozen
+      # the commit author goes on the test host's allow policy, so whoever pushed can
+      # log in to the test host in a browser between runs
+      - run: echo "CF_TEST_EMAIL=$(git log -1 --format=%ae)" >> "$GITHUB_ENV"
       - run: uv run pytest -q --timeout=600 -rs tests/live
 
   hassfest:
