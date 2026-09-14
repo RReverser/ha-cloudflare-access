@@ -267,11 +267,10 @@ Assistant's own login page. Everything it needs is bypassed.
 ## Development
 
 ```
-uv venv --python 3.14 .venv
-uv pip install --python .venv/bin/python -r requirements_test.txt
-.venv/bin/python -m playwright install chromium      # or set RELAY_TEST_CHROMIUM
-.venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy
-.venv/bin/python -m pytest
+uv sync                                  # Python 3.14, Home Assistant and the test tools, from uv.lock
+uv run playwright install chromium       # or set RELAY_TEST_CHROMIUM to an existing binary
+uv run ruff check . && uv run ruff format --check . && uv run mypy
+uv run pytest
 ```
 
 Tests: `tests/test_jwks.py` (verification against a fake JWKS endpoint, rotation),

@@ -22,8 +22,8 @@ from homeassistant.exceptions import (
     ConfigEntryError,
     ConfigEntryNotReady,
 )
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.httpx_client import get_async_client
 
 from .cloudflare_api import (
     CloudflareAccessApi,
@@ -109,9 +109,9 @@ def effective_options(entry: ConfigEntry) -> dict[str, Any]:
 
 def _api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessApi:
     return CloudflareAccessApi(
-        async_get_clientsession(hass),
         entry.data[CONF_API_TOKEN],
         entry.data[CONF_ACCOUNT_ID],
+        http_client=get_async_client(hass),
     )
 
 
@@ -150,7 +150,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
         entry=entry,
         options=options,
         api=api,
-        verifier=JwksVerifier(async_get_clientsession(hass), result.team_domain),
+        verifier=JwksVerifier(get_async_client(hass), result.team_domain),
         flows=FlowStore(),
         policy_aud=result.policy_aud,
         team_domain=result.team_domain,

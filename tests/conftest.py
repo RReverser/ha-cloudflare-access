@@ -253,15 +253,18 @@ class FakeCloudflare:
         await self._record(request)
         if fail := self._fail(request.method, request.path):
             return fail
-        apps = list(self.apps.values())
+        # honour paging: the SDK keeps asking for the next page until one comes back empty
+        page = int(request.query.get("page", "1"))
+        per_page = int(request.query.get("per_page", "20"))
+        apps = list(self.apps.values())[(page - 1) * per_page : page * per_page]
         return self._ok(
             apps,
             result_info={
-                "page": 1,
-                "per_page": 100,
-                "total_pages": 1,
+                "page": page,
+                "per_page": per_page,
+                "total_pages": max(1, -(-len(self.apps) // per_page)),
                 "count": len(apps),
-                "total_count": len(apps),
+                "total_count": len(self.apps),
             },
         )
 
@@ -363,7 +366,7 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     fake.server = server
     with (
         patch("custom_components.cloudflare_access_relay.cloudflare_api.API_URL", fake.base_url),
-        patch("custom_components.cloudflare_access_relay.cloudflare_api._BACKOFF_BASE", 0.01),
+        patch("custom_components.cloudflare_access_relay.cloudflare_api.MAX_RETRIES", 0),
     ):
         yield fake
     await server.close()

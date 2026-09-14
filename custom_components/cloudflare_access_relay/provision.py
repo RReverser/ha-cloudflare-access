@@ -238,6 +238,12 @@ async def _reconcile(
     ]
     updated = await api.update_app(existing["id"], body)
     writes.append(f"update {desired['name']}")
+    _LOGGER.info(
+        "Updated Access application %s (updated_at %s, binding cookie %s)",
+        desired["name"],
+        updated.get("updated_at"),
+        updated.get("enable_binding_cookie"),
+    )
     return updated
 
 

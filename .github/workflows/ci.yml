@@ -11,11 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
-      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python -r requirements_test.txt
-      - run: .venv/bin/ruff check .
-      - run: .venv/bin/ruff format --check .
-      - run: .venv/bin/mypy
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
 
   test:
     runs-on: ubuntu-latest
@@ -24,30 +25,32 @@ jobs:
       matrix:
         include:
           - name: pinned
-            install: "-r requirements_test.txt"
             allow_failure: false
           - name: latest
-            install: "homeassistant pytest-homeassistant-custom-component playwright"
             allow_failure: true
     continue-on-error: ${{ matrix.allow_failure }}
     name: test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
-      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python ${{ matrix.install }}
-      - name: Install the frontend package pinned by this core version
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Move to the latest Home Assistant release
+        if: matrix.name == 'latest'
         run: |
-          reqs=$(.venv/bin/python -c "import json, pathlib, homeassistant.components.frontend as f; print(' '.join(json.loads((pathlib.Path(f.__file__).parent / 'manifest.json').read_text())['requirements']))")
-          uv pip install --python .venv/bin/python $reqs
-          .venv/bin/python -c "import homeassistant.const as c; print('home assistant', c.__version__)"
-      - run: .venv/bin/python -m playwright install --with-deps chromium
-      - run: .venv/bin/python -m pytest -q --timeout=300
+          uv pip install --upgrade homeassistant pytest-homeassistant-custom-component
+          reqs=$(uv run python -c "import json, pathlib, homeassistant.components.frontend as f; print(' '.join(json.loads((pathlib.Path(f.__file__).parent / 'manifest.json').read_text())['requirements']))")
+          uv pip install $reqs
+          uv run python -c "import homeassistant.const as c; print('home assistant', c.__version__)"
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -q --timeout=300
 
   live:
-    # Real Cloudflare: creates a run-scoped service token, provisions the test host
-    # with the integration's own code, proves the edge behaviour the relay depends on
-    # (tests/live), deletes the token. Skipped when the two secrets are absent (forks).
+    # Real Cloudflare: creates a run-scoped service token, sets the integration up
+    # through Home Assistant against the test host, proves the edge behaviour the
+    # relay depends on (tests/live), deletes the token. Skipped when the two secrets
+    # are absent (forks).
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     concurrency: live-cloudflare
@@ -59,9 +62,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
-      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python -r requirements_test.txt
-      - run: .venv/bin/python -m pytest -q --timeout=600 -rs tests/live
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest -q --timeout=600 -rs tests/live
 
   hassfest:
     runs-on: ubuntu-latest
@@ -71,9 +75,8 @@ jobs:
 
   hacs:
     runs-on: ubuntu-latest
-    # Non-blocking until the repository is ready for HACS publication: the action reads
-    # hacs.json and the manifest from the default branch and also requires a repository
-    # description, topics and a LICENSE file, none of which code on a branch can provide.
+    # Non-blocking until the repository is ready for HACS publication: the action
+    # requires a repository description, topics and a LICENSE file.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
