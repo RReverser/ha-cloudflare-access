@@ -183,9 +183,8 @@ and is skipped without them:
 | `CF_API_TOKEN` | account token with *Access: Apps and Policies: Edit*, *Access: Organizations, Identity Providers, and Groups: Read* and *Access: Service Tokens: Edit* |
 | `CF_ACCOUNT_ID` | the Cloudflare account id |
 
-The address on the test host's allow policy is the author of the commit being tested, which is
-who can open the test host in a browser between runs (the test itself logs in with its service
-token).
+The test host and the placeholder address on its allow policy are fixed in the test; the test
+logs in with its run-scoped service token, so nobody can open the test host in a browser.
 
 `preflight/preflight.sh` is the same set of checks for a shell with curl.
 
