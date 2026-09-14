@@ -44,20 +44,17 @@ jobs:
       - run: .venv/bin/python -m pytest -q --timeout=300
 
   live:
-    # Real Cloudflare: provisions the test host with the integration's own code and
-    # proves the edge behaviour the relay depends on (tests/live). Needs the secrets
-    # listed in tests/live/test_live_edge.py; skipped when they are absent (forks).
+    # Real Cloudflare: creates a run-scoped service token, provisions the test host
+    # with the integration's own code, proves the edge behaviour the relay depends on
+    # (tests/live), deletes the token. Skipped when the two secrets are absent (forks).
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     concurrency: live-cloudflare
     env:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      CF_TEST_HOST: ${{ vars.CF_TEST_HOST }}
-      CF_TEST_EMAIL: ${{ vars.CF_TEST_EMAIL }}
-      CF_ACCESS_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_SERVICE_TOKEN_ID }}
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      CF_TEST_HOST: test-host.example.com
+      CF_TEST_EMAIL: ci@example.com
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

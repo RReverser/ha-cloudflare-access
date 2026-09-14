@@ -7,8 +7,8 @@
 # Setup (once): deploy preflight/worker on the test hostname (cd preflight/worker && npx
 # wrangler deploy, with a route or a Workers custom domain), and let the integration's own
 # provisioning create the Access applications for that hostname, e.g. by running the live
-# tests once, or with the integration itself pointed at the test hostname. Add an Access
-# service token id to the "service token IDs" option so this script can log in.
+# tests once, or with the integration itself pointed at the test hostname. Create an Access
+# service token and add its id to the "service token IDs" option so this script can log in.
 #
 # Environment
 #   TEST_HOST=test-host.example.com

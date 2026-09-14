@@ -1,17 +1,25 @@
-"""Live tests: provision the test host with the integration's own code, then prove
-the Cloudflare behaviour the relay depends on (plan section 7, P1-P6 and P8).
+"""Live integration test: the whole lifecycle through Home Assistant against real Cloudflare.
 
-Needs, as environment variables (GitHub Actions secrets in CI):
-  CF_API_TOKEN               account token, scope "Access: Apps and Policies: Edit"
+Everything the integration is responsible for is driven the way a user drives it:
+the config flow creates the entry (which provisions the Access applications), the
+options flow enables the gate and re-saves after drift, a reload must write
+nothing, and removal with "delete objects" off keeps the applications. The relay
+itself is exercised through its real HTTP views with a real Cloudflare token
+verified against the real JWKS, and the released cookie is then used at the edge.
+
+The raw Cloudflare API is used only to create and delete this run's service
+token, to observe the applications, and to inject drift.
+
+Environment (GitHub Actions: CF_API_TOKEN and CF_ACCOUNT_ID are repository secrets,
+the rest is plain job env):
+  CF_API_TOKEN    account token with "Access: Apps and Policies: Edit" and
+                  "Access: Service Tokens: Edit"
   CF_ACCOUNT_ID
-  CF_TEST_HOST               hostname served by preflight/worker (e.g. test-host.example.com)
-  CF_ACCESS_SERVICE_TOKEN_ID id of an Access service token
-  CF_ACCESS_CLIENT_ID        that token's client id
-  CF_ACCESS_CLIENT_SECRET    that token's client secret
-Optional: CF_TEST_EMAIL (the allow policy's e-mail; defaults to a placeholder).
+  CF_TEST_HOST    hostname served by preflight/worker
+  CF_TEST_EMAIL   e-mail on the gate's allow policy
 
-The paths probed are all under prefixes that the zone's WAF exempts from bot
-protection or that the test host's own exemption covers.
+Prerequisites that already exist and are not touched: the Worker with its custom
+domain, and the zone WAF rule exempting the host from bot protection.
 """
 
 from __future__ import annotations
@@ -23,51 +31,56 @@ import time
 from typing import Any
 
 import aiohttp
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import pytest
 
 from custom_components.cloudflare_access_relay.cloudflare_api import CloudflareAccessApi
 from custom_components.cloudflare_access_relay.const import (
+    API_FLOW,
+    API_SESSION,
+    API_STATUS,
+    CONF_ACCESS_GROUP_ID,
+    CONF_ACCOUNT_ID,
     CONF_ALLOWED_EMAILS,
-    CONF_EXTRA_BYPASS_PATHS,
+    CONF_API_TOKEN,
+    CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
+    CONF_IDENTITY_CLAIM,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
+    CONF_USER_MATCH,
+    DATA_BYPASS_APP_ID,
+    DATA_GATE_APP_ID,
+    DATA_POLICY_AUD,
+    DATA_TEAM_DOMAIN,
+    DOMAIN,
+    HEADER_JWT,
     URL_CALLBACK,
 )
-from custom_components.cloudflare_access_relay.jwks import JwksVerifier, JwtVerifyError
-from custom_components.cloudflare_access_relay.provision import async_provision
 
-REQUIRED = (
-    "CF_API_TOKEN",
-    "CF_ACCOUNT_ID",
-    "CF_TEST_HOST",
-    "CF_ACCESS_SERVICE_TOKEN_ID",
-    "CF_ACCESS_CLIENT_ID",
-    "CF_ACCESS_CLIENT_SECRET",
-)
+from ..conftest import add_user, token_for
+
 pytestmark = pytest.mark.skipif(
-    any(not os.environ.get(k) for k in REQUIRED),
-    reason="live Cloudflare credentials not set: " + ", ".join(REQUIRED),
+    not (os.environ.get("CF_API_TOKEN") and os.environ.get("CF_ACCOUNT_ID")),
+    reason="live Cloudflare credentials not set (CF_API_TOKEN, CF_ACCOUNT_ID)",
 )
 
+HOST = os.environ.get("CF_TEST_HOST", "test-host.example.com")
+EMAIL = os.environ.get("CF_TEST_EMAIL", "nobody@example.com")
+BASE = f"https://{HOST}"
 SESSION = "1h"
+TOKEN_PREFIX = "ha-relay-ci"
+STALE_TOKEN_AGE = 6 * 3600
 
 
 def _claims(token: str) -> dict[str, Any]:
     part = token.split(".")[1]
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-
-
-def _options(gated: bool) -> dict[str, Any]:
-    return {
-        CONF_HOSTNAME: os.environ["CF_TEST_HOST"],
-        CONF_ALLOWED_EMAILS: [os.environ.get("CF_TEST_EMAIL", "nobody@example.com")],
-        CONF_EXTRA_BYPASS_PATHS: [],
-        CONF_SERVICE_TOKEN_IDS: [os.environ["CF_ACCESS_SERVICE_TOKEN_ID"]],
-        CONF_SESSION_DURATION: SESSION,
-        CONF_GATE_ENABLED: gated,
-    }
 
 
 def _is_access_redirect(resp: aiohttp.ClientResponse) -> bool:
@@ -76,234 +89,272 @@ def _is_access_redirect(resp: aiohttp.ClientResponse) -> bool:
     )
 
 
-@pytest.fixture
-async def http(socket_enabled: None):
-    async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as session:
-        yield session
+class Edge:
+    """Plain HTTP client for the test host (no cookie jar: every cookie is explicit)."""
+
+    def __init__(self, http: aiohttp.ClientSession) -> None:
+        self.http = http
+
+    async def get(self, path: str, **kw: Any) -> aiohttp.ClientResponse:
+        kw.setdefault("allow_redirects", False)
+        return await self.http.get(f"{BASE}{path}", **kw)
+
+    async def wait_gate(self, path: str, gated: bool, timeout: float = 120) -> None:
+        deadline = time.time() + timeout
+        while True:
+            async with await self.get(path) as resp:
+                if _is_access_redirect(resp) == gated:
+                    return
+            if time.time() > deadline:
+                raise AssertionError(
+                    f"{path} did not become {'gated' if gated else 'open'} in {timeout}s"
+                )
+            time.sleep(3)
 
 
-@pytest.fixture
-def base() -> str:
-    return "https://" + os.environ["CF_TEST_HOST"]
-
-
-@pytest.fixture
-async def provisioned(http: aiohttp.ClientSession):
-    """Provision gated; hand back the result; leave the host gated afterwards."""
-    api = CloudflareAccessApi(http, os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"])
-    result = await async_provision(
-        api, _options(True), set(), gate_app_id=None, bypass_app_id=None, team_domain=None
-    )
-    return api, result
-
-
-async def _wait_for_gate(
-    http: aiohttp.ClientSession, url: str, gated: bool, timeout: float = 90
-) -> None:
-    """Access configuration propagates within seconds; poll until it has."""
-    deadline = time.time() + timeout
-    while True:
-        async with http.get(url, allow_redirects=False) as resp:
-            if _is_access_redirect(resp) == gated:
-                return
-        if time.time() > deadline:
-            raise AssertionError(
-                f"{url} did not become {'gated' if gated else 'open'} in {timeout}s"
+async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
+    """Create this run's token; sweep tokens left behind by aborted runs."""
+    now = time.time()
+    for tok in await api.list_service_tokens():
+        name, created = tok.get("name") or "", tok.get("created_at") or ""
+        if name.startswith(TOKEN_PREFIX) and created:
+            age = (
+                now - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
             )
-        time.sleep(3)
+            if age > STALE_TOKEN_AGE:
+                await api.delete_service_token(tok["id"])
+    run = os.environ.get("GITHUB_RUN_ID", str(int(now)))
+    created_tok: dict[str, Any] = await api.create_service_token(f"{TOKEN_PREFIX} {run}", "24h")
+    return created_tok
 
 
-async def test_p8_precedence_and_p1_setcookie(
-    http: aiohttp.ClientSession, base: str, provisioned: Any
-) -> None:
-    await _wait_for_gate(http, f"{base}/api/echo", True)
-    async with http.get(f"{base}/api/echo", allow_redirects=False) as resp:
-        assert _is_access_redirect(resp), (resp.status, resp.headers.get("Location"))
-    async with http.get(f"{base}/api/cloudflare_access_relay/echo", allow_redirects=False) as resp:
-        assert resp.status == 200, "bypassed prefix under /api must beat the hostname-wide gate"
-    async with http.get(f"{base}{URL_CALLBACK}?flow=bogus", allow_redirects=False) as resp:
-        assert _is_access_redirect(resp), "callback path must be gated"
-    async with http.post(
-        f"{base}/auth/token/setcookie", json={"v": "probe-value"}, allow_redirects=False
-    ) as resp:
-        assert resp.status == 200
-        cookies = resp.headers.getall("Set-Cookie")
-        assert cookies == [
-            "CF_Authorization=probe-value; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"
-        ], "P1: origin Set-Cookie must pass through unmodified"
-
-
-async def test_service_token_then_cookie_only(
-    http: aiohttp.ClientSession, base: str, provisioned: Any
-) -> None:
-    _api, result = provisioned
-    await _wait_for_gate(http, f"{base}/api/echo", True)
-    headers = {
-        "CF-Access-Client-Id": os.environ["CF_ACCESS_CLIENT_ID"],
-        "CF-Access-Client-Secret": os.environ["CF_ACCESS_CLIENT_SECRET"],
+async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any) -> None:
+    """Re-save the options through the options flow (reloads and re-provisions)."""
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    assert flow["type"] is FlowResultType.FORM
+    current = dict(entry.options)
+    user_input = {
+        CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
+        CONF_ALLOWED_EMAILS: current[CONF_ALLOWED_EMAILS],
+        CONF_ACCESS_GROUP_ID: current.get(CONF_ACCESS_GROUP_ID, ""),
+        CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
+        CONF_SESSION_DURATION: current[CONF_SESSION_DURATION],
+        CONF_IDENTITY_CLAIM: current[CONF_IDENTITY_CLAIM],
+        CONF_USER_MATCH: current[CONF_USER_MATCH],
+        CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
+        **changes,
     }
-    async with http.get(f"{base}/api/echo", headers=headers, allow_redirects=False) as resp:
-        assert resp.status == 200, (resp.status, resp.headers.get("Location"))
-        body = await resp.json()
-        set_cookie = [
-            c for c in resp.headers.getall("Set-Cookie", []) if c.startswith("CF_Authorization=")
-        ]
-        assert len(set_cookie) == 1, (
-            "Access sets the application token as a cookie on the service-token login"
-        )
-        cookie_token = set_cookie[0].split(";")[0].split("=", 1)[1]
-        attrs = set_cookie[0].lower()
-        assert "httponly" in attrs and "secure" in attrs and "samesite=lax" in attrs
-    header_token = body["headers"].get("cf-access-jwt-assertion")
-    assert header_token, "origin must receive Cf-Access-Jwt-Assertion"
-    assert header_token == cookie_token, "P4: header token equals cookie token"
+    result = await hass.config_entries.options.async_configure(flow["flow_id"], user_input)
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED, entry.reason
 
-    claims = _claims(header_token)
-    assert claims["aud"] == [result.policy_aud] or claims["aud"] == result.policy_aud
-    assert claims["iss"] == f"https://{result.team_domain}"
-    assert abs((claims["exp"] - claims["iat"]) - 3600) <= 5, (
-        "P3: exp - iat equals the session duration"
+
+async def _app_updated_at(api: CloudflareAccessApi, entry: ConfigEntry) -> tuple[str, str]:
+    gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
+    bypass = await api.get_app(entry.data[DATA_BYPASS_APP_ID])
+    assert gate and bypass
+    return gate["updated_at"], bypass["updated_at"]
+
+
+async def test_live_lifecycle(
+    hass: HomeAssistant, hass_client: Any, hass_client_no_auth: Any, socket_enabled: None
+) -> None:
+    api = CloudflareAccessApi(
+        async_get_clientsession(hass), os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"]
     )
-
-    # the verifier the callback view uses, against the real JWKS
-    verifier = JwksVerifier(http, result.team_domain)
-    verified = await verifier.verify(header_token, result.policy_aud)
-    assert verified["exp"] == claims["exp"]
-    with pytest.raises(JwtVerifyError):
-        await verifier.verify(header_token, "0" * 64)
-    with pytest.raises(JwtVerifyError):
-        await verifier.verify(
-            header_token[:-2] + ("AA" if header_token[-2:] != "AA" else "BB"), result.policy_aud
-        )
-
-    # P2: the token alone, as a cookie, from a client Access never saw log in
-    cookie = {"CF_Authorization": header_token}
-    async with http.get(
-        f"{base}/api/echo",
-        cookies=cookie,
-        allow_redirects=False,
-        headers={"User-Agent": "okhttp/4.12.0"},
-    ) as resp:
-        assert resp.status == 200, (
-            "P2: Access must accept a CF_Authorization cookie it did not set in this client"
-        )
-        echoed = await resp.json()
-        assert echoed["headers"].get("cf-access-jwt-assertion") == header_token
-    async with http.get(
-        f"{base}/api/echo",
-        cookies={"CF_Authorization": header_token[:-3] + "xyz"},
-        allow_redirects=False,
-    ) as resp:
-        assert _is_access_redirect(resp), "a tampered cookie must not pass"
-    # websocket-style upgrade carries the cookie too
-    ws_headers = {
-        "Connection": "Upgrade",
-        "Upgrade": "websocket",
-        "Sec-WebSocket-Version": "13",
-        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
-    }
-    async with http.get(
-        f"{base}/api/echo", cookies=cookie, headers=ws_headers, allow_redirects=False
-    ) as resp:
-        assert not _is_access_redirect(resp)
+    token = await _service_token(api)
+    try:
+        await _lifecycle(hass, hass_client, hass_client_no_auth, api, token)
+    finally:
+        await api.delete_service_token(token["id"])
 
 
-async def test_p5_binding_cookie_breaks_relay(
-    http: aiohttp.ClientSession, base: str, provisioned: Any
+async def _lifecycle(
+    hass: HomeAssistant,
+    hass_client: Any,
+    hass_client_no_auth: Any,
+    api: CloudflareAccessApi,
+    token: dict[str, Any],
 ) -> None:
-    api, result = provisioned
-    app = await api.get_app(result.gate_app_id)
-    assert app is not None
-    body = {
-        k: v
-        for k, v in app.items()
-        if k
-        in (
+    service_headers = {
+        "CF-Access-Client-Id": token["client_id"],
+        "CF-Access-Client-Secret": token["client_secret"],
+    }
+    async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as http:
+        edge = Edge(http)
+
+        print(
+            "== config flow creates the entry and provisions (gate off: only the callback is gated)"
+        )
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        assert result["type"] is FlowResultType.FORM
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_API_TOKEN: os.environ["CF_API_TOKEN"],
+                CONF_ACCOUNT_ID: os.environ["CF_ACCOUNT_ID"],
+                CONF_HOSTNAME: HOST,
+                CONF_ALLOWED_EMAILS: [EMAIL],
+                CONF_ACCESS_GROUP_ID: "",
+                CONF_SERVICE_TOKEN_IDS: [token["id"]],
+                CONF_SESSION_DURATION: SESSION,
+                # a service-token JWT identifies itself by common_name (its client id);
+                # the HA user created below carries that as its display name
+                CONF_IDENTITY_CLAIM: "common_name",
+                CONF_USER_MATCH: "name",
+            },
+        )
+        assert result["type"] is FlowResultType.CREATE_ENTRY, result
+        entry: ConfigEntry = result["result"]
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED, entry.reason
+        assert entry.options[CONF_GATE_ENABLED] is False
+        aud, team = entry.data[DATA_POLICY_AUD], entry.data[DATA_TEAM_DOMAIN]
+        assert len(aud) == 64 and team.endswith(".cloudflareaccess.com")
+        await edge.wait_gate("/api/echo", False)
+        async with await edge.get(f"{URL_CALLBACK}?flow=bogus") as resp:
+            assert _is_access_redirect(resp), "staged: the callback path is gated"
+
+        print("== options flow enables the gate; audience survives")
+        await _save_options(hass, entry, **{CONF_GATE_ENABLED: True})
+        assert entry.data[DATA_POLICY_AUD] == aud
+        await edge.wait_gate("/api/echo", True)
+
+        print("== P8 precedence and P1 Set-Cookie passthrough at the edge")
+        async with await edge.get("/") as resp:
+            assert _is_access_redirect(resp)
+        async with await edge.get("/api/cloudflare_access_relay/echo") as resp:
+            assert resp.status == 200, "P8: bypassed prefix under /api beats the hostname-wide gate"
+        async with await edge.get("/auth/token") as resp:
+            assert resp.status == 200
+        async with http.post(
+            f"{BASE}/auth/token/setcookie", json={"v": "probe-value"}, allow_redirects=False
+        ) as resp:
+            assert resp.status == 200
+            assert resp.headers.getall("Set-Cookie") == [
+                "CF_Authorization=probe-value; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"
+            ], "P1: origin Set-Cookie must pass through unmodified"
+
+        print("== a real login at the edge yields the token as header and cookie (P3, P4)")
+        async with await edge.get("/api/echo", headers=service_headers) as resp:
+            assert resp.status == 200, (resp.status, resp.headers.get("Location"))
+            body = await resp.json()
+            set_cookie = [
+                c
+                for c in resp.headers.getall("Set-Cookie", [])
+                if c.startswith("CF_Authorization=")
+            ]
+            assert len(set_cookie) == 1
+            cookie_token = set_cookie[0].split(";")[0].split("=", 1)[1]
+        real_jwt = body["headers"]["cf-access-jwt-assertion"]
+        assert real_jwt == cookie_token, "P4"
+        claims = _claims(real_jwt)
+        assert claims["aud"] in ([aud], aud) and claims["iss"] == f"https://{team}"
+        assert abs((claims["exp"] - claims["iat"]) - 3600) <= 5, "P3"
+
+        print("== the relay itself, through its HTTP views, with the real token")
+        user = await add_user(hass, "ci@example.com", name=claims["common_name"])
+        client = await hass_client(await token_for(hass, user))
+        anon = await hass_client_no_auth()
+        resp = await client.post(API_FLOW)
+        assert resp.status == 200
+        flow = await resp.json()
+        resp = await anon.get(flow["callback"], headers={HEADER_JWT: real_jwt})
+        assert resp.status == 200, await resp.text()
+        resp = await client.get(f"{API_STATUS}?flow={flow['flow']}")
+        assert resp.status == 200 and (await resp.json())["exp"] == claims["exp"]
+        released = [
+            c for c in resp.headers.getall("Set-Cookie") if c.startswith("CF_Authorization=")
+        ]
+        assert len(released) == 1
+        relayed = released[0].split(";")[0].split("=", 1)[1]
+        assert relayed == real_jwt
+        resp = await client.get(
+            API_SESSION,
+            headers={"Cookie": f"CF_Authorization={relayed}", "CF-Ray": "x", "Host": HOST},
+        )
+        assert (await resp.json())["exp"] == claims["exp"], (
+            "session endpoint reads the relayed cookie"
+        )
+        for bad in (
+            {HEADER_JWT: real_jwt[:-2] + ("AA" if real_jwt[-2:] != "AA" else "BB")},
+            {},
+        ):
+            resp = await client.post(API_FLOW)
+            resp = await anon.get((await resp.json())["callback"], headers=bad)
+            assert resp.status == 403
+
+        print("== P2: the relayed cookie alone passes the gate from a client Access never saw")
+        cookie = {"CF_Authorization": relayed}
+        async with await edge.get(
+            "/api/echo", cookies=cookie, headers={"User-Agent": "okhttp/4.12.0"}
+        ) as resp:
+            assert resp.status == 200, "P2"
+            assert (await resp.json())["headers"].get("cf-access-jwt-assertion") == relayed
+        ws = {
+            "Connection": "Upgrade",
+            "Upgrade": "websocket",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        }
+        async with await edge.get("/api/echo", cookies=cookie, headers=ws) as resp:
+            assert not _is_access_redirect(resp), "websocket-style upgrade carries the cookie"
+        async with await edge.get("/api/cloudflare_access_relay/echo", cookies=cookie) as resp:
+            assert "CF_Authorization=" in (await resp.json())["headers"].get("cookie", ""), (
+                "cookie reaches the origin on bypassed paths"
+            )
+
+        print(
+            "== P5: drift outside the integration (binding cookie on) breaks reuse; re-saving options repairs it"
+        )
+        gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
+        assert gate
+        keep = (
             "type",
             "name",
             "domain",
             "destinations",
             "session_duration",
-            "path_cookie_attribute",
             "http_only_cookie_attribute",
             "same_site_cookie_attribute",
             "app_launcher_visible",
-            "policies",
         )
-    }
-    body["policies"] = [
-        {k: p[k] for k in ("id", "name", "decision", "precedence", "include") if k in p}
-        for p in app["policies"]
-    ]
-    try:
-        await api.update_app(result.gate_app_id, {**body, "enable_binding_cookie": True})
-        headers = {
-            "CF-Access-Client-Id": os.environ["CF_ACCESS_CLIENT_ID"],
-            "CF-Access-Client-Secret": os.environ["CF_ACCESS_CLIENT_SECRET"],
-        }
+        drift = {k: gate[k] for k in keep if k in gate}
+        drift["policies"] = [
+            {k: p[k] for k in ("id", "name", "decision", "precedence", "include") if k in p}
+            for p in gate["policies"]
+        ]
+        await api.update_app(entry.data[DATA_GATE_APP_ID], {**drift, "enable_binding_cookie": True})
         time.sleep(5)
-        async with http.get(f"{base}/api/echo", headers=headers, allow_redirects=False) as resp:
-            assert resp.status == 200
-            token = (await resp.json())["headers"]["cf-access-jwt-assertion"]
-        async with http.get(
-            f"{base}/api/echo", cookies={"CF_Authorization": token}, allow_redirects=False
-        ) as resp:
-            binding_blocks = resp.status != 200
-    finally:
-        # the integration's own reconciliation restores the intended settings
-        await async_provision(
-            api,
-            _options(True),
-            set(),
-            gate_app_id=result.gate_app_id,
-            bypass_app_id=result.bypass_app_id,
-            team_domain=result.team_domain,
+        async with await edge.get("/api/echo", headers=service_headers) as resp:
+            bound = (await resp.json())["headers"]["cf-access-jwt-assertion"]
+        async with await edge.get("/api/echo", cookies={"CF_Authorization": bound}) as resp:
+            assert _is_access_redirect(resp), (
+                "P5: with the binding cookie on a copied token is refused"
+            )
+        await _save_options(hass, entry)
+        gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
+        assert gate and gate.get("enable_binding_cookie") is False, (
+            "options save reconciled the drift"
         )
-    # documented expectation: binding cookie must stay off. Record the observation either way.
-    print(
-        f"P5: with the binding cookie enabled, a copied token {'is refused' if binding_blocks else 'still passes'}"
-    )
+        time.sleep(5)
+        async with await edge.get("/api/echo", cookies=cookie) as resp:
+            assert resp.status == 200, "reuse works again after reconciliation"
 
+        print("== reload writes nothing")
+        before = await _app_updated_at(api, entry)
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+        assert await _app_updated_at(api, entry) == before
 
-async def test_staged_mode_gates_only_the_callback(
-    http: aiohttp.ClientSession, base: str, provisioned: Any
-) -> None:
-    api, result = provisioned
-    staged = await async_provision(
-        api,
-        _options(False),
-        set(),
-        gate_app_id=result.gate_app_id,
-        bypass_app_id=result.bypass_app_id,
-        team_domain=result.team_domain,
-    )
-    assert staged.policy_aud == result.policy_aud, "audience must survive the destination change"
-    assert staged.gate_app_id == result.gate_app_id
-    try:
-        await _wait_for_gate(http, f"{base}/api/echo", False)
-        async with http.get(f"{base}{URL_CALLBACK}?flow=bogus", allow_redirects=False) as resp:
-            assert _is_access_redirect(resp), "staged: the callback path stays gated"
-    finally:
-        back = await async_provision(
-            api,
-            _options(True),
-            set(),
-            gate_app_id=result.gate_app_id,
-            bypass_app_id=result.bypass_app_id,
-            team_domain=result.team_domain,
-        )
-        assert back.policy_aud == result.policy_aud
-        await _wait_for_gate(http, f"{base}/api/echo", True)
-
-
-async def test_reprovision_is_idempotent(http: aiohttp.ClientSession, provisioned: Any) -> None:
-    api, result = provisioned
-    again = await async_provision(
-        api,
-        _options(True),
-        set(),
-        gate_app_id=result.gate_app_id,
-        bypass_app_id=result.bypass_app_id,
-        team_domain=result.team_domain,
-    )
-    assert again.writes == [], again.writes
+        print("== removal with 'delete objects' off keeps the applications for the next run")
+        await _save_options(hass, entry, **{CONF_DELETE_OBJECTS_ON_REMOVE: False})
+        ids = (entry.data[DATA_GATE_APP_ID], entry.data[DATA_BYPASS_APP_ID])
+        await hass.config_entries.async_remove(entry.entry_id)
+        await hass.async_block_till_done()
+        for app_id in ids:
+            assert await api.get_app(app_id) is not None
