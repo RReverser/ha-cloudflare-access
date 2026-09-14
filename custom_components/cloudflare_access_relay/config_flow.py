@@ -45,6 +45,7 @@ from .const import (
     CONF_HOSTNAME,
     CONF_IDENTITY_CLAIM,
     CONF_RENEW_DAYS,
+    CONF_REQUIRE_BOUND_TOKENS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     CONF_USER_MATCH,
@@ -55,6 +56,7 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_IDENTITY_CLAIM,
     DEFAULT_RENEW_DAYS,
+    DEFAULT_REQUIRE_BOUND_TOKENS,
     DEFAULT_SESSION_DURATION,
     DEFAULT_USER_MATCH,
     DOMAIN,
@@ -128,6 +130,10 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
         vol.Optional(
             CONF_DELETE_OBJECTS_ON_REMOVE,
             default=defaults.get(CONF_DELETE_OBJECTS_ON_REMOVE, DEFAULT_DELETE_OBJECTS_ON_REMOVE),
+        ): BooleanSelector(),
+        vol.Optional(
+            CONF_REQUIRE_BOUND_TOKENS,
+            default=defaults.get(CONF_REQUIRE_BOUND_TOKENS, DEFAULT_REQUIRE_BOUND_TOKENS),
         ): BooleanSelector(),
     }
 

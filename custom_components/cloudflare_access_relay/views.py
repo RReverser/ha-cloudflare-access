@@ -94,6 +94,8 @@ class FlowCreateView(HomeAssistantView):
     url = API_FLOW
     name = f"api:{DOMAIN}:flow"
     requires_auth = True
+    # Reached by the connect page with a token the device holds before it has a cookie.
+    access_bound_exempt = True
 
     async def post(self, request: web.Request) -> web.Response:
         """Return a new flow id and the callback path to visit."""
@@ -114,6 +116,8 @@ class StatusView(HomeAssistantView):
     url = API_STATUS
     name = f"api:{DOMAIN}:status"
     requires_auth = True
+    # Reached by the connect page with a token the device holds before it has a cookie.
+    access_bound_exempt = True
 
     async def get(self, request: web.Request) -> web.Response:
         """Return {"ok": false} until the callback filled the flow."""
@@ -153,6 +157,8 @@ class SessionView(HomeAssistantView):
     url = API_SESSION
     name = f"api:{DOMAIN}:session"
     requires_auth = True
+    # Reached by the connect page with a token the device holds before it has a cookie.
+    access_bound_exempt = True
 
     async def get(self, request: web.Request) -> web.Response:
         """Return expiry and context flags; never the token."""

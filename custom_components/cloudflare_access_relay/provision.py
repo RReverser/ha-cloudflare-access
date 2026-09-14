@@ -39,14 +39,19 @@ def normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def bypass_paths(options: dict[str, Any], open_paths: list[str]) -> list[str]:
+def bypass_paths(
+    options: dict[str, Any], open_paths: list[str], *, vendor_paths: bool = True
+) -> list[str]:
     """Return the sorted, prefix-collapsed list of bypassed paths.
 
     `open_paths` is what Home Assistant serves to cookie-less clients, as discovered
-    from the router (`paths.discover_open_paths`); the integration's own paths, the
-    token-authenticated vendor endpoints and the configured extras are added to it.
+    from the router (`paths.discover_open_paths`); the integration's own paths and the
+    configured extras are added to it, and the token-authenticated vendor endpoints
+    when `vendor_paths` is set (only while the origin enforces Access-bound tokens).
     """
-    paths: list[str] = [*open_paths, *OWN_BYPASS_PATHS, *TOKEN_CALLER_BYPASS_PATHS]
+    paths: list[str] = [*open_paths, *OWN_BYPASS_PATHS]
+    if vendor_paths:
+        paths.extend(TOKEN_CALLER_BYPASS_PATHS)
     for raw in options.get(CONF_EXTRA_BYPASS_PATHS) or []:
         if raw and raw.strip():
             paths.append(raw)
@@ -111,10 +116,12 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def desired_bypass_app(options: dict[str, Any], open_paths: list[str]) -> dict[str, Any]:
+def desired_bypass_app(
+    options: dict[str, Any], open_paths: list[str], *, vendor_paths: bool = True
+) -> dict[str, Any]:
     """Return the desired bypass application body."""
     hostname = options[CONF_HOSTNAME]
-    paths = bypass_paths(options, open_paths)
+    paths = bypass_paths(options, open_paths, vendor_paths=vendor_paths)
     destinations = _destinations(hostname, paths)
     return {
         "type": "self_hosted",
@@ -251,6 +258,7 @@ async def async_provision(
     gate_app_id: str | None,
     bypass_app_id: str | None,
     team_domain: str | None,
+    vendor_paths: bool = True,
 ) -> ProvisionResult:
     """Bring the Cloudflare objects in line with the options.
 
@@ -260,7 +268,12 @@ async def async_provision(
     writes: list[str] = []
     if not team_domain:
         team_domain = await api.get_team_domain()
-    bypass = await _reconcile(api, bypass_app_id, desired_bypass_app(options, open_paths), writes)
+    bypass = await _reconcile(
+        api,
+        bypass_app_id,
+        desired_bypass_app(options, open_paths, vendor_paths=vendor_paths),
+        writes,
+    )
     gate = await _reconcile(api, gate_app_id, desired_gate_app(options), writes)
     aud = gate.get("aud")
     if not isinstance(aud, str) or not aud:
