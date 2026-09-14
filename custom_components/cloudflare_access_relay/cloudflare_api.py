@@ -87,9 +87,18 @@ class CloudflareAccessApi:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status in (401, 403):
+                        detail = ""
+                        try:
+                            body = await resp.json(content_type=None)
+                            detail = "; ".join(
+                                f"{e.get('code')}: {e.get('message')}"
+                                for e in body.get("errors") or []
+                            )
+                        except aiohttp.ClientError, ValueError, AttributeError:
+                            pass
                         raise CloudflareAuthError(
-                            f"Cloudflare rejected the API token (HTTP {resp.status}); "
-                            "it needs 'Access: Apps and Policies: Edit' on the account"
+                            f"Cloudflare rejected the API token for {method} {path} "
+                            f"(HTTP {resp.status}{': ' + detail if detail else ''})"
                         )
                     if resp.status >= 500:
                         last_exc = CloudflareUnavailableError(
