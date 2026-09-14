@@ -183,6 +183,10 @@ and is skipped without them:
 | `CF_API_TOKEN` | account token with *Access: Apps and Policies: Edit*, *Access: Organizations, Identity Providers, and Groups: Read* and *Access: Service Tokens: Edit* |
 | `CF_ACCOUNT_ID` | the Cloudflare account id |
 
+plus one repository *variable*, `CF_TEST_EMAIL`: the address put on the test host's allow policy,
+which is who can open the test host in a browser between runs (the test itself logs in with its
+service token). Unset, the placeholder `nobody@example.com` is used.
+
 `preflight/preflight.sh` is the same set of checks for a shell with curl.
 
 ## Rollout

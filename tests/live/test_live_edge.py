@@ -78,8 +78,9 @@ pytestmark = pytest.mark.skipif(
     reason="live Cloudflare credentials not set (CF_API_TOKEN, CF_ACCOUNT_ID)",
 )
 
-HOST = os.environ.get("CF_TEST_HOST", "test-host.example.com")
-EMAIL = os.environ.get("CF_TEST_EMAIL", "nobody@example.com")
+# an unset Actions variable arrives as an empty string, hence `or` rather than a default
+HOST = os.environ.get("CF_TEST_HOST") or "test-host.example.com"
+EMAIL = os.environ.get("CF_TEST_EMAIL") or "nobody@example.com"
 BASE = f"https://{HOST}"
 SESSION = "1h"
 TOKEN_PREFIX = "ha-relay-ci"
