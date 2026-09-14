@@ -55,7 +55,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access relay for {hostname}",
-        "description": "Saving re-provisions the Access applications. Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths.",
+        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "allowed_emails": "Allowed e-mail addresses",
