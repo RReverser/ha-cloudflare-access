@@ -417,10 +417,15 @@ async def _lifecycle(
             time.sleep(3)
         assert refused, "P5: with the binding cookie on a copied token is refused"
         await _save_options(hass, entry)
-        gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
-        assert gate and gate.get("enable_binding_cookie") is False, (
-            "options save reconciled the drift"
-        )
+        # Cloudflare's API can lag behind its own writes for a few seconds
+        deadline = time.time() + 60
+        while True:
+            gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
+            reconciled = bool(gate) and not gate.get("enable_binding_cookie", False)
+            if reconciled or time.time() > deadline:
+                break
+            time.sleep(3)
+        assert reconciled, f"options save did not reconcile the drift: {gate}"
         deadline = time.time() + 90
         while True:
             async with await edge.get("/api/echo", cookies=cookie) as resp:
