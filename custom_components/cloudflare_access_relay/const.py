@@ -56,21 +56,17 @@ API_SESSION: Final = f"{API_BASE}/session"
 HEADER_JWT: Final = "Cf-Access-Jwt-Assertion"
 HEADER_CF_RAY: Final = "CF-Ray"
 
-# Paths (hostname-relative) that must never require the Access cookie.
-# Every path is a prefix: Access inherits a path rule to everything below it.
-BASE_BYPASS_PATHS: Final[tuple[str, ...]] = (
-    "/auth",
-    "/frontend_latest",
-    "/frontend_es5",
-    "/static",
-    URL_CONNECT,
-    URL_STATIC,
-    API_BASE,
-)
+# The integration's own paths that must never require the Access cookie: the connect
+# page and its JavaScript (loaded by a cookie-less WebView) and the relay API (called
+# from that page with Home Assistant's own authentication). Core's login surface is
+# discovered from the router instead (see paths.py). Every path is a prefix: Access
+# inherits a path rule to everything below it.
+OWN_BYPASS_PATHS: Final[tuple[str, ...]] = (URL_CONNECT, URL_STATIC, API_BASE)
 
-# Bypass paths added automatically when the named integration is loaded.
+# Bypass paths added automatically when the named integration is loaded: login
+# integrations with their own pages, and server-to-server callers that never hold a cookie.
 INTEGRATION_BYPASS_PATHS: Final[dict[str, tuple[str, ...]]] = {
-    "openid": ("/openid",),
+    "openid": ("/auth/openid", "/openid"),
     "google_assistant": ("/api/google_assistant",),
     "alexa": ("/api/alexa",),
 }
