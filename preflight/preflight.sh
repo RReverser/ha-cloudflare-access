@@ -54,4 +54,4 @@ for tok in "$JWT" "${CF_JWT:-}"; do
 done
 r=$(status -b "CF_Authorization=${JWT%???}xyz" "$B/api/echo"); is_gated "$r" && echo "  ok tampered cookie refused" || { echo "  FAIL tampered -> $r"; fail=1; }
 
-echo; [[ $fail -eq 0 ]] && echo "PRE-FLIGHT OK" || { echo "PRE-FLIGHT FAILED"; exit 1; }
+echo; [[ $fail -eq 0 ]] && echo "ALL CHECKS OK" || { echo "CHECKS FAILED"; exit 1; }
