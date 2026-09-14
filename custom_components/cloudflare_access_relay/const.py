@@ -29,6 +29,7 @@ CONF_CHECK_INTERVAL_MIN: Final = "check_interval_min"
 CONF_DELETE_OBJECTS_ON_REMOVE: Final = "delete_objects_on_remove"
 CONF_GATE_ENABLED: Final = "gate_enabled"
 CONF_SESSION_DURATION: Final = "session_duration"
+CONF_REQUIRE_BOUND_TOKENS: Final = "require_bound_tokens"
 
 DEFAULT_COOKIE_NAME: Final = "CF_Authorization"
 DEFAULT_IDENTITY_CLAIM: Final = "email"
@@ -39,6 +40,14 @@ DEFAULT_DELETE_OBJECTS_ON_REMOVE: Final = True
 DEFAULT_GATE_ENABLED: Final = False
 # Cloudflare documents the application session ceiling as "one month".
 DEFAULT_SESSION_DURATION: Final = "720h"
+DEFAULT_REQUIRE_BOUND_TOKENS: Final = True
+
+# Access-bound tokens (see bound.py)
+STORAGE_KEY_BOUND: Final = f"{DOMAIN}.bound_tokens"
+STORAGE_VERSION_BOUND: Final = 1
+# Home Assistant's own authorization codes live ten minutes; remembered codes match.
+AUTH_CODE_TTL_SECONDS: Final = 600
+ISSUE_RESTART_REQUIRED: Final = "restart_required"
 
 USER_MATCH_NAME: Final = "name"
 
@@ -78,9 +87,10 @@ GATED_OPEN_PATHS: Final[tuple[str, ...]] = (
 
 # Endpoints called by a vendor's servers with a Home Assistant OAuth token: they require
 # Home Assistant authentication, so the router cannot tell them from the rest of the API,
-# and the caller can never hold a cookie. Always bypassed, whether or not the integration is
-# loaded, so enabling it later needs no reload. Login integrations need no entry here; their
-# pages and views are discovered from the router.
+# and the caller can never hold a cookie. Bypassed whenever the origin enforces Access-bound
+# tokens (bound.py), whether or not the integration is loaded, so enabling it later needs no
+# reload. Login integrations need no entry here; their pages and views are discovered from
+# the router.
 TOKEN_CALLER_BYPASS_PATHS: Final[tuple[str, ...]] = ("/api/google_assistant", "/api/alexa")
 
 APP_NAME_PREFIX: Final = "ha-relay:"

@@ -66,7 +66,8 @@ def _static_prefix(canonical: str) -> str:
     return canonical.split("{", 1)[0].rstrip("/") or "/"
 
 
-def _view_of(handler: object) -> HomeAssistantView | None:
+def view_of(handler: object) -> HomeAssistantView | None:
+    """Return the HomeAssistantView behind a registered route handler, if any."""
     try:
         view = inspect.getclosurevars(handler).nonlocals.get("view")  # type: ignore[arg-type]
     except TypeError, ValueError:
@@ -97,7 +98,7 @@ def discover_open_paths(hass: HomeAssistant) -> list[str]:
                 if handler.args and _inside_any(handler.args[0], roots):
                     found.add(prefix)
                 continue
-            view = _view_of(handler)
+            view = view_of(handler)
             if view is not None and not view.requires_auth:
                 found.add(prefix)
     return collapse_prefixes(found)

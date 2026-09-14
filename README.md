@@ -84,7 +84,7 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 | Every static file an integration serves from **its own package directory**, read from the router: the frontend's `/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, service worker files, `/onboarding.html`, `/robots.txt`; a login integration's pages and scripts (hass-openid's `/openid/*`) | The login page and its assets are fetched before any cookie exists. Only code is bypassed: user content mounted from the configuration directory (`/local`, `/hacsfiles`) stays gated |
 | `/cloudflare_access_relay/connect`, `/cloudflare_access_relay/static` | The connect page and the relay's own JavaScript |
 | `/api/cloudflare_access_relay` | Flow creation, status poll, session check; every view there requires Home Assistant authentication |
-| `/api/google_assistant`, `/api/alexa` | Google's and Amazon's servers authenticate with a Home Assistant OAuth token and never hold the cookie. The router cannot tell these from the rest of the API, so they are declared, and always, so enabling either integration later needs nothing |
+| `/api/google_assistant`, `/api/alexa` | Google's and Amazon's servers authenticate with a Home Assistant OAuth token and never hold the cookie. The router cannot tell these from the rest of the API, so they are declared; bypassed whenever the origin enforces Access-bound tokens (below), whether or not the integration is loaded |
 | *extra bypassed paths* option | Anything else a token-bearing external caller must reach, e.g. a Prometheus scraper on `/api/prometheus` |
 
 Not bypassed although registered without authentication: the WebSocket, onboarding, the
@@ -97,6 +97,33 @@ The router is read again once Home Assistant has finished starting and after eve
 load, so an integration installed later (or set up after this entry during the same start) has
 its endpoints bypassed within seconds without a reload; only a real change rewrites the
 bypass application.
+
+### Access-bound tokens
+
+Access cannot check a bearer token, so a request to a bypassed path carries no Access
+identity at all. The integration closes that gap at the origin with one rule, applied to every
+request that arrives through Cloudflare for the gated hostname:
+
+- a request that presents a valid Access token (the cookie, or the assertion header Access
+  adds on gated paths) passes;
+- otherwise a Home Assistant bearer token is accepted only if it is **Access-bound**: its
+  refresh token was issued by a login whose final step was made under an Access identity, i.e.
+  from a browser that had already passed Access;
+- otherwise the request is rejected with 401 and an INFO log naming the client.
+
+Nothing is named: no client id, no path. Linking Google Assistant, Alexa or an MCP client from
+a browser that is signed in to Access yields a bound token; the same link made from a browser
+without the cookie yields an unbound one, which those callers cannot use. The companion app's
+first sign-in is cookie-less and yields an unbound token too, which it never uses without the
+cookie the relay gives it. Long-lived tokens created on the profile page are not bound; for
+your own machine callers use a service token or the extra bypassed paths. Links made before
+the integration was installed are unbound and must be made again.
+
+The rule runs in a middleware that has to be installed before the web server starts. The first
+setup after installing the integration therefore needs a restart, which a repair issue asks
+for; until then the vendor endpoints stay gated rather than bypassed. Requests on the local
+network never see the rule. The option *Require Access-bound tokens on bypassed paths* turns
+it off, in which case the vendor endpoints rely on Home Assistant authentication alone.
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
 is what makes the bypass list work; the live test asserts it on every run.
@@ -134,6 +161,7 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
 | Renew when fewer days remain | 3 | Lead time for the renewal banner and notification |
 | Check interval | 60 min | How often an open frontend re-checks the session |
 | Delete the Access applications when the integration is removed | on | |
+| Require Access-bound tokens on bypassed paths | on | See *Access-bound tokens*. Off: the vendor endpoints are bypassed and rely on Home Assistant authentication alone |
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access Relay → Reload), which is the way to repair

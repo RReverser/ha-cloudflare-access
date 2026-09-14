@@ -28,6 +28,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.start import async_at_started
 
+from .bound import BoundTokens, async_install_middleware
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -44,6 +45,7 @@ from .const import (
     CONF_GATE_ENABLED,
     CONF_IDENTITY_CLAIM,
     CONF_RENEW_DAYS,
+    CONF_REQUIRE_BOUND_TOKENS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     CONF_USER_MATCH,
@@ -57,6 +59,7 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_IDENTITY_CLAIM,
     DEFAULT_RENEW_DAYS,
+    DEFAULT_REQUIRE_BOUND_TOKENS,
     DEFAULT_SESSION_DURATION,
     DEFAULT_USER_MATCH,
     DOMAIN,
@@ -85,6 +88,7 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     CONF_DELETE_OBJECTS_ON_REMOVE: DEFAULT_DELETE_OBJECTS_ON_REMOVE,
     CONF_GATE_ENABLED: DEFAULT_GATE_ENABLED,
     CONF_SESSION_DURATION: DEFAULT_SESSION_DURATION,
+    CONF_REQUIRE_BOUND_TOKENS: DEFAULT_REQUIRE_BOUND_TOKENS,
 }
 
 _HTTP_REGISTERED = f"{DOMAIN}_http_registered"
@@ -103,6 +107,9 @@ class RelayData:
     policy_aud: str
     team_domain: str
     open_paths: list[str]
+    bound: BoundTokens
+    # Whether the vendor endpoints are bypassed at the edge (see async_setup_entry).
+    vendor_bypass: bool
 
 
 type RelayConfigEntry = ConfigEntry[RelayData]
@@ -127,6 +134,8 @@ async def _async_provision_entry(
     api: CloudflareAccessApi,
     options: dict[str, Any],
     open_paths: list[str],
+    *,
+    vendor_paths: bool,
 ) -> ProvisionResult:
     """Reconcile the Access applications and persist what Cloudflare derived."""
     result = await async_provision(
@@ -136,6 +145,7 @@ async def _async_provision_entry(
         gate_app_id=entry.data.get(DATA_GATE_APP_ID),
         bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
         team_domain=entry.data.get(DATA_TEAM_DOMAIN),
+        vendor_paths=vendor_paths,
     )
     derived = {
         DATA_TEAM_DOMAIN: result.team_domain,
@@ -155,9 +165,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
     options = effective_options(entry)
     api = _api_for(hass, entry)
     await _async_register_http(hass)
+    # With Access-bound tokens required, the vendor endpoints are bypassed at the edge only
+    # while the origin can enforce the rule on them; otherwise they stay gated until a
+    # restart installs the middleware.
+    require_bound = bool(options[CONF_REQUIRE_BOUND_TOKENS])
+    vendor_bypass = not require_bound or async_install_middleware(hass)
+    bound = BoundTokens(hass)
+    await bound.async_load()
     open_paths = discover_open_paths(hass)
     try:
-        result = await _async_provision_entry(hass, entry, api, options, open_paths)
+        result = await _async_provision_entry(
+            hass, entry, api, options, open_paths, vendor_paths=vendor_bypass
+        )
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except CloudflareUnavailableError as err:
@@ -174,6 +193,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
         policy_aud=result.policy_aud,
         team_domain=result.team_domain,
         open_paths=open_paths,
+        bound=bound,
+        vendor_bypass=vendor_bypass,
     )
     entry.runtime_data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
@@ -214,7 +235,9 @@ def _async_track_open_paths(hass: HomeAssistant, entry: ConfigEntry, data: Relay
             sorted(set(data.open_paths) - set(found)),
         )
         try:
-            await _async_provision_entry(hass, entry, data.api, data.options, found)
+            await _async_provision_entry(
+                hass, entry, data.api, data.options, found, vendor_paths=data.vendor_bypass
+            )
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
                 "Could not update the bypass application; reload the integration to retry: %s",

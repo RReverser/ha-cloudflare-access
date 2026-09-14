@@ -18,7 +18,8 @@
           "user_match": "Home Assistant user field",
           "renew_days": "Renew when fewer days remain",
           "check_interval_min": "Check interval",
-          "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
+          "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
+          "require_bound_tokens": "Require Access-bound tokens on bypassed paths"
         },
         "data_description": {
           "api_token": "Account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
@@ -28,7 +29,8 @@
           "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy. Used by the live tests; safer than bypassing a path.",
           "session_duration": "Lifetime of the Access token, e.g. 720h. Cloudflare's ceiling is one month.",
           "identity_claim": "JWT claim compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
+          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers.",
+          "require_bound_tokens": "On requests that reach Home Assistant through Cloudflare without an Access token (bypassed paths, e.g. vendor endpoints), accept a Home Assistant bearer token only if it was issued by a login made under an Access identity. Off: bypassed paths rely on Home Assistant authentication alone."
         }
       },
       "reauth_confirm": {
@@ -68,7 +70,8 @@
           "user_match": "Home Assistant user field",
           "renew_days": "Renew when fewer days remain",
           "check_interval_min": "Check interval",
-          "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
+          "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
+          "require_bound_tokens": "Require Access-bound tokens on bypassed paths"
         }
       }
     },
@@ -76,6 +79,12 @@
       "no_policy_subject": "List at least one e-mail address or an Access group ID.",
       "invalid_email": "One of the e-mail addresses is not valid.",
       "required": "This field is required."
+    }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Restart Home Assistant to enforce Access-bound tokens",
+      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed. Until Home Assistant is restarted, the vendor endpoints (Google Assistant, Alexa) stay gated by Access instead of being bypassed."
     }
   }
 }
