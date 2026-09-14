@@ -330,7 +330,8 @@ async def _lifecycle(
         await edge.wait_gate("/api/echo", True)
 
         print("== P8 precedence and P1 Set-Cookie passthrough at the edge")
-        assert _is_access_redirect(await edge.get("/"))
+        # the widened gate reaches the edge per path; wait for the root too
+        await edge.wait_gate("/", True)
         resp = await edge.get("/api/cloudflare_access_relay/echo")
         assert resp.status_code == 200, (
             "P8: bypassed prefix under /api beats the hostname-wide gate"
