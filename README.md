@@ -240,6 +240,12 @@ Tests: `tests/test_jwks.py` (verification against a fake JWKS endpoint, rotation
 connect page against a stubbed frontend and app bridge). CI runs lint, mypy, the suite on the
 pinned core and on the latest release (allowed to fail), hassfest and the HACS action.
 
+## Publishing to HACS
+
+The HACS action needs, beyond this code: a repository description and topics on GitHub, a
+`LICENSE` file, and the code on the default branch (it reads `hacs.json` and the manifest from
+there). Until those exist the `hacs` CI job is marked non-blocking.
+
 ## Deviations from the original plan
 
 Facts checked on 14 Sep 2026 that changed the implementation:
