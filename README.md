@@ -147,7 +147,7 @@ by `tests/live` in CI.
 | P4 | The header token equals the cookie token | verified |
 | P5 | With *Binding Cookie* enabled P2 fails, so it must stay off | verified: cookie alone → redirect to login |
 | P6 | Session ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
-| P7 | The app's WebView hands only the Access redirect to the browser and stays on the page | **manual, Android, still open**: open `https://<test host>/page` in the app, tap the link |
+| P7 | The app's WebView hands only the Access redirect to the browser and stays on the page | **still open**. The app's WebView only loads its own server, so this is observed on the Home Assistant hostname itself during rollout step 3 (gate off, callback path gated): tap *Sign in with Cloudflare* on the connect page and watch whether the system browser opens while the app stays on the page. Either outcome works: if the WebView follows the redirect itself, the login lands the cookie in the shared jar directly |
 | P8 | A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
 | — | Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
 | — | The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
@@ -160,8 +160,7 @@ and `common_name` instead of `email`. The integration accepts both `aud` shapes.
 
 `test-host.example.com` is a permanent test hostname: a Cloudflare Worker
 (`preflight/worker`, deployed as `test-host` with a Workers custom domain) that echoes
-requests, answers `POST */setcookie` with a `CF_Authorization` cookie and serves `GET */page`
-for P7. The zone has one custom WAF rule scoped to this host that skips bot protection, so
+requests and answers `POST */setcookie` with a `CF_Authorization` cookie. The zone has one custom WAF rule scoped to this host that skips bot protection, so
 curl and CI can reach it (the zone's Super Bot Fight Mode blocks automated clients otherwise;
 Home Assistant's own machine paths are already exempted by an older rule). The Access
 applications on it are the integration's `ha-relay:` pair; the live test puts its run-scoped
@@ -185,12 +184,14 @@ and is skipped without them:
 
 ## Rollout
 
-1. P7 on the test host (Android, manual); everything else is verified.
+1. Everything automatable is verified (see *Pre-flight*); P7 is observed in step 3.
 2. Install the integration and complete the config flow with the gate **off**. Run
    `tests/contract/check_edge.sh` with `MODE=staged` (header of the script lists the inputs).
-3. Android, gate still off: sign in to the app, confirm the connect page appears, complete it,
-   confirm `session` now reports an expiry (the banner disappears; or call
-   `/api/cloudflare_access_relay/session` with the app's cookie).
+3. Android, gate still off: sign in to the app, confirm the connect page appears, tap *Sign in
+   with Cloudflare* (this is P7: the system browser should open on the team domain and the app
+   should stay on the connect page), complete the login, come back, confirm the page reports
+   "Connected". Only the callback path is gated at this point, so nothing else can break, and
+   removing the entry undoes everything.
 4. Enable the gate in the options. Run `check_edge.sh` with `MODE=gated`. **This is the exposure
    change.** Rollback is the same switch, or removing the integration.
 5. Device acceptance, gate on: dashboard, HACS panel, camera images and notification
