@@ -45,6 +45,7 @@ from .const import (
     CONF_HOSTNAME,
     CONF_IDENTITY_CLAIM,
     CONF_RENEW_DAYS,
+    CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     CONF_USER_MATCH,
     DATA_TEAM_DOMAIN,
@@ -102,6 +103,9 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
             CONF_EXTRA_BYPASS_PATHS, default=list(defaults.get(CONF_EXTRA_BYPASS_PATHS) or [])
         ): _MULTI_TEXT,
         vol.Optional(
+            CONF_SERVICE_TOKEN_IDS, default=list(defaults.get(CONF_SERVICE_TOKEN_IDS) or [])
+        ): _MULTI_TEXT,
+        vol.Optional(
             CONF_SESSION_DURATION,
             default=defaults.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
         ): str,
@@ -134,6 +138,7 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     out[CONF_ALLOWED_EMAILS] = _clean_list(out.get(CONF_ALLOWED_EMAILS))
     out[CONF_ACCESS_GROUP_ID] = (out.get(CONF_ACCESS_GROUP_ID) or "").strip()
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
+    out[CONF_SERVICE_TOKEN_IDS] = _clean_list(out.get(CONF_SERVICE_TOKEN_IDS))
     for key in (CONF_RENEW_DAYS, CONF_CHECK_INTERVAL_MIN):
         if key in out:
             out[key] = int(out[key])

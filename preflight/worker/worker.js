@@ -1,23 +1,17 @@
 /*
- * Pre-flight Worker (plan section 7). Deploy on a throwaway hostname that is
- * NOT Home Assistant, put a self-hosted Access application in front of it, and
- * run ../preflight.sh.
+ * Test-host Worker. Deployed as `test-host` on the permanent test hostname
+ * (see README, "Test host"). It is the origin the live tests and the pre-flight
+ * checks talk to; the Access applications in front of it are provisioned by the
+ * integration's own code.
  *
- *   GET  /echo        -> request headers as JSON (gated)
- *   POST /setcookie   -> body {"v": "..."}; answers Set-Cookie: CF_Authorization=<v> (bypassed)
- *   GET  /page        -> static page with a link to /echo (bypassed)
+ *   POST <any>/setcookie  -> answers Set-Cookie: CF_Authorization=<body.v>  (P1 when bypassed)
+ *   GET  <any>/page       -> static page with a link to /api/echo            (P7, manual)
+ *   <anything else>       -> request path, method and headers as JSON       (echo)
  */
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/echo") {
-      const headers = {};
-      for (const [k, v] of request.headers) headers[k] = v;
-      return new Response(JSON.stringify({ headers }, null, 2), {
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.pathname === "/setcookie" && request.method === "POST") {
+    if (url.pathname.endsWith("/setcookie") && request.method === "POST") {
       const { v } = await request.json();
       return new Response(JSON.stringify({ ok: true }), {
         headers: {
@@ -26,12 +20,16 @@ export default {
         },
       });
     }
-    if (url.pathname === "/page") {
+    if (url.pathname.endsWith("/page")) {
       return new Response(
-        `<!doctype html><title>preflight</title><p>P7: tap the link. The system browser should open on the team domain and this page should stay.</p><p><a href="/echo">/echo (gated)</a></p>`,
+        `<!doctype html><title>ha-cloudflare-access test host</title><p>P7: tap the link. The system browser should open on the team domain and this page should stay.</p><p><a href="/api/echo">/api/echo (gated)</a></p>`,
         { headers: { "content-type": "text/html" } },
       );
     }
-    return new Response("not found", { status: 404 });
+    const headers = {};
+    for (const [k, v] of request.headers) headers[k] = v;
+    return new Response(JSON.stringify({ path: url.pathname, method: request.method, headers }, null, 2), {
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+    });
   },
 };

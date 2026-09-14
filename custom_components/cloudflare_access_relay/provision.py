@@ -16,11 +16,13 @@ from .const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
+    CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     GATE_APP_NAME_FMT,
     GATE_POLICY_NAME,
+    GATE_SERVICE_POLICY_NAME,
     INTEGRATION_BYPASS_PATHS,
     URL_CALLBACK,
 )
@@ -78,6 +80,26 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
     hostname = options[CONF_HOSTNAME]
     gated = bool(options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED))
     domain = hostname if gated else f"{hostname}{URL_CALLBACK}"
+    policies: list[dict[str, Any]] = [
+        {
+            "name": GATE_POLICY_NAME,
+            "decision": "allow",
+            "precedence": 1,
+            "include": gate_include_rules(options),
+        }
+    ]
+    token_ids = [t.strip() for t in options.get(CONF_SERVICE_TOKEN_IDS) or [] if t.strip()]
+    if token_ids:
+        # Service Auth: machine callers present CF-Access-Client-Id/Secret headers
+        # and receive an application token like a user would.
+        policies.append(
+            {
+                "name": GATE_SERVICE_POLICY_NAME,
+                "decision": "non_identity",
+                "precedence": 2,
+                "include": [{"service_token": {"token_id": t}} for t in token_ids],
+            }
+        )
     return {
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
@@ -89,14 +111,7 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
         "http_only_cookie_attribute": True,
         "same_site_cookie_attribute": "lax",
         "app_launcher_visible": False,
-        "policies": [
-            {
-                "name": GATE_POLICY_NAME,
-                "decision": "allow",
-                "precedence": 1,
-                "include": gate_include_rules(options),
-            }
-        ],
+        "policies": policies,
     }
 
 
@@ -135,6 +150,15 @@ _COMPARED_FIELDS = (
 )
 
 
+# Cloudflare omits some fields from GET responses when they hold the default.
+_CF_DEFAULTS: dict[str, Any] = {
+    "enable_binding_cookie": False,
+    "path_cookie_attribute": False,
+    "http_only_cookie_attribute": True,
+    "app_launcher_visible": True,
+}
+
+
 def _norm_policy(policy: dict[str, Any]) -> tuple[Any, ...]:
     return (
         policy.get("name"),
@@ -154,7 +178,7 @@ def _json_key(value: Any) -> str:
 def app_matches(existing: dict[str, Any], desired: dict[str, Any]) -> bool:
     """Return True when the existing app already carries the desired config."""
     for key in _COMPARED_FIELDS:
-        if key in desired and existing.get(key) != desired[key]:
+        if key in desired and existing.get(key, _CF_DEFAULTS.get(key)) != desired[key]:
             return False
     have = {(d.get("type"), d.get("uri")) for d in existing.get("destinations") or []}
     want = {(d.get("type"), d.get("uri")) for d in desired["destinations"]}
