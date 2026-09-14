@@ -170,7 +170,8 @@ async def _validate_token(api: CloudflareAccessApi, errors: dict[str, str]) -> s
         return None
     try:
         return await api.get_team_domain()
-    except CloudflareAuthError:
+    except CloudflareAuthError as err:
+        _LOGGER.warning("Token cannot read the Zero Trust organization: %s", err)
         errors["base"] = "missing_org_read"
     except CloudflareUnavailableError:
         errors["base"] = "cannot_connect"
