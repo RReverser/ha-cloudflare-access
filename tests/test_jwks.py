@@ -1,4 +1,4 @@
-"""JWKS verification tests (plan section 8, items 1-3)."""
+"""JWKS verification tests: signature, claims, key cache and rotation."""
 
 from __future__ import annotations
 

@@ -4,7 +4,7 @@
  * checks talk to; the Access applications in front of it are provisioned by the
  * integration's own code.
  *
- *   POST <any>/setcookie  -> answers Set-Cookie: CF_Authorization=<body.v>  (P1 when bypassed)
+ *   POST <any>/setcookie  -> answers Set-Cookie: CF_Authorization=<body.v>  (cookie passthrough check)
  *   GET  <any>/page       -> static page with a link to /api/echo            (browser check)
  *   <anything else>       -> request path, method and headers as JSON       (echo)
  */
@@ -22,7 +22,7 @@ export default {
     }
     if (url.pathname.endsWith("/page")) {
       return new Response(
-        `<!doctype html><title>ha-cloudflare-access test host</title><p>P7: tap the link. The system browser should open on the team domain and this page should stay.</p><p><a href="/api/echo">/api/echo (gated)</a></p>`,
+        `<!doctype html><title>ha-cloudflare-access test host</title><p>Tap the link. The system browser should open on the team domain and this page should stay.</p><p><a href="/api/echo">/api/echo (gated)</a></p>`,
         { headers: { "content-type": "text/html" } },
       );
     }

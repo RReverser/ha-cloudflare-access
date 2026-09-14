@@ -1,4 +1,4 @@
-"""HTTP view tests (plan section 8, items 4-11)."""
+"""HTTP view tests: flow creation, callback, one-shot cookie release, session report."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-flight checks against real Cloudflare (plan section 7), from a shell.
+# Checks of the Cloudflare Access behaviour the relay depends on, from a shell with curl.
 #
 # The automated version of these checks is tests/live/test_live_edge.py (run by CI with the
 # repository secrets). This script is the manual equivalent for a shell with curl.
@@ -15,8 +15,8 @@
 #   CF_ACCESS_CLIENT_ID=...   CF_ACCESS_CLIENT_SECRET=...   (an Access service token)
 # Optional: CF_JWT=<identity token from `cloudflared access login https://$TEST_HOST/api/echo`>
 #
-# P5 (binding cookie), P6 (session ceiling) and P7 (Android WebView, manual) are described
-# in the README. Failure of P1, P2 or P8 kills the design.
+# The binding-cookie, session-ceiling and Android WebView checks are described in the README.
+# Failure of the cookie passthrough, cookie reuse or path precedence check kills the design.
 set -euo pipefail
 : "${TEST_HOST:?}"; : "${CF_ACCESS_CLIENT_ID:?}"; : "${CF_ACCESS_CLIENT_SECRET:?}"
 B="https://${TEST_HOST}"; fail=0
@@ -24,12 +24,12 @@ short() { sed -E 's#(cloudflareaccess\.com/cdn-cgi/access/login/[^?]*)\?.*#\1?â€
 status() { curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$@" | short; }
 is_gated() { [[ "$1" =~ ^30[0-9]\ https://[^/]*\.cloudflareaccess\.com/ ]]; }
 
-echo "== P8: a path-specific bypass application beats the hostname-wide gate"
+echo "== path precedence: a path-specific bypass application beats the hostname-wide gate"
 r=$(status "$B/api/echo");                        is_gated "$r" && echo "  ok gated /api/echo" || { echo "  FAIL /api/echo -> $r"; fail=1; }
 r=$(status "$B/api/cloudflare_access_relay/echo"); [[ "$r" == 200* ]] && echo "  ok bypassed /api/cloudflare_access_relay/echo" || { echo "  FAIL -> $r"; fail=1; }
 r=$(status "$B/cloudflare_access_relay/callback?flow=x"); is_gated "$r" && echo "  ok gated callback" || { echo "  FAIL callback -> $r"; fail=1; }
 
-echo "== P1: origin Set-Cookie passes through unmodified (bypassed path)"
+echo "== cookie passthrough: origin Set-Cookie passes through unmodified (bypassed path)"
 sc=$(curl -sS -D - -o /dev/null -X POST -H 'content-type: application/json' -d '{"v":"probe-value"}' "$B/auth/token/setcookie" | tr -d '\r' | grep -i '^set-cookie:' || true)
 [[ "$sc" == *"CF_Authorization=probe-value; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"* ]] && echo "  ok" || { echo "  FAIL: $sc"; fail=1; }
 
@@ -38,15 +38,15 @@ curl -sS -D hdr.txt -o body.json -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" 
 JWT=$(python3 -c 'import json;print(json.load(open("body.json"))["headers"].get("cf-access-jwt-assertion",""))')
 COOKIE=$(tr -d '\r' < hdr.txt | sed -n 's/^[Ss]et-[Cc]ookie: CF_Authorization=\([^;]*\).*/\1/p' | head -1)
 [[ -n "$JWT" ]] && echo "  ok header present" || { echo "  FAIL no Cf-Access-Jwt-Assertion"; fail=1; }
-[[ "$JWT" == "$COOKIE" ]] && echo "  ok P4 header == cookie" || { echo "  FAIL P4"; fail=1; }
+[[ "$JWT" == "$COOKIE" ]] && echo "  ok header token == cookie token" || { echo "  FAIL header token != cookie token"; fail=1; }
 python3 - "$JWT" <<'PY'
 import base64, json, sys
 p = sys.argv[1].split(".")[1]; c = json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))
-print(f"  P3: exp-iat = {c['exp']-c['iat']} s; aud={c['aud']}; iss={c['iss']}")
+print(f"  token lifetime exp-iat = {c['exp']-c['iat']} s; aud={c['aud']}; iss={c['iss']}")
 PY
 rm -f hdr.txt body.json
 
-echo "== P2: the token alone, as a cookie, from a client that never logged in"
+echo "== cookie reuse: the token alone, as a cookie, from a client that never logged in"
 for tok in "$JWT" "${CF_JWT:-}"; do
   [[ -z "$tok" ]] && continue
   r=$(status -A 'okhttp/4.12.0' -b "CF_Authorization=$tok" "$B/api/echo")

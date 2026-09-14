@@ -1,4 +1,4 @@
-"""Provisioning tests against the fake Cloudflare API (plan section 8, items 12-17)."""
+"""Provisioning tests against the fake Cloudflare API."""
 
 from __future__ import annotations
 
