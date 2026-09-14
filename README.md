@@ -80,11 +80,10 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 
 | Path | Why |
 |---|---|
-| Core's login surface, discovered from Home Assistant's router at setup: every static file the frontend package serves (`/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, the service worker files, `/onboarding.html`, `/robots.txt`) and every view under `/auth/` that Home Assistant registers without its own authentication (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`) | Reached before the client has any cookie: the login page, its assets, the login flow and the token exchange. Nothing here serves data |
+| The login surface, discovered from Home Assistant's router at setup: every static file an integration serves from its own package directory (the frontend's `/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, service worker files, `/onboarding.html`, `/robots.txt`; a login integration's pages and scripts such as hass-openid's `/openid/*`) and every view under `/auth/` registered without Home Assistant's own authentication (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`; hass-openid's `/auth/openid/*`) | Reached before the client has any cookie: the login page, its assets, the login flow and the token exchange. Nothing here serves data; user content mounted from the configuration directory (`/local`, `/hacsfiles`) is not included |
 | `/cloudflare_access_relay/connect`, `/cloudflare_access_relay/static` | The connect page and the relay's own JavaScript |
 | `/api/cloudflare_access_relay` | Flow creation, status poll, session check. The only bypassed prefix under `/api/`; every view there requires Home Assistant authentication |
-| `/auth/openid`, `/openid` | Only when the `openid` (hass-openid) integration is loaded |
-| `/api/google_assistant`, `/api/alexa` | Only when those integrations are loaded (server-to-server callers cannot carry the cookie) |
+| `/api/google_assistant`, `/api/alexa` | Only when those integrations are loaded. Google's and Amazon's servers authenticate with a Home Assistant token and never hold the cookie; nothing in the router distinguishes such endpoints, so they are declared |
 | *extra bypassed paths* option | Anything else that must stay reachable without a cookie, e.g. specific webhooks |
 
 The discovered and integration-derived entries are computed when the entry is set up; after

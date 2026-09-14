@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from aiohttp import web
+from homeassistant.components.http.server import StaticPathConfig
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.http import HomeAssistantView
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cloudflare_access_relay.const import (
@@ -210,11 +215,9 @@ async def test_access_group_replaces_emails(
     assert gate["policies"][0]["include"] == [{"group": {"id": "grp-1"}}]
 
 
-def test_openid_paths_only_when_loaded() -> None:
+def test_server_caller_paths_only_when_loaded() -> None:
     opts = {CONF_EXTRA_BYPASS_PATHS: []}
-    assert "/openid" not in bypass_paths(opts, set(), CORE_LOGIN)
-    assert "/openid" in bypass_paths(opts, {"openid"}, CORE_LOGIN)
-    assert "/auth/openid" in bypass_paths(opts, {"openid"}, CORE_LOGIN)
+    assert "/api/google_assistant" not in bypass_paths(opts, set(), CORE_LOGIN)
     assert "/api/google_assistant" in bypass_paths(opts, {"google_assistant"}, CORE_LOGIN)
     assert "/api/alexa" in bypass_paths(opts, {"alexa"}, CORE_LOGIN)
     # normalised, de-duplicated and collapsed onto covering prefixes
@@ -224,14 +227,50 @@ def test_openid_paths_only_when_loaded() -> None:
     assert paths.count("/static") == 1 and "/static/x" not in paths and paths[-1] == "/x"
 
 
-async def test_openid_loaded_at_setup(
+async def test_login_integration_paths_are_discovered(
     hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
 ) -> None:
-    hass.config.components.add("openid")
+    """A login integration like hass-openid: unauthenticated /auth/ views and package assets."""
+    package = Path(hass.config.path("custom_components", "fakelogin"))
+    package.mkdir(parents=True)
+    (package / "login.js").write_text("// login page script")
+    www = Path(hass.config.path("www"))
+    www.mkdir(parents=True)
+    (www / "snapshot.jpg").write_bytes(b"not code")
+
+    class LoginView(HomeAssistantView):
+        url = "/auth/fakelogin/callback"
+        name = "auth:fakelogin:callback"
+        requires_auth = False
+
+        async def get(self, request: web.Request) -> web.Response:
+            return web.Response(text="ok")
+
+    class SettingsView(HomeAssistantView):
+        url = "/auth/fakelogin/settings"
+        name = "auth:fakelogin:settings"
+        requires_auth = True
+
+        async def get(self, request: web.Request) -> web.Response:
+            return web.Response(text="ok")
+
+    await async_setup_component(hass, "http", {})
+    hass.http.register_view(LoginView())
+    hass.http.register_view(SettingsView())
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig("/fakelogin/login.js", str(package / "login.js"), False),
+            StaticPathConfig("/local", str(www), False),
+        ]
+    )
     entry = make_entry()
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    assert f"{HOSTNAME}/openid" in _uris(fake_cloudflare.by_name(BYPASS))
+    uris = _uris(fake_cloudflare.by_name(BYPASS))
+    assert f"{HOSTNAME}/auth/fakelogin/callback" in uris
+    assert f"{HOSTNAME}/fakelogin/login.js" in uris
+    assert f"{HOSTNAME}/auth/fakelogin/settings" not in uris, "authenticated views stay gated"
+    assert f"{HOSTNAME}/local" not in uris, "user content stays gated"
 
 
 async def test_remove_entry_deletes_apps(hass: HomeAssistant, relay: Relay) -> None:

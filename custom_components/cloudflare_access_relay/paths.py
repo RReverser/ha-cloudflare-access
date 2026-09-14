@@ -1,15 +1,21 @@
 """Derive, from Home Assistant's own router, the paths a client needs before it holds a cookie.
 
-Two classes of core endpoints are reached by a client that cannot yet present the
-Access cookie, and Home Assistant marks both in a machine-readable way:
+Two classes of endpoints are reached by a client that cannot yet present the Access
+cookie, and Home Assistant marks both in a machine-readable way:
 
-- static files served from the frontend package (`hass_frontend`): the login page
-  (`/auth/authorize`), its JavaScript bundles and static assets;
-- views under `/auth/` that Home Assistant registers with `requires_auth = False`:
-  the login flow, the provider list and the token endpoint.
+- static files that an integration serves from its own package directory: the
+  frontend package's login page (`/auth/authorize`), its JavaScript bundles and
+  assets, and the pages and scripts of login integrations such as hass-openid.
+  User content mounted from the configuration directory (`/local`, `/hacsfiles`)
+  is not code and stays gated;
+- views under `/auth/` registered with `requires_auth = False`: core's login flow,
+  provider list and token endpoint, and the login views of login integrations.
 
-Everything else that skips Home Assistant's HTTP authentication (the WebSocket, webhooks,
-the frontend index) is reached by clients that do hold the cookie, and stays gated.
+Everything else that skips Home Assistant's HTTP authentication (the WebSocket,
+webhooks, the frontend index) is reached by clients that do hold the cookie, and
+stays gated. Server-to-server callers that authenticate with a Home Assistant token
+(Google Assistant, Alexa) are indistinguishable from any other API view here and
+are declared separately.
 """
 
 from __future__ import annotations
@@ -19,25 +25,34 @@ import inspect
 from pathlib import Path
 
 from aiohttp.web_urldispatcher import StaticResource
+import homeassistant.components
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.http import HomeAssistantView
 
 LOGIN_PREFIX = "/auth/"
 
 
-def _frontend_root() -> Path | None:
+def _package_roots(hass: HomeAssistant) -> list[Path]:
+    """Directories whose files are integration code rather than user content."""
+    roots = [
+        Path(homeassistant.components.__file__).parent.resolve(),
+        Path(hass.config.path("custom_components")).resolve(),
+    ]
     try:
         import hass_frontend
     except ImportError:  # pragma: no cover - the frontend is a dependency of this integration
-        return None
-    return Path(hass_frontend.where()).resolve()
+        pass
+    else:
+        roots.append(Path(hass_frontend.where()).resolve())
+    return roots
 
 
-def _inside(path: object, root: Path) -> bool:
+def _inside_any(path: object, roots: list[Path]) -> bool:
     try:
-        return Path(str(path)).resolve().is_relative_to(root)
+        resolved = Path(str(path)).resolve()
     except OSError, ValueError:
         return False
+    return any(resolved.is_relative_to(root) for root in roots)
 
 
 def _static_prefix(canonical: str) -> str:
@@ -55,18 +70,18 @@ def _view_of(handler: object) -> HomeAssistantView | None:
 
 def discover_login_paths(hass: HomeAssistant) -> list[str]:
     """Return the sorted path prefixes a cookie-less client must be able to reach."""
-    root = _frontend_root()
+    roots = _package_roots(hass)
     found: set[str] = set()
     for resource in hass.http.app.router.resources():
         canonical = resource.canonical
         if isinstance(resource, StaticResource):
-            if root and _inside(getattr(resource, "_directory", ""), root):
+            if _inside_any(getattr(resource, "_directory", ""), roots):
                 found.add(_static_prefix(canonical))
             continue
         for route in resource:
             handler = route.handler
             if isinstance(handler, partial):
-                if root and handler.args and _inside(handler.args[0], root):
+                if handler.args and _inside_any(handler.args[0], roots):
                     found.add(_static_prefix(canonical))
                 continue
             view = _view_of(handler)
