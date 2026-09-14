@@ -1,21 +1,22 @@
-"""Derive, from Home Assistant's own router, the paths a client needs before it holds a cookie.
+"""Derive, from Home Assistant's own router, the paths a client reaches without a cookie.
 
-Two classes of endpoints are reached by a client that cannot yet present the Access
-cookie, and Home Assistant marks both in a machine-readable way:
+Home Assistant marks the endpoints it serves to clients that have no Home Assistant
+session, and such clients cannot present the Access cookie either:
 
-- static files that an integration serves from its own package directory: the
-  frontend package's login page (`/auth/authorize`), its JavaScript bundles and
-  assets, and the pages and scripts of login integrations such as hass-openid.
-  User content mounted from the configuration directory (`/local`, `/hacsfiles`)
-  is not code and stays gated;
-- views under `/auth/` registered with `requires_auth = False`: core's login flow,
-  provider list and token endpoint, and the login views of login integrations.
+- views registered with `requires_auth = False`: the login flow, provider list and
+  token endpoint, OAuth callbacks and discovery documents, webhooks, the TTS, stream
+  and image proxies fetched by media players, integration-specific inbound endpoints.
+  Each carries its own protection (a webhook id, a signed URL, a shared secret);
+- static files an integration serves from its own package directory: the frontend's
+  login page and bundles, a login integration's pages and scripts. User content mounted
+  from the configuration directory (`/local`, `/hacsfiles`) is not code and stays gated.
 
-Everything else that skips Home Assistant's HTTP authentication (the WebSocket,
-webhooks, the frontend index) is reached by clients that do hold the cookie, and
-stays gated. Server-to-server callers that authenticate with a Home Assistant token
-(Google Assistant, Alexa) are indistinguishable from any other API view here and
-are declared separately.
+A few unauthenticated views are entry points of the frontend session rather than
+endpoints for outside callers (the WebSocket, onboarding, the Supervisor proxy and
+ingress, map tiles, the manifest); those are listed in `GATED_OPEN_PATHS` and stay
+gated, as does the relay's own callback. Server-to-server callers that authenticate
+with a Home Assistant token (Google Assistant, Alexa) look like any other API view here
+and are declared separately.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import homeassistant.components
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.http import HomeAssistantView
 
-LOGIN_PREFIX = "/auth/"
+from .const import GATED_OPEN_PATHS
 
 
 def _package_roots(hass: HomeAssistant) -> list[Path]:
@@ -38,6 +39,11 @@ def _package_roots(hass: HomeAssistant) -> list[Path]:
         Path(homeassistant.components.__file__).parent.resolve(),
         Path(hass.config.path("custom_components")).resolve(),
     ]
+    # Where custom integrations are actually imported from: the same directory in a
+    # normal install, the checkout under a test harness.
+    import custom_components
+
+    roots.extend(Path(p).resolve() for p in custom_components.__path__)
     try:
         import hass_frontend
     except ImportError:  # pragma: no cover - the frontend is a dependency of this integration
@@ -68,25 +74,32 @@ def _view_of(handler: object) -> HomeAssistantView | None:
     return view if isinstance(view, HomeAssistantView) else None
 
 
-def discover_login_paths(hass: HomeAssistant) -> list[str]:
+def is_gated_anyway(path: str) -> bool:
+    """Return whether a path is a frontend-session surface that stays gated."""
+    return any(path == g or path.startswith(g + "/") for g in GATED_OPEN_PATHS)
+
+
+def discover_open_paths(hass: HomeAssistant) -> list[str]:
     """Return the sorted path prefixes a cookie-less client must be able to reach."""
     roots = _package_roots(hass)
     found: set[str] = set()
     for resource in hass.http.app.router.resources():
-        canonical = resource.canonical
+        prefix = _static_prefix(resource.canonical)
+        if prefix == "/" or is_gated_anyway(prefix):
+            continue
         if isinstance(resource, StaticResource):
             if _inside_any(getattr(resource, "_directory", ""), roots):
-                found.add(_static_prefix(canonical))
+                found.add(prefix)
             continue
         for route in resource:
             handler = route.handler
             if isinstance(handler, partial):
                 if handler.args and _inside_any(handler.args[0], roots):
-                    found.add(_static_prefix(canonical))
+                    found.add(prefix)
                 continue
             view = _view_of(handler)
-            if view is not None and not view.requires_auth and canonical.startswith(LOGIN_PREFIX):
-                found.add(_static_prefix(canonical))
+            if view is not None and not view.requires_auth:
+                found.add(prefix)
     return collapse_prefixes(found)
 
 

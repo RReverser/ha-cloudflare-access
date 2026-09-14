@@ -63,13 +63,25 @@ HEADER_CF_RAY: Final = "CF-Ray"
 # inherits a path rule to everything below it.
 OWN_BYPASS_PATHS: Final[tuple[str, ...]] = (URL_CONNECT, URL_STATIC, API_BASE)
 
-# Bypass paths added automatically when the named integration is loaded: server-to-server
-# callers that authenticate with a Home Assistant token and never hold a cookie. Login
-# integrations need no entry here; their pages and views are discovered from the router.
-INTEGRATION_BYPASS_PATHS: Final[dict[str, tuple[str, ...]]] = {
-    "google_assistant": ("/api/google_assistant",),
-    "alexa": ("/api/alexa",),
-}
+# Unauthenticated at the HTTP level but reached only by a client that holds the frontend
+# session (and therefore the cookie): these stay gated even though Home Assistant registers
+# them with requires_auth = False. The relay's own callback must be gated by definition.
+GATED_OPEN_PATHS: Final[tuple[str, ...]] = (
+    "/api/websocket",
+    "/api/onboarding",
+    "/api/hassio",
+    "/api/hassio_ingress",
+    "/api/map_tiles",
+    "/manifest.json",
+    URL_CALLBACK,
+)
+
+# Endpoints called by a vendor's servers with a Home Assistant OAuth token: they require
+# Home Assistant authentication, so the router cannot tell them from the rest of the API,
+# and the caller can never hold a cookie. Always bypassed, whether or not the integration is
+# loaded, so enabling it later needs no reload. Login integrations need no entry here; their
+# pages and views are discovered from the router.
+TOKEN_CALLER_BYPASS_PATHS: Final[tuple[str, ...]] = ("/api/google_assistant", "/api/alexa")
 
 APP_NAME_PREFIX: Final = "ha-relay:"
 GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
@@ -80,6 +92,8 @@ BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 
 FLOW_TTL_SECONDS: Final = 600
 FLOW_SWEEP_INTERVAL_SECONDS: Final = 60
+# Component loads come in bursts during start-up; discovery re-runs once the burst settles.
+REDISCOVER_COOLDOWN_SECONDS: Final = 5
 
 NOTIFICATION_ID_ERROR: Final = f"{DOMAIN}_error"
 NOTIFICATION_ID_RENEW: Final = f"{DOMAIN}_renew"

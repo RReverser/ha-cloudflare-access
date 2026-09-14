@@ -22,8 +22,8 @@ from .const import (
     GATE_APP_NAME_FMT,
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
-    INTEGRATION_BYPASS_PATHS,
     OWN_BYPASS_PATHS,
+    TOKEN_CALLER_BYPASS_PATHS,
     URL_CALLBACK,
 )
 from .paths import collapse_prefixes
@@ -39,19 +39,14 @@ def normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def bypass_paths(
-    options: dict[str, Any], loaded_domains: set[str], login_paths: list[str]
-) -> list[str]:
+def bypass_paths(options: dict[str, Any], open_paths: list[str]) -> list[str]:
     """Return the sorted, prefix-collapsed list of bypassed paths.
 
-    `login_paths` is core's login surface as discovered from the router
-    (`paths.discover_login_paths`); the integration's own paths, the seeds for
-    loaded integrations and the configured extras are added to it.
+    `open_paths` is what Home Assistant serves to cookie-less clients, as discovered
+    from the router (`paths.discover_open_paths`); the integration's own paths, the
+    token-authenticated vendor endpoints and the configured extras are added to it.
     """
-    paths: list[str] = [*login_paths, *OWN_BYPASS_PATHS]
-    for domain, extra in INTEGRATION_BYPASS_PATHS.items():
-        if domain in loaded_domains:
-            paths.extend(extra)
+    paths: list[str] = [*open_paths, *OWN_BYPASS_PATHS, *TOKEN_CALLER_BYPASS_PATHS]
     for raw in options.get(CONF_EXTRA_BYPASS_PATHS) or []:
         if raw and raw.strip():
             paths.append(raw)
@@ -116,12 +111,10 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def desired_bypass_app(
-    options: dict[str, Any], loaded_domains: set[str], login_paths: list[str]
-) -> dict[str, Any]:
+def desired_bypass_app(options: dict[str, Any], open_paths: list[str]) -> dict[str, Any]:
     """Return the desired bypass application body."""
     hostname = options[CONF_HOSTNAME]
-    paths = bypass_paths(options, loaded_domains, login_paths)
+    paths = bypass_paths(options, open_paths)
     destinations = _destinations(hostname, paths)
     return {
         "type": "self_hosted",
@@ -253,8 +246,7 @@ async def _reconcile(
 async def async_provision(
     api: CloudflareAccessApi,
     options: dict[str, Any],
-    loaded_domains: set[str],
-    login_paths: list[str],
+    open_paths: list[str],
     *,
     gate_app_id: str | None,
     bypass_app_id: str | None,
@@ -268,9 +260,7 @@ async def async_provision(
     writes: list[str] = []
     if not team_domain:
         team_domain = await api.get_team_domain()
-    bypass = await _reconcile(
-        api, bypass_app_id, desired_bypass_app(options, loaded_domains, login_paths), writes
-    )
+    bypass = await _reconcile(api, bypass_app_id, desired_bypass_app(options, open_paths), writes)
     gate = await _reconcile(api, gate_app_id, desired_gate_app(options), writes)
     aud = gate.get("aud")
     if not isinstance(aud, str) or not aud:

@@ -80,20 +80,23 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 
 | Path | Why |
 |---|---|
-| The login surface, discovered from Home Assistant's router at setup: every static file an integration serves from its own package directory (the frontend's `/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, service worker files, `/onboarding.html`, `/robots.txt`; a login integration's pages and scripts such as hass-openid's `/openid/*`) and every view under `/auth/` registered without Home Assistant's own authentication (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`; hass-openid's `/auth/openid/*`) | Reached before the client has any cookie: the login page, its assets, the login flow and the token exchange. Nothing here serves data; user content mounted from the configuration directory (`/local`, `/hacsfiles`) is not included |
+| Every view Home Assistant registers **without its own authentication**, read from the router. In core that is the login surface (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`, the OAuth discovery documents under `/.well-known/`) and the inbound endpoints other systems call (`/api/webhook`, the TTS, stream, image and camera proxies, integration-specific receivers); login integrations add theirs (hass-openid's `/auth/openid/*`) | A client that can reach these has no Home Assistant session, so it cannot hold the Access cookie either. Each endpoint carries its own protection: a webhook id, a signed URL, a shared secret. Gating them would only break the callers |
+| Every static file an integration serves from **its own package directory**, read from the router: the frontend's `/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, service worker files, `/onboarding.html`, `/robots.txt`; a login integration's pages and scripts (hass-openid's `/openid/*`) | The login page and its assets are fetched before any cookie exists. Only code is bypassed: user content mounted from the configuration directory (`/local`, `/hacsfiles`) stays gated |
 | `/cloudflare_access_relay/connect`, `/cloudflare_access_relay/static` | The connect page and the relay's own JavaScript |
-| `/api/cloudflare_access_relay` | Flow creation, status poll, session check. The only bypassed prefix under `/api/`; every view there requires Home Assistant authentication |
-| `/api/google_assistant`, `/api/alexa` | Only when those integrations are loaded. Google's and Amazon's servers authenticate with a Home Assistant token and never hold the cookie; nothing in the router distinguishes such endpoints, so they are declared |
-| *extra bypassed paths* option | Anything else that must stay reachable without a cookie, e.g. specific webhooks |
+| `/api/cloudflare_access_relay` | Flow creation, status poll, session check; every view there requires Home Assistant authentication |
+| `/api/google_assistant`, `/api/alexa` | Google's and Amazon's servers authenticate with a Home Assistant OAuth token and never hold the cookie. The router cannot tell these from the rest of the API, so they are declared, and always, so enabling either integration later needs nothing |
+| *extra bypassed paths* option | Anything else a token-bearing external caller must reach, e.g. a Prometheus scraper on `/api/prometheus` |
 
-The discovered and integration-derived entries are computed when the entry is set up; after
-installing another integration that needs one, reload this entry so the bypass list picks it
-up. Endpoints that skip Home Assistant's authentication but are only ever called by clients
-that hold the cookie (the WebSocket, webhooks, the frontend index) are deliberately not in
-this list.
-
-Everything else, including `/`, `/api/*`, `/api/websocket`, `/api/webhook/*`, `/local/*`,
+Not bypassed although registered without authentication: the WebSocket, onboarding, the
+Supervisor proxy and ingress, map tiles and the web manifest. They are entry points of the
+frontend session, so the client always holds the cookie, and the relay's own callback must be
+gated by definition. Everything else, including `/`, `/api/*`, `/api/websocket`, `/local/*`,
 `/media/*` and `/hacsfiles/*`, is gated once the gate is enabled.
+
+The router is read again once Home Assistant has finished starting and after every component
+load, so an integration installed later (or set up after this entry during the same start) has
+its endpoints bypassed within seconds without a reload; only a real change rewrites the
+bypass application.
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
 is what makes the bypass list work; the live test asserts it on every run.
@@ -203,9 +206,9 @@ logs in with its run-scoped service token, so nobody can open the test host in a
 4. Enable the gate in the options. Run `check_edge.sh` with `MODE=gated`. **This is the exposure
    change.** Rollback is the same switch, or removing the integration.
 5. Device acceptance, gate on: dashboard, HACS panel, camera images and notification
-   tap-throughs load; the Home Assistant access log shows 200s on the device's
-   `/api/webhook/<id>` while the path is gated; the device's refresh token `last_used_ip` keeps
-   updating; kill and relaunch the app, background sensor updates continue.
+   tap-throughs load; the device's refresh token `last_used_ip` keeps updating; kill and
+   relaunch the app, background sensor updates (which arrive on the bypassed
+   `/api/webhook/<id>`) continue.
 6. Expiry rehearsal: set the session duration to `15m`, wait, confirm the banner and the
    notification appear and that *Connect* restores service. Set the duration back.
 
@@ -248,6 +251,13 @@ Assistant's own login page. Everything it needs is bypassed.
   creates no Home Assistant users or tokens; it only copies an Access token the user earned.
 - The relay endpoints under `/api/cloudflare_access_relay` are bypassed at the edge but require
   Home Assistant authentication; the contract script checks both.
+- What the gate adds, and what it does not: Access becomes a second factor in front of every
+  surface that a Home Assistant session reaches (the frontend, the API, the WebSocket, user
+  content). Endpoints Home Assistant exposes without a session keep exactly the protection
+  they have without Access (a webhook id, a signed URL, an OAuth token); they are not
+  weakened, and not strengthened either. Callers that authenticate with a Home Assistant
+  token from outside a session (scripts, Prometheus, a reverse-proxied dashboard) are gated:
+  give them an Access service token, or list their path in the extra bypassed paths.
 - If Access is also an OIDC identity provider for a login integration, that SaaS application
   is separate and untouched.
 
@@ -257,8 +267,9 @@ Assistant's own login page. Everything it needs is bypassed.
   token); the Home Assistant log has the same line at INFO with the `kid`.
 - Zero Trust → Logs → Access: every native request through the gate is an Access decision;
   check the log retention of your plan.
-- Worth automating: each `mobile_app` device should keep producing 200s on its gated webhook
-  path; alert on 24 h of silence. The integration does not do this itself.
+- Worth automating: each `mobile_app` device should keep updating its refresh token's
+  `last_used_ip` through the gated API; alert on 24 h of silence. The integration does not do
+  this itself.
 
 ## Out of scope by design
 
@@ -310,7 +321,10 @@ Facts checked on 14 Sep 2026 that shaped the implementation:
   Assistant token through the app's `getExternalAuth` bridge (which only accepts the callback
   name `externalAuthSetToken`), with Home Assistant's own login flow as the fallback. This is
   also what makes the lock-out recovery above possible.
-- The core bypass list is not hand-written: Home Assistant's router marks the login surface
-  (static files of the frontend package, `/auth/` views registered without authentication),
-  and the integration reads it at setup, so a core release that adds a login endpoint is
-  picked up on the next reload.
+- The bypass list is not hand-written: Home Assistant's router marks what it serves without a
+  session (views registered without authentication, static files served from integration
+  packages), and the integration reads it at setup, once start-up is complete and after
+  every component load. A core release that adds a login endpoint, or an integration
+  installed later, is picked up without configuration. The only declared entries are the
+  vendor endpoints that require a Home Assistant OAuth token, which the router cannot tell
+  from the rest of the API.

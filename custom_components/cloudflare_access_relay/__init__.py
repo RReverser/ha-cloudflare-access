@@ -16,14 +16,17 @@ from typing import Any
 from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
 from homeassistant.components.http.server import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_COMPONENT_LOADED, EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
     ConfigEntryNotReady,
 )
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.start import async_at_started
 
 from .cloudflare_api import (
     CloudflareAccessApi,
@@ -58,14 +61,15 @@ from .const import (
     DEFAULT_USER_MATCH,
     DOMAIN,
     FLOW_SWEEP_INTERVAL_SECONDS,
+    REDISCOVER_COOLDOWN_SECONDS,
     URL_RELAY_JS,
     URL_STATIC,
     VERSION,
 )
 from .flows import FlowStore
 from .jwks import JwksVerifier
-from .paths import discover_login_paths
-from .provision import async_delete_apps, async_provision
+from .paths import discover_open_paths
+from .provision import ProvisionResult, async_delete_apps, async_provision
 from .views import CallbackView, ConnectView, FlowCreateView, SessionView, StatusView
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +102,7 @@ class RelayData:
     flows: FlowStore
     policy_aud: str
     team_domain: str
+    open_paths: list[str]
 
 
 type RelayConfigEntry = ConfigEntry[RelayData]
@@ -116,27 +121,22 @@ def _api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessApi:
     )
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> bool:
-    """Provision the Access applications and expose the relay endpoints."""
-    options = effective_options(entry)
-    api = _api_for(hass, entry)
-    try:
-        result = await async_provision(
-            api,
-            options,
-            set(hass.config.components),
-            discover_login_paths(hass),
-            gate_app_id=entry.data.get(DATA_GATE_APP_ID),
-            bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
-            team_domain=entry.data.get(DATA_TEAM_DOMAIN),
-        )
-    except CloudflareAuthError as err:
-        raise ConfigEntryAuthFailed(str(err)) from err
-    except CloudflareUnavailableError as err:
-        raise ConfigEntryNotReady(str(err)) from err
-    except CloudflareApiError as err:
-        raise ConfigEntryError(f"Cloudflare rejected the configuration: {err}") from err
-
+async def _async_provision_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    api: CloudflareAccessApi,
+    options: dict[str, Any],
+    open_paths: list[str],
+) -> ProvisionResult:
+    """Reconcile the Access applications and persist what Cloudflare derived."""
+    result = await async_provision(
+        api,
+        options,
+        open_paths,
+        gate_app_id=entry.data.get(DATA_GATE_APP_ID),
+        bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
+        team_domain=entry.data.get(DATA_TEAM_DOMAIN),
+    )
     derived = {
         DATA_TEAM_DOMAIN: result.team_domain,
         DATA_POLICY_AUD: result.policy_aud,
@@ -147,6 +147,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
         hass.config_entries.async_update_entry(entry, data={**entry.data, **derived})
     if result.writes:
         _LOGGER.info("Cloudflare Access objects written: %s", ", ".join(result.writes))
+    return result
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> bool:
+    """Provision the Access applications and expose the relay endpoints."""
+    options = effective_options(entry)
+    api = _api_for(hass, entry)
+    await _async_register_http(hass)
+    open_paths = discover_open_paths(hass)
+    try:
+        result = await _async_provision_entry(hass, entry, api, options, open_paths)
+    except CloudflareAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except CloudflareUnavailableError as err:
+        raise ConfigEntryNotReady(str(err)) from err
+    except CloudflareApiError as err:
+        raise ConfigEntryError(f"Cloudflare rejected the configuration: {err}") from err
 
     data = RelayData(
         entry=entry,
@@ -156,11 +173,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
         flows=FlowStore(),
         policy_aud=result.policy_aud,
         team_domain=result.team_domain,
+        open_paths=open_paths,
     )
     entry.runtime_data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
-
-    await _async_register_http(hass)
 
     js_url = f"{URL_RELAY_JS}?v={VERSION}"
     add_extra_js_url(hass, js_url)
@@ -174,7 +190,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
     entry.async_on_unload(
         async_track_time_interval(hass, _sweep, timedelta(seconds=FLOW_SWEEP_INTERVAL_SECONDS))
     )
+    _async_track_open_paths(hass, entry, data)
     return True
+
+
+@callback
+def _async_track_open_paths(hass: HomeAssistant, entry: ConfigEntry, data: RelayData) -> None:
+    """Keep the bypass application in step with the router.
+
+    Integrations set up after this entry (later in the same start, or installed
+    afterwards) register their own unauthenticated views and package assets. Discovery
+    is re-run once Home Assistant has started and, debounced, after every component
+    load; the bypass application is rewritten only when the open surface changed.
+    """
+
+    async def _refresh() -> None:
+        found = discover_open_paths(hass)
+        if found == data.open_paths:
+            return
+        _LOGGER.info(
+            "Open paths changed (added %s, removed %s); updating the bypass application",
+            sorted(set(found) - set(data.open_paths)),
+            sorted(set(data.open_paths) - set(found)),
+        )
+        try:
+            await _async_provision_entry(hass, entry, data.api, data.options, found)
+        except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
+            _LOGGER.warning(
+                "Could not update the bypass application; reload the integration to retry: %s",
+                err,
+            )
+            return
+        data.open_paths = found
+
+    debouncer = Debouncer(
+        hass,
+        _LOGGER,
+        cooldown=REDISCOVER_COOLDOWN_SECONDS,
+        immediate=False,
+        function=_refresh,
+        background=True,
+    )
+
+    @callback
+    def _schedule(_event_or_hass: Event | HomeAssistant) -> None:
+        debouncer.async_schedule_call()
+
+    @callback
+    def _stop(_event: Event) -> None:
+        debouncer.async_shutdown()
+
+    entry.async_on_unload(debouncer.async_shutdown)
+    entry.async_on_unload(hass.bus.async_listen(EVENT_COMPONENT_LOADED, _schedule))
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
+    entry.async_on_unload(async_at_started(hass, _schedule))
 
 
 async def _async_register_http(hass: HomeAssistant) -> None:

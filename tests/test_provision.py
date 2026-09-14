@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 from homeassistant.components.http.server import StaticPathConfig
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import EVENT_COMPONENT_LOADED
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.http import HomeAssistantView
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util.dt import utcnow
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCESS_GROUP_ID,
@@ -25,10 +28,11 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_GATE_APP_ID,
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
+    REDISCOVER_COOLDOWN_SECONDS,
 )
 from custom_components.cloudflare_access_relay.paths import (
     collapse_prefixes,
-    discover_login_paths,
+    discover_open_paths,
 )
 from custom_components.cloudflare_access_relay.provision import (
     app_matches,
@@ -41,13 +45,18 @@ from .conftest import ALICE, BOB, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwk
 
 GATE = f"ha-relay: gate {HOSTNAME}"
 BYPASS = f"ha-relay: bypass {HOSTNAME}"
+# always bypassed: the relay's own surface and the token-authenticated vendor endpoints
 OWN = [
     "/cloudflare_access_relay/connect",
     "/cloudflare_access_relay/static",
     "/api/cloudflare_access_relay",
+    "/api/google_assistant",
+    "/api/alexa",
 ]
-# core's login surface as the router exposes it on this Home Assistant version
-CORE_LOGIN = [
+# what core serves to cookie-less clients, as the router exposes it on this Home Assistant version
+CORE_OPEN = [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-protected-resource",
     "/auth/authorize",
     "/auth/external/callback",
     "/auth/login_flow",
@@ -72,13 +81,25 @@ def _uris(app: dict[str, Any]) -> list[str]:
 
 
 def _expected(*extra: str) -> list[str]:
-    return [f"{HOSTNAME}{p}" for p in collapse_prefixes({*CORE_LOGIN, *OWN, *extra})]
+    return [f"{HOSTNAME}{p}" for p in collapse_prefixes({*CORE_OPEN, *OWN, *extra})]
 
 
-async def test_discovery_finds_exactly_the_login_surface(hass: HomeAssistant, relay: Relay) -> None:
-    assert discover_login_paths(hass) == CORE_LOGIN
-    for gated in ("/", "/api/websocket", "/api/webhook", "/api/", "/local", "/manifest.json"):
-        assert gated not in discover_login_paths(hass)
+async def test_discovery_finds_exactly_the_open_surface(hass: HomeAssistant, relay: Relay) -> None:
+    found = discover_open_paths(hass)
+    # the relay registers its own connect page and script before discovery runs
+    assert found == sorted(
+        [*CORE_OPEN, "/cloudflare_access_relay/connect", "/cloudflare_access_relay/static"]
+    )
+    for gated in (
+        "/",
+        "/api/websocket",
+        "/api/onboarding",
+        "/api/",
+        "/local",
+        "/manifest.json",
+        "/cloudflare_access_relay/callback",
+    ):
+        assert gated not in found
 
 
 def test_collapse_prefixes() -> None:
@@ -215,22 +236,52 @@ async def test_access_group_replaces_emails(
     assert gate["policies"][0]["include"] == [{"group": {"id": "grp-1"}}]
 
 
-def test_server_caller_paths_only_when_loaded() -> None:
-    opts = {CONF_EXTRA_BYPASS_PATHS: []}
-    assert "/api/google_assistant" not in bypass_paths(opts, set(), CORE_LOGIN)
-    assert "/api/google_assistant" in bypass_paths(opts, {"google_assistant"}, CORE_LOGIN)
-    assert "/api/alexa" in bypass_paths(opts, {"alexa"}, CORE_LOGIN)
+def test_token_caller_paths_are_always_bypassed() -> None:
+    """Google's and Amazon's servers never hold a cookie; the paths are declared unconditionally."""
+    paths = bypass_paths({CONF_EXTRA_BYPASS_PATHS: []}, CORE_OPEN)
+    assert "/api/google_assistant" in paths
+    assert "/api/alexa" in paths
     # normalised, de-duplicated and collapsed onto covering prefixes
-    paths = bypass_paths(
-        {CONF_EXTRA_BYPASS_PATHS: ["/static/", "static/x", "/x/"]}, set(), CORE_LOGIN
-    )
+    paths = bypass_paths({CONF_EXTRA_BYPASS_PATHS: ["/static/", "static/x", "/x/"]}, CORE_OPEN)
     assert paths.count("/static") == 1 and "/static/x" not in paths and paths[-1] == "/x"
 
 
+async def test_integration_loaded_later_updates_bypass(hass: HomeAssistant, relay: Relay) -> None:
+    """An integration set up after this entry gets its open paths bypassed without a reload."""
+    cf = relay.cloudflare
+    assert cf.writes("PUT") == []
+
+    class InboundView(HomeAssistantView):
+        url = "/api/fakevendor/inbound"
+        name = "api:fakevendor:inbound"
+        requires_auth = False
+
+        async def post(self, request: web.Request) -> web.Response:
+            return web.Response(text="ok")
+
+    hass.http.register_view(InboundView())
+    hass.bus.async_fire(EVENT_COMPONENT_LOADED, {"component": "fakevendor"})
+    await hass.async_block_till_done()
+    assert cf.writes("PUT") == [], "discovery is debounced"
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=REDISCOVER_COOLDOWN_SECONDS + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    puts = cf.writes("PUT")
+    assert [p[2]["name"] for p in puts] == [BYPASS]
+    assert _uris(puts[0][2]) == _expected("/api/fakevendor/inbound")
+    assert "/api/fakevendor/inbound" in relay.entry.runtime_data.open_paths
+
+    # nothing new: no write
+    hass.bus.async_fire(EVENT_COMPONENT_LOADED, {"component": "other"})
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=2 * REDISCOVER_COOLDOWN_SECONDS + 2))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert len(cf.writes("PUT")) == 1
+
+
 async def test_login_integration_paths_are_discovered(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, tmp_path: Path
 ) -> None:
     """A login integration like hass-openid: unauthenticated /auth/ views and package assets."""
+    hass.config.config_dir = str(tmp_path)
     package = Path(hass.config.path("custom_components", "fakelogin"))
     package.mkdir(parents=True)
     (package / "login.js").write_text("// login page script")
@@ -389,7 +440,7 @@ def test_app_matches_treats_absent_fields_as_cloudflare_defaults() -> None:
 
 
 def test_desired_bypass_uses_destinations_not_deprecated_field() -> None:
-    app = desired_bypass_app({"hostname": HOSTNAME, "extra_bypass_paths": []}, set(), CORE_LOGIN)
+    app = desired_bypass_app({"hostname": HOSTNAME, "extra_bypass_paths": []}, CORE_OPEN)
     assert "self_hosted_domains" not in app
     assert all(d["type"] == "public" for d in app["destinations"])
 
