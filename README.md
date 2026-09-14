@@ -26,9 +26,10 @@ device** (P7, iOS). Sections *Pre-flight* and *Rollout* below are the required o
 - The hostname is served through Cloudflare (Cloudflare Tunnel or proxied DNS) and belongs to a
   zone in the account.
 - A Zero Trust organization with an identity provider.
-- A Cloudflare **account-level API token** with the permission **Access: Apps and Policies:
-  Edit** (nothing else). The integration stores it in the config entry and uses it only for the
-  Access applications endpoints and to read the team domain.
+- A Cloudflare **account-level API token** with two permissions: **Access: Apps and Policies:
+  Edit** (the applications) and **Access: Organizations, Identity Providers, and Groups: Read**
+  (only to read the team domain). The integration stores it in the config entry and uses it for
+  nothing else.
 - Home Assistant users whose identity can be matched to the Access identity (by default: the
   built-in login username equals the identity provider e-mail; see *Options*).
 
@@ -105,8 +106,8 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
    *Integration*, then install **Cloudflare Access Relay**. Restart Home Assistant.
 2. Settings → Devices & services → *Add integration* → **Cloudflare Access Relay**.
 3. Fill in the form:
-   - **Cloudflare API token** (scope above) and **account ID** (Cloudflare dashboard, right
-     column of any zone overview).
+   - **Cloudflare API token** (permissions above) and **account ID** (Cloudflare dashboard,
+     right column of any zone overview).
    - **Hostname**, pre-filled from the external URL.
    - **Allowed e-mail addresses** (one per line) *or* an **Access group ID**.
    - Leave the advanced fields at their defaults unless you know why.
@@ -177,7 +178,7 @@ and is skipped without them:
 
 | Secret | Value |
 |---|---|
-| `CF_API_TOKEN` | account token with *Access: Apps and Policies: Edit* and *Access: Service Tokens: Edit* |
+| `CF_API_TOKEN` | account token with *Access: Apps and Policies: Edit*, *Access: Organizations, Identity Providers, and Groups: Read* and *Access: Service Tokens: Edit* |
 | `CF_ACCOUNT_ID` | the Cloudflare account id |
 
 `preflight/preflight.sh` is the same set of checks for a shell with curl.

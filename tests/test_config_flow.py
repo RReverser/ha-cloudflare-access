@@ -86,6 +86,18 @@ async def test_user_flow_invalid_token_creates_nothing(
     assert hass.config_entries.async_entries(DOMAIN) == []
 
 
+async def test_user_flow_token_without_org_read(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare
+) -> None:
+    fake_cloudflare.org_auth_fail = True
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["errors"] == {"base": "missing_org_read"}
+    assert fake_cloudflare.writes() == []
+
+
 async def test_user_flow_cannot_connect(
     hass: HomeAssistant, fake_cloudflare: FakeCloudflare
 ) -> None:

@@ -21,7 +21,7 @@
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "api_token": "Account-level token with the permission 'Access: Apps and Policies: Edit'. Stored in the config entry.",
+          "api_token": "Account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
           "hostname": "The public hostname served through Cloudflare, e.g. ha.example.com.",
           "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
           "extra_bypass_paths": "Hostname-relative path prefixes that server-to-server callers reach without a cookie, e.g. /api/webhook/abc.",
@@ -38,6 +38,7 @@
     },
     "error": {
       "invalid_auth": "Cloudflare rejected the token. It needs 'Access: Apps and Policies: Edit' on this account.",
+      "missing_org_read": "The token cannot read the Zero Trust organization (the team domain). Add the permission 'Access: Organizations, Identity Providers, and Groups: Read' to it.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
       "invalid_hostname": "Enter a hostname such as ha.example.com.",

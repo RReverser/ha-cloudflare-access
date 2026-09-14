@@ -12,8 +12,9 @@ token, to observe the applications, and to inject drift.
 
 Environment (GitHub Actions: CF_API_TOKEN and CF_ACCOUNT_ID are repository secrets,
 the rest is plain job env):
-  CF_API_TOKEN    account token with "Access: Apps and Policies: Edit" and
-                  "Access: Service Tokens: Edit"
+  CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
+                  "Access: Organizations, Identity Providers, and Groups: Read"
+                  and "Access: Service Tokens: Edit"
   CF_ACCOUNT_ID
   CF_TEST_HOST    hostname served by preflight/worker
   CF_TEST_EMAIL   e-mail on the gate's allow policy
