@@ -5,7 +5,7 @@
  * integration's own code.
  *
  *   POST <any>/setcookie  -> answers Set-Cookie: CF_Authorization=<body.v>  (P1 when bypassed)
- *   GET  <any>/page       -> static page with a link to /api/echo            (P7, manual)
+ *   GET  <any>/page       -> static page with a link to /api/echo            (browser check)
  *   <anything else>       -> request path, method and headers as JSON       (echo)
  */
 export default {
