@@ -164,21 +164,22 @@ requests, answers `POST */setcookie` with a `CF_Authorization` cookie and serves
 for P7. The zone has one custom WAF rule scoped to this host that skips bot protection, so
 curl and CI can reach it (the zone's Super Bot Fight Mode blocks automated clients otherwise;
 Home Assistant's own machine paths are already exempted by an older rule). The Access
-applications on it are the integration's `ha-relay:` pair, with an Access service token
-(`test-host`) on the gate's Service Auth policy so tests can log in without a browser.
+applications on it are the integration's `ha-relay:` pair; the live test puts its run-scoped
+service token on the gate's Service Auth policy so it can log in without a browser.
 
-`tests/live/test_live_edge.py` re-provisions the host from the options every run, then runs
-P1–P5 and P8 plus staged-mode and idempotency checks. It needs these GitHub Actions secrets
-and variables; without them it is skipped:
+`tests/live/test_live_edge.py` runs the whole lifecycle on every push, through Home Assistant
+itself: it creates a run-scoped Access service token, sets the integration up via the config
+flow (which provisions the applications), enables the gate via the options flow, runs
+P1–P5 and P8 at the edge, relays a real token through the integration's own HTTP views and
+uses the released cookie at the edge, injects drift and re-saves the options to repair it,
+checks that a reload writes nothing, removes the entry with "delete objects" off so the
+applications stay for the next run, and deletes the token. It needs two repository secrets
+and is skipped without them:
 
-| Name | Kind | Value |
-|---|---|---|
-| `CF_API_TOKEN` | secret | account token, scope *Access: Apps and Policies: Edit* |
-| `CF_ACCOUNT_ID` | secret | the Cloudflare account id |
-| `CF_ACCESS_SERVICE_TOKEN_ID` | secret | id of the `test-host` service token |
-| `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | secret | that token's credentials |
-| `CF_TEST_HOST` | variable | `test-host.example.com` |
-| `CF_TEST_EMAIL` | variable | the e-mail on the gate's allow policy |
+| Secret | Value |
+|---|---|
+| `CF_API_TOKEN` | account token with *Access: Apps and Policies: Edit* and *Access: Service Tokens: Edit* |
+| `CF_ACCOUNT_ID` | the Cloudflare account id |
 
 `preflight/preflight.sh` is the same set of checks for a shell with curl.
 

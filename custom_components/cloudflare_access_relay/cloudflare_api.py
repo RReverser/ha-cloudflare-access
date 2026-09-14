@@ -170,6 +170,32 @@ class CloudflareAccessApi:
         result: dict[str, Any] = payload["result"]
         return result
 
+    async def list_service_tokens(self) -> list[dict[str, Any]]:
+        """Return the account's Access service tokens (without secrets)."""
+        payload = await self._request("GET", f"/accounts/{self._account_id}/access/service_tokens")
+        result: list[dict[str, Any]] = payload.get("result") or []
+        return result
+
+    async def create_service_token(self, name: str, duration: str = "24h") -> dict[str, Any]:
+        """Create a service token; the result carries client_id and client_secret once."""
+        payload = await self._request(
+            "POST",
+            f"/accounts/{self._account_id}/access/service_tokens",
+            json={"name": name, "duration": duration},
+        )
+        result: dict[str, Any] = payload["result"]
+        return result
+
+    async def delete_service_token(self, token_id: str) -> None:
+        """Delete a service token; a missing one is not an error."""
+        try:
+            await self._request(
+                "DELETE", f"/accounts/{self._account_id}/access/service_tokens/{token_id}"
+            )
+        except CloudflareApiError as err:
+            if err.status != 404:
+                raise
+
     async def delete_app(self, app_id: str) -> None:
         """Delete an application; a missing one is not an error."""
         try:
