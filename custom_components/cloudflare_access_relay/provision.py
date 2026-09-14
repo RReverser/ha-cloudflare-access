@@ -8,7 +8,6 @@ from typing import Any
 
 from .cloudflare_api import CloudflareAccessApi
 from .const import (
-    BASE_BYPASS_PATHS,
     BYPASS_APP_NAME_FMT,
     BYPASS_POLICY_NAME,
     CONF_ACCESS_GROUP_ID,
@@ -24,8 +23,10 @@ from .const import (
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
     INTEGRATION_BYPASS_PATHS,
+    OWN_BYPASS_PATHS,
     URL_CALLBACK,
 )
+from .paths import collapse_prefixes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,23 +39,23 @@ def normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def bypass_paths(options: dict[str, Any], loaded_domains: set[str]) -> list[str]:
-    """Return the ordered, de-duplicated list of bypassed paths."""
-    paths: list[str] = list(BASE_BYPASS_PATHS)
+def bypass_paths(
+    options: dict[str, Any], loaded_domains: set[str], login_paths: list[str]
+) -> list[str]:
+    """Return the sorted, prefix-collapsed list of bypassed paths.
+
+    `login_paths` is core's login surface as discovered from the router
+    (`paths.discover_login_paths`); the integration's own paths, the seeds for
+    loaded integrations and the configured extras are added to it.
+    """
+    paths: list[str] = [*login_paths, *OWN_BYPASS_PATHS]
     for domain, extra in INTEGRATION_BYPASS_PATHS.items():
         if domain in loaded_domains:
             paths.extend(extra)
     for raw in options.get(CONF_EXTRA_BYPASS_PATHS) or []:
         if raw and raw.strip():
             paths.append(raw)
-    seen: set[str] = set()
-    result: list[str] = []
-    for path in paths:
-        norm = normalise_path(path)
-        if norm != "/" and norm not in seen:
-            seen.add(norm)
-            result.append(norm)
-    return result
+    return collapse_prefixes({p for p in map(normalise_path, paths) if p != "/"})
 
 
 def _destinations(hostname: str, paths: list[str]) -> list[dict[str, str]]:
@@ -115,10 +116,12 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def desired_bypass_app(options: dict[str, Any], loaded_domains: set[str]) -> dict[str, Any]:
+def desired_bypass_app(
+    options: dict[str, Any], loaded_domains: set[str], login_paths: list[str]
+) -> dict[str, Any]:
     """Return the desired bypass application body."""
     hostname = options[CONF_HOSTNAME]
-    paths = bypass_paths(options, loaded_domains)
+    paths = bypass_paths(options, loaded_domains, login_paths)
     destinations = _destinations(hostname, paths)
     return {
         "type": "self_hosted",
@@ -251,6 +254,7 @@ async def async_provision(
     api: CloudflareAccessApi,
     options: dict[str, Any],
     loaded_domains: set[str],
+    login_paths: list[str],
     *,
     gate_app_id: str | None,
     bypass_app_id: str | None,
@@ -265,7 +269,7 @@ async def async_provision(
     if not team_domain:
         team_domain = await api.get_team_domain()
     bypass = await _reconcile(
-        api, bypass_app_id, desired_bypass_app(options, loaded_domains), writes
+        api, bypass_app_id, desired_bypass_app(options, loaded_domains, login_paths), writes
     )
     gate = await _reconcile(api, gate_app_id, desired_gate_app(options), writes)
     aud = gate.get("aud")

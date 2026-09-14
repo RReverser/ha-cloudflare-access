@@ -21,6 +21,10 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
 )
+from custom_components.cloudflare_access_relay.paths import (
+    collapse_prefixes,
+    discover_login_paths,
+)
 from custom_components.cloudflare_access_relay.provision import (
     app_matches,
     bypass_paths,
@@ -32,19 +36,54 @@ from .conftest import ALICE, BOB, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwk
 
 GATE = f"ha-relay: gate {HOSTNAME}"
 BYPASS = f"ha-relay: bypass {HOSTNAME}"
-EXPECTED_BYPASS = [
-    f"{HOSTNAME}/auth",
-    f"{HOSTNAME}/frontend_latest",
-    f"{HOSTNAME}/frontend_es5",
-    f"{HOSTNAME}/static",
-    f"{HOSTNAME}/cloudflare_access_relay/connect",
-    f"{HOSTNAME}/cloudflare_access_relay/static",
-    f"{HOSTNAME}/api/cloudflare_access_relay",
+OWN = [
+    "/cloudflare_access_relay/connect",
+    "/cloudflare_access_relay/static",
+    "/api/cloudflare_access_relay",
+]
+# core's login surface as the router exposes it on this Home Assistant version
+CORE_LOGIN = [
+    "/auth/authorize",
+    "/auth/external/callback",
+    "/auth/login_flow",
+    "/auth/providers",
+    "/auth/revoke",
+    "/auth/token",
+    "/frontend_es5",
+    "/frontend_latest",
+    "/onboarding.html",
+    "/robots.txt",
+    "/service_worker.js",
+    "/static",
+    "/sw-legacy.js",
+    "/sw-legacy.js.map",
+    "/sw-modern.js",
+    "/sw-modern.js.map",
 ]
 
 
 def _uris(app: dict[str, Any]) -> list[str]:
     return [d["uri"] for d in app["destinations"]]
+
+
+def _expected(*extra: str) -> list[str]:
+    return [f"{HOSTNAME}{p}" for p in collapse_prefixes({*CORE_LOGIN, *OWN, *extra})]
+
+
+async def test_discovery_finds_exactly_the_login_surface(hass: HomeAssistant, relay: Relay) -> None:
+    assert discover_login_paths(hass) == CORE_LOGIN
+    for gated in ("/", "/api/websocket", "/api/webhook", "/api/", "/local", "/manifest.json"):
+        assert gated not in discover_login_paths(hass)
+
+
+def test_collapse_prefixes() -> None:
+    assert collapse_prefixes(
+        {"/auth/login_flow", "/auth", "/auth/token", "/static", "/statics"}
+    ) == [
+        "/auth",
+        "/static",
+        "/statics",
+    ]
 
 
 async def test_fresh_account_creates_two_apps(hass: HomeAssistant, relay: Relay) -> None:
@@ -55,8 +94,8 @@ async def test_fresh_account_creates_two_apps(hass: HomeAssistant, relay: Relay)
 
     bypass = posts[0][2]
     assert bypass["type"] == "self_hosted"
-    assert _uris(bypass) == EXPECTED_BYPASS
-    assert bypass["domain"] == EXPECTED_BYPASS[0]
+    assert _uris(bypass) == _expected()
+    assert bypass["domain"] == _expected()[0]
     assert bypass["policies"] == [
         {
             "name": "ha-relay: bypass everyone",
@@ -137,11 +176,7 @@ async def test_options_change_updates_bypass_only(hass: HomeAssistant, relay: Re
     puts = cf.writes("PUT")
     assert len(puts) == 1
     assert puts[0][2]["name"] == BYPASS
-    assert _uris(puts[0][2]) == [
-        *EXPECTED_BYPASS,
-        f"{HOSTNAME}/api/webhook/abc123",
-        f"{HOSTNAME}/api/google_assistant",
-    ]
+    assert _uris(puts[0][2]) == _expected("/api/webhook/abc123", "/api/google_assistant")
     assert len(cf.writes("POST")) == 2
     # inline policy id reused on update
     assert puts[0][2]["policies"][0]["id"] == cf.by_name(BYPASS)["policies"][0]["id"]
@@ -175,20 +210,18 @@ async def test_access_group_replaces_emails(
     assert gate["policies"][0]["include"] == [{"group": {"id": "grp-1"}}]
 
 
-async def test_openid_paths_only_when_loaded(hass: HomeAssistant) -> None:
+def test_openid_paths_only_when_loaded() -> None:
     opts = {CONF_EXTRA_BYPASS_PATHS: []}
-    assert "/openid" not in bypass_paths(opts, set())
-    assert "/openid" in bypass_paths(opts, {"openid"})
-    assert "/api/google_assistant" in bypass_paths(opts, {"google_assistant"})
-    assert "/api/alexa" in bypass_paths(opts, {"alexa"})
-    # de-duplicated and normalised
-    assert (
-        bypass_paths({CONF_EXTRA_BYPASS_PATHS: ["/static/", "static", "/x/"]}, set()).count(
-            "/static"
-        )
-        == 1
+    assert "/openid" not in bypass_paths(opts, set(), CORE_LOGIN)
+    assert "/openid" in bypass_paths(opts, {"openid"}, CORE_LOGIN)
+    assert "/auth/openid" in bypass_paths(opts, {"openid"}, CORE_LOGIN)
+    assert "/api/google_assistant" in bypass_paths(opts, {"google_assistant"}, CORE_LOGIN)
+    assert "/api/alexa" in bypass_paths(opts, {"alexa"}, CORE_LOGIN)
+    # normalised, de-duplicated and collapsed onto covering prefixes
+    paths = bypass_paths(
+        {CONF_EXTRA_BYPASS_PATHS: ["/static/", "static/x", "/x/"]}, set(), CORE_LOGIN
     )
-    assert bypass_paths({CONF_EXTRA_BYPASS_PATHS: ["/x/"]}, set())[-1] == "/x"
+    assert paths.count("/static") == 1 and "/static/x" not in paths and paths[-1] == "/x"
 
 
 async def test_openid_loaded_at_setup(
@@ -317,7 +350,7 @@ def test_app_matches_treats_absent_fields_as_cloudflare_defaults() -> None:
 
 
 def test_desired_bypass_uses_destinations_not_deprecated_field() -> None:
-    app = desired_bypass_app({"hostname": HOSTNAME, "extra_bypass_paths": []}, set())
+    app = desired_bypass_app({"hostname": HOSTNAME, "extra_bypass_paths": []}, set(), CORE_LOGIN)
     assert "self_hosted_domains" not in app
     assert all(d["type"] == "public" for d in app["destinations"])
 

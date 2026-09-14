@@ -64,6 +64,7 @@ from .const import (
 )
 from .flows import FlowStore
 from .jwks import JwksVerifier
+from .paths import discover_login_paths
 from .provision import async_delete_apps, async_provision
 from .views import CallbackView, ConnectView, FlowCreateView, SessionView, StatusView
 
@@ -124,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
             api,
             options,
             set(hass.config.components),
+            discover_login_paths(hass),
             gate_app_id=entry.data.get(DATA_GATE_APP_ID),
             bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
             team_domain=entry.data.get(DATA_TEAM_DOMAIN),
