@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -212,9 +212,9 @@ class CloudflareAccessRelayConfigFlow(ConfigFlow, domain=DOMAIN):
             team_domain = None
             if not errors:
                 api = CloudflareAccessApi(
-                    async_get_clientsession(self.hass),
                     user_input[CONF_API_TOKEN].strip(),
                     user_input[CONF_ACCOUNT_ID].strip(),
+                    http_client=get_async_client(self.hass),
                 )
                 team_domain = await _validate_token(api, errors)
             if not errors and team_domain:
@@ -255,9 +255,9 @@ class CloudflareAccessRelayConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         if user_input is not None:
             api = CloudflareAccessApi(
-                async_get_clientsession(self.hass),
                 user_input[CONF_API_TOKEN].strip(),
                 entry.data[CONF_ACCOUNT_ID],
+                http_client=get_async_client(self.hass),
             )
             if await _validate_token(api, errors):
                 return self.async_update_reload_and_abort(

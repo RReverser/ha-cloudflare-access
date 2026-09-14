@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
+import httpx
 import jwt
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,9 +27,9 @@ class JwtVerifyError(Exception):
 class JwksVerifier:
     """Fetches and caches the team's signing keys, keyed by `kid`."""
 
-    def __init__(self, session: aiohttp.ClientSession, team_domain: str) -> None:
+    def __init__(self, client: httpx.AsyncClient, team_domain: str) -> None:
         """Initialise for one team domain (host only, no scheme)."""
-        self._session = session
+        self._client = client
         self.issuer = f"https://{team_domain}"
         self.certs_url = CERTS_URL_FMT.format(team_domain=team_domain)
         self._keys: dict[str, Any] = {}
@@ -37,22 +37,19 @@ class JwksVerifier:
     async def refresh(self) -> None:
         """Replace the key cache from the certs endpoint."""
         try:
-            async with self._session.get(
-                self.certs_url, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                if resp.status != 200:
-                    raise JwtVerifyError(f"JWKS fetch failed with HTTP {resp.status}")
-                data = await resp.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError) as err:
+            resp = await self._client.get(self.certs_url, timeout=15)
+            if resp.status_code != 200:
+                raise JwtVerifyError(f"JWKS fetch failed with HTTP {resp.status_code}")
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as err:
             raise JwtVerifyError(f"JWKS fetch failed: {err}") from err
-        keys: dict[str, Any] = {}
-        for jwk in data.get("keys") or []:
-            if jwk.get("kty") != "RSA" or not jwk.get("kid"):
-                continue
-            try:
-                keys[jwk["kid"]] = jwt.PyJWK(jwk, algorithm=ALGORITHM).key
-            except jwt.PyJWKError as err:  # pragma: no cover - defensive
-                _LOGGER.debug("Skipping unusable JWK %s: %s", jwk.get("kid"), err)
+        try:
+            jwk_set = jwt.PyJWKSet.from_dict(data)
+        except jwt.PyJWKSetError as err:
+            raise JwtVerifyError(f"JWKS document unusable: {err}") from err
+        keys: dict[str, Any] = {
+            jwk.key_id: jwk.key for jwk in jwk_set.keys if jwk.key_id and jwk.key_type == "RSA"
+        }
         self._keys = keys
         _LOGGER.debug("Loaded %d signing keys from %s", len(keys), self.certs_url)
 

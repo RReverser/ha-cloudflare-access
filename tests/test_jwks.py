@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-import aiohttp
+import httpx
 import pytest
 
 from custom_components.cloudflare_access_relay.jwks import (
@@ -25,8 +25,8 @@ def mint(rsa_keys: dict[str, RsaKey]) -> Minter:
 
 @pytest.fixture
 async def verifier(jwks_server: FakeJwks, socket_enabled: None):
-    async with aiohttp.ClientSession() as session:
-        yield JwksVerifier(session, TEAM_DOMAIN)
+    async with httpx.AsyncClient() as client:
+        yield JwksVerifier(client, TEAM_DOMAIN)
 
 
 async def test_valid_token_verifies(
