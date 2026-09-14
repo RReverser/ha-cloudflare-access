@@ -69,7 +69,8 @@ if [[ "$MODE" == "gated" ]]; then
   echo "== hostname is gated"
   expect_gated /
   expect_gated /api/
-  expect_gated /api/webhook/definitely-not-a-real-webhook-id
+  # webhooks carry their own secret id and are bypassed by rule; Home Assistant answers 200 to unknown ids
+  expect_status 200 /api/webhook/definitely-not-a-real-webhook-id -X POST
   expect_gated /api/websocket
   expect_status 200 /api/ -H "$COOKIE" -H "Authorization: Bearer ${HA_TOKEN}"
   expect_status 401 /api/ -H "$COOKIE"
