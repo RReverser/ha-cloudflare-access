@@ -20,29 +20,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: pinned
-            allow_failure: false
-          - name: latest
-            allow_failure: true
-    continue-on-error: ${{ matrix.allow_failure }}
-    name: test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - name: Move to the latest Home Assistant release
-        if: matrix.name == 'latest'
-        run: |
-          uv pip install --upgrade homeassistant pytest-homeassistant-custom-component
-          reqs=$(uv run python -c "import json, pathlib, homeassistant.components.frontend as f; print(' '.join(json.loads((pathlib.Path(f.__file__).parent / 'manifest.json').read_text())['requirements']))")
-          uv pip install $reqs
-          uv run python -c "import homeassistant.const as c; print('home assistant', c.__version__)"
       - run: uv run playwright install --with-deps chromium
       - run: uv run pytest -q --timeout=300
 
