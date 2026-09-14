@@ -41,7 +41,7 @@ jobs:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_TEST_HOST: test-host.example.com
-      CF_TEST_EMAIL: ci@example.com
+      CF_TEST_EMAIL: ${{ vars.CF_TEST_EMAIL }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
