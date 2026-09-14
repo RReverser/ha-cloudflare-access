@@ -188,6 +188,7 @@ class FakeCloudflare:
     apps: dict[str, dict[str, Any]] = field(default_factory=dict)
     requests: list[tuple[str, str, dict[str, Any] | None]] = field(default_factory=list)
     auth_fail: bool = False
+    org_auth_fail: bool = False
     fail_status: int | None = None
     fail_predicate: Callable[[str, str], bool] | None = None
     team_domain: str = TEAM_DOMAIN
@@ -237,6 +238,15 @@ class FakeCloudflare:
         await self._record(request)
         if fail := self._fail(request.method, request.path):
             return fail
+        if self.org_auth_fail:
+            return web.json_response(
+                {
+                    "success": False,
+                    "errors": [{"code": 10000, "message": "Authentication error"}],
+                    "result": None,
+                },
+                status=403,
+            )
         return self._ok({"auth_domain": self.team_domain, "name": "Team"})
 
     async def list_apps(self, request: web.Request) -> web.Response:

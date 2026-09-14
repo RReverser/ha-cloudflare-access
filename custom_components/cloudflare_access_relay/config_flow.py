@@ -155,10 +155,23 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
 
 
 async def _validate_token(api: CloudflareAccessApi, errors: dict[str, str]) -> str | None:
+    """Check the token's two permissions; return the team domain on success."""
+    try:
+        await api.list_apps()
+    except CloudflareAuthError:
+        errors["base"] = "invalid_auth"
+        return None
+    except CloudflareUnavailableError:
+        errors["base"] = "cannot_connect"
+        return None
+    except CloudflareApiError as err:
+        _LOGGER.warning("Cloudflare API error during validation: %s", err)
+        errors["base"] = "api_error"
+        return None
     try:
         return await api.get_team_domain()
     except CloudflareAuthError:
-        errors["base"] = "invalid_auth"
+        errors["base"] = "missing_org_read"
     except CloudflareUnavailableError:
         errors["base"] = "cannot_connect"
     except CloudflareApiError as err:
