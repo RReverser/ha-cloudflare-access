@@ -401,7 +401,7 @@ async def _lifecycle(
         )
 
         print(
-            "== P5: drift outside the integration (binding cookie on) breaks reuse; re-saving options repairs it"
+            "== P5: drift outside the integration (binding cookie on) breaks reuse; a reload repairs it"
         )
         gate_id = entry.data[DATA_GATE_APP_ID]
         gate = await api.get_app(gate_id)
@@ -442,15 +442,19 @@ async def _lifecycle(
         assert await _until(refused, "binding refusal"), (
             "P5: with the binding cookie on a copied token is refused"
         )
-        await _save_options(hass, entry)
-        print(f"   after re-save: {_gate_summary(await api.get_app(gate_id))}")
+        # the documented repair: reload the integration (saving unchanged options
+        # does not reload the entry, so it would not re-provision)
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED, entry.reason
+        print(f"   after reload: {_gate_summary(await api.get_app(gate_id))}")
 
         async def reconciled() -> bool:
             app = await api.get_app(gate_id)
             return bool(app) and not app.get("enable_binding_cookie", False)
 
         assert await _until(reconciled, "reconciled", 60), (
-            f"options save did not reconcile the drift: {_gate_summary(await api.get_app(gate_id))}"
+            f"reload did not reconcile the drift: {_gate_summary(await api.get_app(gate_id))}"
         )
 
         async def reuse_works() -> bool:

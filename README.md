@@ -89,7 +89,7 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 | *extra bypassed paths* option | Anything else that must stay reachable without a cookie, e.g. specific webhooks |
 
 The integration-derived entries are computed when the entry is set up; after installing one of
-those integrations, reload this entry (or re-save its options) so the bypass list picks it up.
+those integrations, reload this entry so the bypass list picks it up.
 
 Everything else, including `/`, `/api/*`, `/api/websocket`, `/api/webhook/*`, `/local/*`,
 `/media/*` and `/hacsfiles/*`, is gated once the gate is enabled.
@@ -131,7 +131,9 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
 | Check interval | 60 min | How often an open frontend re-checks the session |
 | Delete the Access applications when the integration is removed | on | |
 
-Saving the options reloads the entry and re-provisions; unchanged applications are not written.
+Changing the options reloads the entry and re-provisions; so does reloading the integration
+(Settings → Devices & services → Cloudflare Access Relay → Reload), which is the way to repair
+applications edited outside the integration. Unchanged applications are never written.
 
 ## Pre-flight: the Cloudflare behaviour the design rests on
 
@@ -171,7 +173,7 @@ service token on the gate's Service Auth policy so it can log in without a brows
 itself: it creates a run-scoped Access service token, sets the integration up via the config
 flow (which provisions the applications), enables the gate via the options flow, runs
 P1–P5 and P8 at the edge, relays a real token through the integration's own HTTP views and
-uses the released cookie at the edge, injects drift and re-saves the options to repair it,
+uses the released cookie at the edge, injects drift and reloads the entry to repair it,
 checks that a reload writes nothing, removes the entry with "delete objects" off so the
 applications stay for the next run, and deletes the token. It needs two repository secrets
 and is skipped without them:

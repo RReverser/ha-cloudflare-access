@@ -58,8 +58,8 @@ HINT_NO_HEADER = (
     "No <code>Cf-Access-Jwt-Assertion</code> header reached Home Assistant on this "
     "path. The callback path must be covered by the relay's gate application and "
     "must not be bypassed. The Access applications may have been edited outside "
-    "the integration; re-run provisioning by opening the integration options and "
-    "saving them."
+    "the integration; reload the integration (Settings → Devices &amp; services → "
+    "Cloudflare Access Relay → Reload) to re-provision them."
 )
 HINT_UNKNOWN_FLOW = (
     "The connect attempt is unknown or older than ten minutes. Start again from "
@@ -67,8 +67,7 @@ HINT_UNKNOWN_FLOW = (
 )
 HINT_REJECTED = (
     "The token Cloudflare sent could not be accepted. If the applications were "
-    "changed outside the integration, re-save the integration options to "
-    "re-provision them."
+    "changed outside the integration, reload the integration to re-provision them."
 )
 HINT_IDENTITY = (
     "The identity Cloudflare Access reported does not belong to the Home Assistant "
