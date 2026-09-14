@@ -10,17 +10,15 @@ verified against the real JWKS, and the released cookie is then used at the edge
 The raw Cloudflare API is used only to create and delete this run's service
 token, to observe the applications, and to inject drift.
 
-Environment (GitHub Actions: CF_API_TOKEN and CF_ACCOUNT_ID are repository secrets,
-the rest is plain job env):
+Environment (GitHub Actions repository secrets):
   CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
                   "Access: Organizations, Identity Providers, and Groups: Read"
                   and "Access: Service Tokens: Edit"
   CF_ACCOUNT_ID
-  CF_TEST_HOST    hostname served by preflight/worker
-  CF_TEST_EMAIL   e-mail on the gate's allow policy
 
-Prerequisites that already exist and are not touched: the Worker with its custom
-domain, and the zone WAF rule exempting the host from bot protection.
+Prerequisites that already exist and are not touched: the Worker on the test
+hostname with its custom domain, and the zone WAF rule exempting that host from
+bot protection.
 """
 
 from __future__ import annotations
@@ -78,9 +76,9 @@ pytestmark = pytest.mark.skipif(
     reason="live Cloudflare credentials not set (CF_API_TOKEN, CF_ACCOUNT_ID)",
 )
 
-# an unset Actions variable arrives as an empty string, hence `or` rather than a default
-HOST = os.environ.get("CF_TEST_HOST") or "test-host.example.com"
-EMAIL = os.environ.get("CF_TEST_EMAIL") or "nobody@example.com"
+HOST = "test-host.example.com"
+# the allow policy needs a subject; the test logs in with its service token instead
+EMAIL = "nobody@example.com"
 BASE = f"https://{HOST}"
 SESSION = "1h"
 TOKEN_PREFIX = "ha-relay-ci"
