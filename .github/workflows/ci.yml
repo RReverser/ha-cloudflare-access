@@ -51,6 +51,10 @@ jobs:
 
   hacs:
     runs-on: ubuntu-latest
+    # Non-blocking until the repository is ready for HACS publication: the action reads
+    # hacs.json and the manifest from the default branch and also requires a repository
+    # description, topics and a LICENSE file, none of which code on a branch can provide.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: hacs/action@main
