@@ -138,6 +138,30 @@ class Edge:
             time.sleep(3)
 
 
+async def _login_until_forwarded(
+    edge: Edge, headers: dict[str, str], timeout: float = 90
+) -> tuple[str, int]:
+    """Service-token login, retried until the origin echoes the Access header.
+
+    Returns the token and the number of attempts; more than one attempt means the
+    edge needed time to apply an application update.
+    """
+    deadline = time.time() + timeout
+    attempts = 0
+    while True:
+        attempts += 1
+        async with await edge.get("/api/echo", headers=headers) as resp:
+            body = await resp.json() if resp.status == 200 else None
+        token = (body or {}).get("headers", {}).get("cf-access-jwt-assertion")
+        if token:
+            return token, attempts
+        if time.time() > deadline:
+            raise AssertionError(
+                f"login never produced Cf-Access-Jwt-Assertion at the origin (last status {resp.status})"
+            )
+        time.sleep(3)
+
+
 async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
     """Create this run's token; sweep tokens left behind by aborted runs."""
     now = time.time()
@@ -200,7 +224,28 @@ async def test_live_lifecycle(
     try:
         await _lifecycle(hass, hass_client, hass_client_no_auth, api, token)
     finally:
-        await api.delete_service_token(token["id"])
+        await _release_and_delete_token(hass, api, token["id"])
+
+
+async def _release_and_delete_token(
+    hass: HomeAssistant, api: CloudflareAccessApi, token_id: str
+) -> None:
+    """Drop the token from any surviving entry's options, then delete it.
+
+    Runs after a failed step too, so the token never stays referenced by the gate
+    policy (Cloudflare refuses to delete a referenced token).
+    """
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        with contextlib.suppress(Exception):
+            if entry.state is ConfigEntryState.LOADED:
+                await _save_options(
+                    hass,
+                    entry,
+                    **{CONF_SERVICE_TOKEN_IDS: [], CONF_DELETE_OBJECTS_ON_REMOVE: False},
+                )
+            await hass.config_entries.async_remove(entry.entry_id)
+            await hass.async_block_till_done()
+    await api.delete_service_token(token_id)
 
 
 async def _lifecycle(
@@ -361,21 +406,29 @@ async def _lifecycle(
             for p in gate["policies"]
         ]
         await api.update_app(entry.data[DATA_GATE_APP_ID], {**drift, "enable_binding_cookie": True})
-        time.sleep(5)
-        async with await edge.get("/api/echo", headers=service_headers) as resp:
-            bound = (await resp.json())["headers"]["cf-access-jwt-assertion"]
-        async with await edge.get("/api/echo", cookies={"CF_Authorization": bound}) as resp:
-            assert _is_access_redirect(resp), (
-                "P5: with the binding cookie on a copied token is refused"
-            )
+        bound, attempts = await _login_until_forwarded(edge, service_headers)
+        print(f"   login after the binding-cookie update succeeded on attempt {attempts}")
+        deadline = time.time() + 90
+        while True:
+            async with await edge.get("/api/echo", cookies={"CF_Authorization": bound}) as resp:
+                refused = _is_access_redirect(resp)
+            if refused or time.time() > deadline:
+                break
+            time.sleep(3)
+        assert refused, "P5: with the binding cookie on a copied token is refused"
         await _save_options(hass, entry)
         gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
         assert gate and gate.get("enable_binding_cookie") is False, (
             "options save reconciled the drift"
         )
-        time.sleep(5)
-        async with await edge.get("/api/echo", cookies=cookie) as resp:
-            assert resp.status == 200, "reuse works again after reconciliation"
+        deadline = time.time() + 90
+        while True:
+            async with await edge.get("/api/echo", cookies=cookie) as resp:
+                passed = resp.status == 200
+            if passed or time.time() > deadline:
+                break
+            time.sleep(3)
+        assert passed, "reuse works again after reconciliation"
 
         print("== reload writes nothing")
         before = await _app_updated_at(api, entry)
