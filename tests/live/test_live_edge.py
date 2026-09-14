@@ -25,9 +25,11 @@ domain, and the zone WAF rule exempting the host from bot protection.
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
 import contextlib
 import json
 import os
+import socket
 import time
 from typing import Any
 
@@ -38,6 +40,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import pytest
+import pytest_socket
 
 from custom_components.cloudflare_access_relay.cloudflare_api import (
     CloudflareAccessApi,
@@ -91,6 +94,24 @@ def _is_access_redirect(resp: aiohttp.ClientResponse) -> bool:
     return resp.status in (301, 302, 303, 307) and ".cloudflareaccess.com/" in resp.headers.get(
         "Location", ""
     )
+
+
+@pytest.fixture
+def internet() -> Iterator[None]:
+    """Allow real network access for this test.
+
+    The Home Assistant test plugin blocks sockets, restricts connections to
+    127.0.0.1 and refuses DNS names on every test; `socket_enabled` alone only
+    lifts the first of those.
+    """
+    saved = (socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname)
+    pytest_socket._remove_restrictions()
+    socket.getaddrinfo = pytest_socket._true_getaddrinfo
+    socket.gethostbyname = pytest_socket._true_gethostbyname
+    try:
+        yield
+    finally:
+        socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname = saved
 
 
 class Edge:
@@ -168,7 +189,7 @@ async def test_live_lifecycle(
     hass: HomeAssistant,
     hass_client: Any,
     hass_client_no_auth: Any,
-    socket_enabled: None,
+    internet: None,
     disable_mock_zeroconf_resolver: None,
 ) -> None:
     api = CloudflareAccessApi(
