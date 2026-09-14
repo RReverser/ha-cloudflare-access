@@ -165,7 +165,11 @@ async def _app_updated_at(api: CloudflareAccessApi, entry: ConfigEntry) -> tuple
 
 
 async def test_live_lifecycle(
-    hass: HomeAssistant, hass_client: Any, hass_client_no_auth: Any, socket_enabled: None
+    hass: HomeAssistant,
+    hass_client: Any,
+    hass_client_no_auth: Any,
+    socket_enabled: None,
+    disable_mock_zeroconf_resolver: None,
 ) -> None:
     api = CloudflareAccessApi(
         async_get_clientsession(hass), os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"]
