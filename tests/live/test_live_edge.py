@@ -327,28 +327,30 @@ async def _lifecycle(
         assert entry.data[DATA_POLICY_AUD] == aud
         await edge.wait_gate("/api/echo", True)
 
-        print("== P8 precedence and P1 Set-Cookie passthrough at the edge")
+        print("== path precedence and Set-Cookie passthrough at the edge")
         # the widened gate reaches the edge per path; wait for the root too
         await edge.wait_gate("/", True)
         resp = await edge.get("/api/cloudflare_access_relay/echo")
         assert resp.status_code == 200, (
-            "P8: bypassed prefix under /api beats the hostname-wide gate"
+            "a bypassed prefix under /api must beat the hostname-wide gate"
         )
         assert (await edge.get("/auth/token")).status_code == 200
         resp = await edge.post("/auth/token/setcookie", json={"v": "probe-value"})
         assert resp.status_code == 200
         assert resp.headers.get_list("set-cookie") == [
             "CF_Authorization=probe-value; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"
-        ], "P1: origin Set-Cookie must pass through unmodified"
+        ], "an origin Set-Cookie must pass through Cloudflare unmodified"
 
-        print("== a real login at the edge yields the token as header and cookie (P3, P4)")
+        print("== a real login at the edge yields the token as header and cookie")
         resp = await edge.get("/api/echo", headers=service_headers)
         assert resp.status_code == 200, (resp.status_code, resp.headers.get("location"))
         real_jwt = resp.json()["headers"]["cf-access-jwt-assertion"]
-        assert real_jwt == _set_cookie_token(resp), "P4"
+        assert real_jwt == _set_cookie_token(resp), "header token must equal the cookie token"
         claims = _claims(real_jwt)
         assert claims["aud"] in ([aud], aud) and claims["iss"] == f"https://{team}"
-        assert abs((claims["exp"] - claims["iat"]) - 3600) <= 5, "P3"
+        assert abs((claims["exp"] - claims["iat"]) - 3600) <= 5, (
+            "token lifetime must equal the configured session duration"
+        )
 
         print("== the relay itself, through its HTTP views, with the real token")
         user = await add_user(hass, "ci@example.com", name=claims["common_name"])
@@ -382,10 +384,10 @@ async def _lifecycle(
             resp = await anon.get((await resp.json())["callback"], headers=bad)
             assert resp.status == 403
 
-        print("== P2: the relayed cookie alone passes the gate from a client Access never saw")
+        print("== the relayed cookie alone passes the gate from a client Access never saw")
         cookie = {"CF_Authorization": relayed}
         resp = await edge.get("/api/echo", cookies=cookie, headers={"User-Agent": "okhttp/4.12.0"})
-        assert resp.status_code == 200, "P2"
+        assert resp.status_code == 200, "a copied CF_Authorization cookie must pass the gate"
         assert resp.json()["headers"].get("cf-access-jwt-assertion") == relayed
         ws = {
             "Connection": "Upgrade",
@@ -401,7 +403,7 @@ async def _lifecycle(
         )
 
         print(
-            "== P5: drift outside the integration (binding cookie on) breaks reuse; a reload repairs it"
+            "== drift outside the integration (binding cookie on) breaks reuse; a reload repairs it"
         )
         gate_id = entry.data[DATA_GATE_APP_ID]
         gate = await api.get_app(gate_id)
@@ -440,7 +442,7 @@ async def _lifecycle(
             )
 
         assert await _until(refused, "binding refusal"), (
-            "P5: with the binding cookie on a copied token is refused"
+            "with the binding cookie on, a copied token must be refused"
         )
         # the documented repair: reload the integration (saving unchanged options
         # does not reload the entry, so it would not re-provision)

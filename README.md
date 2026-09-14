@@ -16,9 +16,9 @@ It does two things:
    and its native HTTP client share one jar, so from then on every app request passes the gate.
 
 Status: implementation complete with an automated test suite, and the Cloudflare behaviour it
-depends on (pre-flight P1–P6, P8) verified on a real account against Access applications
-created from the integration's own code (see *Test host*). **Not yet validated on a real
-device** (P7, iOS). Sections *Pre-flight* and *Rollout* below are the required order.
+depends on verified on a real account against Access applications created from the
+integration's own code (see *Verified Cloudflare behaviour*). **Not yet validated on a real
+device** (Android WebView handoff, iOS). Follow *Rollout* below in order.
 
 ## Requirements
 
@@ -95,7 +95,7 @@ Everything else, including `/`, `/api/*`, `/api/websocket`, `/api/webhook/*`, `/
 `/media/*` and `/hacsfiles/*`, is gated once the gate is enabled.
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
-is what makes the bypass list work; pre-flight test P8 asserts it.
+is what makes the bypass list work; the live test asserts it on every run.
 
 Removing the integration deletes both applications (option, default on), which restores the
 un-gated state. Flipping the gate off in the options takes seconds and keeps everything else.
@@ -135,25 +135,25 @@ Changing the options reloads the entry and re-provisions; so does reloading the 
 (Settings → Devices & services → Cloudflare Access Relay → Reload), which is the way to repair
 applications edited outside the integration. Unchanged applications are never written.
 
-## Pre-flight: the Cloudflare behaviour the design rests on
+## Verified Cloudflare behaviour
 
-These are assumptions about Cloudflare and the Android WebView that only a real account and a
-real device can settle. All but P7 were verified on 14 Sep 2026 on the test host below, with
-Access applications created from the integration's own provisioning code, and are re-checked
-by `tests/live` in CI.
+The design rests on a few facts about Cloudflare Access and the Android WebView that only a
+real account and a real device can settle. The Cloudflare ones were verified on 14 Sep 2026 on
+the test host below, with Access applications created from the integration's own provisioning
+code, and are re-checked by `tests/live` in CI.
 
-| # | Assumption | Result |
-|---|---|---|
-| P1 | An origin `Set-Cookie: CF_Authorization=…` passes through Cloudflare unmodified | verified: byte-identical |
-| P2 | Access accepts a `CF_Authorization` cookie it did not set in that client | verified: token obtained by one client, presented as a cookie by another (different User-Agent, no other state) → 200, origin receives the same `Cf-Access-Jwt-Assertion` |
-| P3 | JWT `exp − iat` equals the configured session duration | verified for `1h` and `8760h` |
-| P4 | The header token equals the cookie token | verified |
-| P5 | With *Binding Cookie* enabled P2 fails, so it must stay off | verified: cookie alone → redirect to login |
-| P6 | Session ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
-| P7 | The app's WebView hands only the Access redirect to the browser and stays on the page | **still open**. The app's WebView only loads its own server, so this is observed on the Home Assistant hostname itself during rollout step 3 (gate off, callback path gated): tap *Sign in with Cloudflare* on the connect page and watch whether the system browser opens while the app stays on the page. Either outcome works: if the WebView follows the redirect itself, the login lands the cookie in the shared jar directly |
-| P8 | A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
-| — | Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
-| — | The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
+| Assumption | Result |
+|---|---|
+| An origin `Set-Cookie: CF_Authorization=…` passes through Cloudflare unmodified | verified: byte-identical |
+| Access accepts a `CF_Authorization` cookie it did not set in that client | verified: token obtained by one client, presented as a cookie by another (different User-Agent, no other state) → 200, origin receives the same `Cf-Access-Jwt-Assertion` |
+| Token lifetime (`exp − iat`) equals the configured session duration | verified for `1h` and `8760h` |
+| The header token equals the cookie token | verified |
+| With *Binding Cookie* enabled a copied cookie is refused, so it must stay off | verified: cookie alone → redirect to login |
+| Session duration ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
+| A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
+| Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
+| The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
+| The app's WebView hands only the Access redirect to the browser and stays on the page | **still open**. The app's WebView only loads its own server, so this is observed on the Home Assistant hostname itself during rollout step 3 (gate off, callback path gated): tap *Sign in with Cloudflare* on the connect page and watch whether the system browser opens while the app stays on the page. Either outcome works: if the WebView follows the redirect itself, the login lands the cookie in the shared jar directly |
 
 Also observed: a service-token login answers with the application token both as the header and
 as a `Set-Cookie`; its JWT carries `aud` as a string (identity logins use a list), `sub` empty
@@ -171,8 +171,8 @@ service token on the gate's Service Auth policy so it can log in without a brows
 
 `tests/live/test_live_edge.py` runs the whole lifecycle on every push, through Home Assistant
 itself: it creates a run-scoped Access service token, sets the integration up via the config
-flow (which provisions the applications), enables the gate via the options flow, runs
-P1–P5 and P8 at the edge, relays a real token through the integration's own HTTP views and
+flow (which provisions the applications), enables the gate via the options flow, checks the
+edge behaviour above, relays a real token through the integration's own HTTP views and
 uses the released cookie at the edge, injects drift and reloads the entry to repair it,
 checks that a reload writes nothing, removes the entry with "delete objects" off so the
 applications stay for the next run, and deletes the token. It needs two repository secrets
@@ -190,12 +190,13 @@ logs in with its run-scoped service token, so nobody can open the test host in a
 
 ## Rollout
 
-1. Everything automatable is verified (see *Pre-flight*); P7 is observed in step 3.
+1. Everything automatable is verified (see *Verified Cloudflare behaviour*); the WebView
+   handoff is observed in step 3.
 2. Install the integration and complete the config flow with the gate **off**. Run
    `tests/contract/check_edge.sh` with `MODE=staged` (header of the script lists the inputs).
 3. Android, gate still off: sign in to the app, confirm the connect page appears, tap *Sign in
-   with Cloudflare* (this is P7: the system browser should open on the team domain and the app
-   should stay on the connect page), complete the login, come back, confirm the page reports
+   with Cloudflare* (the system browser should open on the team domain and the app should stay
+   on the connect page), complete the login, come back, confirm the page reports
    "Connected". Only the callback path is gated at this point, so nothing else can break, and
    removing the entry undoes everything.
 4. Enable the gate in the options. Run `check_edge.sh` with `MODE=gated`. **This is the exposure
@@ -293,9 +294,9 @@ The HACS action needs, beyond this code: a repository description and topics on 
 `LICENSE` file, and the code on the default branch (it reads `hacs.json` and the manifest from
 there). Until those exist the `hacs` CI job is marked non-blocking.
 
-## Deviations from the original plan
+## Design notes
 
-Facts checked on 14 Sep 2026 that changed the implementation:
+Facts checked on 14 Sep 2026 that shaped the implementation:
 
 - The Access API field `self_hosted_domains` is deprecated (support ended 21 Nov 2025); the
   integration uses `destinations: [{type: "public", uri: …}]`.

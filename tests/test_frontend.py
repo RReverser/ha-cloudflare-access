@@ -1,4 +1,4 @@
-"""Browser tests of relay.js and connect.html with Playwright (plan section 8, frontend)."""
+"""Browser tests of relay.js and connect.html with Playwright."""
 
 from __future__ import annotations
 

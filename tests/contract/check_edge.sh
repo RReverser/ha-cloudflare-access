@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract tests against the real Cloudflare edge (plan section 9).
+# Contract checks against the real Cloudflare edge in front of a Home Assistant hostname.
 #
 # Run from a shell with:
 #   HA_HOST=ha.example.com          hostname the integration manages
