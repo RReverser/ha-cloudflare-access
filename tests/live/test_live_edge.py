@@ -25,6 +25,7 @@ domain, and the zone WAF rule exempting the host from bot protection.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import time
@@ -38,7 +39,10 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import pytest
 
-from custom_components.cloudflare_access_relay.cloudflare_api import CloudflareAccessApi
+from custom_components.cloudflare_access_relay.cloudflare_api import (
+    CloudflareAccessApi,
+    CloudflareApiError,
+)
 from custom_components.cloudflare_access_relay.const import (
     API_FLOW,
     API_SESSION,
@@ -122,7 +126,10 @@ async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
                 now - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
             )
             if age > STALE_TOKEN_AGE:
-                await api.delete_service_token(tok["id"])
+                # may still be referenced by the gate policy of an aborted run; this
+                # run's provisioning replaces that reference, the next sweep gets it
+                with contextlib.suppress(CloudflareApiError):
+                    await api.delete_service_token(tok["id"])
     run = os.environ.get("GITHUB_RUN_ID", str(int(now)))
     created_tok: dict[str, Any] = await api.create_service_token(f"{TOKEN_PREFIX} {run}", "24h")
     return created_tok
@@ -351,8 +358,14 @@ async def _lifecycle(
         assert entry.state is ConfigEntryState.LOADED
         assert await _app_updated_at(api, entry) == before
 
+        print("== dropping the service token from the options removes it from the gate policy")
+        await _save_options(
+            hass, entry, **{CONF_SERVICE_TOKEN_IDS: [], CONF_DELETE_OBJECTS_ON_REMOVE: False}
+        )
+        gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
+        assert gate and [p["decision"] for p in gate["policies"]] == ["allow"]
+
         print("== removal with 'delete objects' off keeps the applications for the next run")
-        await _save_options(hass, entry, **{CONF_DELETE_OBJECTS_ON_REMOVE: False})
         ids = (entry.data[DATA_GATE_APP_ID], entry.data[DATA_BYPASS_APP_ID])
         await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
