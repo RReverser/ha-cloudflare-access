@@ -1,7 +1,7 @@
 /*
  * Test-host Worker. Deployed as `test-host` on the permanent test hostname
- * (see README, "Test host"). It is the origin the live tests and the pre-flight
- * checks talk to; the Access applications in front of it are provisioned by the
+ * (see README, "Test host"). It is the origin the live tests and the shell checks
+ * talk to; the Access applications in front of it are provisioned by the
  * integration's own code.
  *
  *   POST <any>/setcookie  -> answers Set-Cookie: CF_Authorization=<body.v>  (cookie passthrough check)
