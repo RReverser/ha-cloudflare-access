@@ -63,10 +63,10 @@ HEADER_CF_RAY: Final = "CF-Ray"
 # inherits a path rule to everything below it.
 OWN_BYPASS_PATHS: Final[tuple[str, ...]] = (URL_CONNECT, URL_STATIC, API_BASE)
 
-# Bypass paths added automatically when the named integration is loaded: login
-# integrations with their own pages, and server-to-server callers that never hold a cookie.
+# Bypass paths added automatically when the named integration is loaded: server-to-server
+# callers that authenticate with a Home Assistant token and never hold a cookie. Login
+# integrations need no entry here; their pages and views are discovered from the router.
 INTEGRATION_BYPASS_PATHS: Final[dict[str, tuple[str, ...]]] = {
-    "openid": ("/auth/openid", "/openid"),
     "google_assistant": ("/api/google_assistant",),
     "alexa": ("/api/alexa",),
 }
