@@ -279,8 +279,10 @@ Tests: `tests/test_jwks.py` (verification against a fake JWKS endpoint, rotation
 `tests/test_views.py` (the whole relay over HTTP with two Home Assistant users),
 `tests/test_provision.py` (a fake Cloudflare API recording every write),
 `tests/test_config_flow.py`, and `tests/test_frontend.py` (Playwright: `relay.js` and the
-connect page against a stubbed frontend and app bridge). CI runs lint, mypy, the suite on the
-pinned core and on the latest release (allowed to fail), hassfest and the HACS action.
+connect page against a stubbed frontend and app bridge). CI runs lint, mypy, the suite against
+the versions in `uv.lock`, the live test, hassfest and the HACS action. Newer Home Assistant
+releases are taken up by updating the lock, never by installing something the lock does not
+pin.
 
 ## Publishing to HACS
 
