@@ -305,6 +305,17 @@ def test_app_matches_ignores_server_side_fields() -> None:
     assert not app_matches(existing, desired)
 
 
+def test_app_matches_treats_absent_fields_as_cloudflare_defaults() -> None:
+    """Cloudflare's GET omits path_cookie_attribute (and others) when they are default."""
+    opts = {"hostname": HOSTNAME, "allowed_emails": [ALICE], "gate_enabled": True}
+    desired = desired_gate_app(opts)
+    existing = {k: v for k, v in desired.items() if k != "path_cookie_attribute"}
+    existing["policies"] = [{**p, "id": "p1"} for p in desired["policies"]]
+    assert app_matches(existing, desired)
+    existing["path_cookie_attribute"] = True
+    assert not app_matches(existing, desired)
+
+
 def test_desired_bypass_uses_destinations_not_deprecated_field() -> None:
     app = desired_bypass_app({"hostname": HOSTNAME, "extra_bypass_paths": []}, set())
     assert "self_hosted_domains" not in app

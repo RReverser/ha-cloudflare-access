@@ -15,9 +15,10 @@ It does two things:
    after that browser login and hands it, once, to the app's own cookie jar. The app's WebView
    and its native HTTP client share one jar, so from then on every app request passes the gate.
 
-Status: implementation complete with an automated test suite; **not yet validated on a real
-Cloudflare account or a real device**. Sections *Pre-flight* and *Rollout* below are the
-required validation order. Do not gate a hostname before they pass.
+Status: implementation complete with an automated test suite, and the Cloudflare behaviour it
+depends on (pre-flight P1–P6, P8) verified on a real account against Access applications
+created from the integration's own code (see *Test host*). **Not yet validated on a real
+device** (P7, iOS). Sections *Pre-flight* and *Rollout* below are the required order.
 
 ## Requirements
 
@@ -120,7 +121,8 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers `<host>`. Off: it covers only the relay callback path |
 | Allowed e-mail addresses / Access group ID | | Who the gate lets in |
 | Extra bypassed paths | empty | Additional hostname-relative prefixes on the bypass application |
-| Access session duration | `720h` | Lifetime of the application token, `<n>h` or `<n>m`. Cloudflare's ceiling is one month. Longer is better for the app: it must renew before expiry, and it can only renew while the app is open |
+| Access session duration | `720h` | Lifetime of the application token, `<n>h` or `<n>m`. The dashboard offers up to one month; the API accepted `8760h` and Access honoured it (token valid 365 days, verified). Longer means fewer renewals in the app, which can only renew while it is open, against a longer-lived bearer token if a device is lost. Nothing else in the relay assumes a duration: cookie `Max-Age` and renewal timing come from the token's own `exp` |
+| Service token IDs allowed through the gate | empty | Adds a Service Auth policy so callers presenting `CF-Access-Client-Id/Secret` pass the gate and receive an application token. Used by the live tests; also a safer alternative to bypassing a path for your own machine callers |
 | Cookie name | `CF_Authorization` | Do not change unless Cloudflare does |
 | Identity claim | `email` | JWT claim compared with the Home Assistant user |
 | Home Assistant user field | `username` | Which user field must equal the claim (case-insensitive): `username` (built-in login), `name` (display name), or any credential field a login integration stores, e.g. `email` |
@@ -130,27 +132,59 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
 
 Saving the options reloads the entry and re-provisions; unchanged applications are not written.
 
-## Pre-flight: prove the Cloudflare behaviour before touching Home Assistant
+## Pre-flight: the Cloudflare behaviour the design rests on
 
-The design rests on assumptions about Cloudflare and the Android WebView that only a real
-account and device can settle. `preflight/` contains a Worker and a script for them; the
-procedure is in the script header. Run on a **throwaway hostname routed to the Worker**, never
-on the Home Assistant hostname.
+These are assumptions about Cloudflare and the Android WebView that only a real account and a
+real device can settle. All but P7 were verified on 14 Sep 2026 on the test host below, with
+Access applications created from the integration's own provisioning code, and are re-checked
+by `tests/live` in CI.
 
-| # | Assumption | Kills the design if it fails |
+| # | Assumption | Result |
 |---|---|---|
-| P1 | An origin `Set-Cookie: CF_Authorization=…` passes through Cloudflare unmodified | yes |
-| P2 | Access accepts a `CF_Authorization` cookie it did not set in that client (another machine, another IP) | yes |
-| P3 | JWT `exp − iat` equals the configured session duration | |
-| P4 | The header token equals the cookie token | |
-| P5 | With *Binding Cookie* enabled P2 fails, so it must stay off | |
-| P6 | Session ceiling as shown in the dashboard (documented: one month) | |
-| P7 | The app's WebView hands only the Access redirect to the browser and stays on the page (manual, Android) | yes |
-| P8 | A path-specific bypass application takes precedence over the hostname-wide gate application | yes |
+| P1 | An origin `Set-Cookie: CF_Authorization=…` passes through Cloudflare unmodified | verified: byte-identical |
+| P2 | Access accepts a `CF_Authorization` cookie it did not set in that client | verified: token obtained by one client, presented as a cookie by another (different User-Agent, no other state) → 200, origin receives the same `Cf-Access-Jwt-Assertion` |
+| P3 | JWT `exp − iat` equals the configured session duration | verified for `1h` and `8760h` |
+| P4 | The header token equals the cookie token | verified |
+| P5 | With *Binding Cookie* enabled P2 fails, so it must stay off | verified: cookie alone → redirect to login |
+| P6 | Session ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
+| P7 | The app's WebView hands only the Access redirect to the browser and stays on the page | **manual, Android, still open**: open `https://<test host>/page` in the app, tap the link |
+| P8 | A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
+| — | Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
+| — | The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
+
+Also observed: a service-token login answers with the application token both as the header and
+as a `Set-Cookie`; its JWT carries `aud` as a string (identity logins use a list), `sub` empty
+and `common_name` instead of `email`. The integration accepts both `aud` shapes.
+
+### Test host
+
+`test-host.example.com` is a permanent test hostname: a Cloudflare Worker
+(`preflight/worker`, deployed as `test-host` with a Workers custom domain) that echoes
+requests, answers `POST */setcookie` with a `CF_Authorization` cookie and serves `GET */page`
+for P7. The zone has one custom WAF rule scoped to this host that skips bot protection, so
+curl and CI can reach it (the zone's Super Bot Fight Mode blocks automated clients otherwise;
+Home Assistant's own machine paths are already exempted by an older rule). The Access
+applications on it are the integration's `ha-relay:` pair, with an Access service token
+(`test-host`) on the gate's Service Auth policy so tests can log in without a browser.
+
+`tests/live/test_live_edge.py` re-provisions the host from the options every run, then runs
+P1–P5 and P8 plus staged-mode and idempotency checks. It needs these GitHub Actions secrets
+and variables; without them it is skipped:
+
+| Name | Kind | Value |
+|---|---|---|
+| `CF_API_TOKEN` | secret | account token, scope *Access: Apps and Policies: Edit* |
+| `CF_ACCOUNT_ID` | secret | the Cloudflare account id |
+| `CF_ACCESS_SERVICE_TOKEN_ID` | secret | id of the `test-host` service token |
+| `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | secret | that token's credentials |
+| `CF_TEST_HOST` | variable | `test-host.example.com` |
+| `CF_TEST_EMAIL` | variable | the e-mail on the gate's allow policy |
+
+`preflight/preflight.sh` is the same set of checks for a shell with curl.
 
 ## Rollout
 
-1. Pre-flight P1–P8 on the throwaway hostname.
+1. P7 on the test host (Android, manual); everything else is verified.
 2. Install the integration and complete the config flow with the gate **off**. Run
    `tests/contract/check_edge.sh` with `MODE=staged` (header of the script lists the inputs).
 3. Android, gate still off: sign in to the app, confirm the connect page appears, complete it,
@@ -164,6 +198,10 @@ on the Home Assistant hostname.
    updating; kill and relaunch the app, background sensor updates continue.
 6. Expiry rehearsal: set the session duration to `15m`, wait, confirm the banner and the
    notification appear and that *Connect* restores service. Set the duration back.
+
+`tests/contract/check_edge.sh` probes the Home Assistant hostname itself; note that the zone's
+bot protection blocks curl on paths outside the existing machine-path exemption, so probe those
+from a browser or extend the exemption for the duration of the check.
 
 iOS: **unverified.** Whether the iOS app shares `WKWebView`'s cookie store with `URLSession`,
 and whether its in-app browser hands the Access redirect out and returns, must be tested with

@@ -11,6 +11,7 @@
           "allowed_emails": "Allowed e-mail addresses",
           "access_group_id": "Access group ID (instead of e-mails)",
           "extra_bypass_paths": "Extra bypassed paths",
+          "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
           "cookie_name": "Cookie name",
           "identity_claim": "Identity claim",
@@ -24,6 +25,7 @@
           "hostname": "The public hostname served through Cloudflare, e.g. ha.example.com.",
           "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
           "extra_bypass_paths": "Hostname-relative path prefixes that server-to-server callers reach without a cookie, e.g. /api/webhook/abc.",
+          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy. Used by the live tests; safer than bypassing a path.",
           "session_duration": "Lifetime of the Access token, e.g. 720h. Cloudflare's ceiling is one month.",
           "identity_claim": "JWT claim compared with the Home Assistant user, usually email.",
           "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
@@ -58,6 +60,7 @@
           "allowed_emails": "Allowed e-mail addresses",
           "access_group_id": "Access group ID (instead of e-mails)",
           "extra_bypass_paths": "Extra bypassed paths",
+          "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
           "cookie_name": "Cookie name",
           "identity_claim": "Identity claim",

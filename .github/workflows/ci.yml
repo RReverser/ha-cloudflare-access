@@ -43,6 +43,28 @@ jobs:
       - run: .venv/bin/python -m playwright install --with-deps chromium
       - run: .venv/bin/python -m pytest -q --timeout=300
 
+  live:
+    # Real Cloudflare: provisions the test host with the integration's own code and
+    # proves the edge behaviour the relay depends on (tests/live). Needs the secrets
+    # listed in tests/live/test_live_edge.py; skipped when they are absent (forks).
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    concurrency: live-cloudflare
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_TEST_HOST: ${{ vars.CF_TEST_HOST }}
+      CF_TEST_EMAIL: ${{ vars.CF_TEST_EMAIL }}
+      CF_ACCESS_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_SERVICE_TOKEN_ID }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - run: uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python -r requirements_test.txt
+      - run: .venv/bin/python -m pytest -q --timeout=600 -rs tests/live
+
   hassfest:
     runs-on: ubuntu-latest
     steps:
