@@ -15,8 +15,16 @@ from typing import Any
 
 from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
 from homeassistant.components.http.server import StaticPathConfig
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_COMPONENT_LOADED, EVENT_HOMEASSISTANT_STOP
+from homeassistant.config_entries import (
+    SIGNAL_CONFIG_ENTRY_CHANGED,
+    ConfigEntry,
+    ConfigEntryChange,
+)
+from homeassistant.const import (
+    CONF_WEBHOOK_ID,
+    EVENT_COMPONENT_LOADED,
+    EVENT_HOMEASSISTANT_STOP,
+)
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -24,6 +32,7 @@ from homeassistant.exceptions import (
     ConfigEntryNotReady,
 )
 from homeassistant.helpers.debounce import Debouncer
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.start import async_at_started
@@ -64,10 +73,12 @@ from .const import (
     DEFAULT_USER_MATCH,
     DOMAIN,
     FLOW_SWEEP_INTERVAL_SECONDS,
+    MOBILE_APP_DOMAIN,
     REDISCOVER_COOLDOWN_SECONDS,
     URL_RELAY_JS,
     URL_STATIC,
     VERSION,
+    WEBHOOK_PATH,
 )
 from .flows import FlowStore
 from .jwks import JwksVerifier
@@ -107,6 +118,8 @@ class RelayData:
     policy_aud: str
     team_domain: str
     open_paths: list[str]
+    # Companion-app device webhook paths, gated although they lie under a bypassed prefix.
+    gated_paths: list[str]
     bound: BoundTokens
     # Whether the vendor endpoints are bypassed at the edge (see async_setup_entry).
     vendor_bypass: bool
@@ -134,6 +147,7 @@ async def _async_provision_entry(
     api: CloudflareAccessApi,
     options: dict[str, Any],
     open_paths: list[str],
+    gated_paths: list[str],
     *,
     vendor_paths: bool,
 ) -> ProvisionResult:
@@ -146,6 +160,7 @@ async def _async_provision_entry(
         bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
         team_domain=entry.data.get(DATA_TEAM_DOMAIN),
         vendor_paths=vendor_paths,
+        gated_paths=gated_paths,
     )
     derived = {
         DATA_TEAM_DOMAIN: result.team_domain,
@@ -173,9 +188,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
     bound = BoundTokens(hass)
     await bound.async_load()
     open_paths = discover_open_paths(hass)
+    gated_paths = device_webhook_paths(hass)
     try:
         result = await _async_provision_entry(
-            hass, entry, api, options, open_paths, vendor_paths=vendor_bypass
+            hass, entry, api, options, open_paths, gated_paths, vendor_paths=vendor_bypass
         )
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
@@ -193,6 +209,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
         policy_aud=result.policy_aud,
         team_domain=result.team_domain,
         open_paths=open_paths,
+        gated_paths=gated_paths,
         bound=bound,
         vendor_bypass=vendor_bypass,
     )
@@ -211,40 +228,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
     entry.async_on_unload(
         async_track_time_interval(hass, _sweep, timedelta(seconds=FLOW_SWEEP_INTERVAL_SECONDS))
     )
-    _async_track_open_paths(hass, entry, data)
+    _async_track_surface(hass, entry, data)
     return True
 
 
 @callback
-def _async_track_open_paths(hass: HomeAssistant, entry: ConfigEntry, data: RelayData) -> None:
-    """Keep the bypass application in step with the router.
+def device_webhook_paths(hass: HomeAssistant) -> list[str]:
+    """Return the webhook path of every companion-app device, sorted."""
+    return sorted(
+        f"{WEBHOOK_PATH}/{entry.data[CONF_WEBHOOK_ID]}"
+        for entry in hass.config_entries.async_entries(MOBILE_APP_DOMAIN)
+        if CONF_WEBHOOK_ID in entry.data
+    )
+
+
+@callback
+def _async_track_surface(hass: HomeAssistant, entry: ConfigEntry, data: RelayData) -> None:
+    """Keep the applications in step with the router and the registered devices.
 
     Integrations set up after this entry (later in the same start, or installed
-    afterwards) register their own unauthenticated views and package assets. Discovery
-    is re-run once Home Assistant has started and, debounced, after every component
-    load; the bypass application is rewritten only when the open surface changed.
+    afterwards) register their own unauthenticated views and package assets, and
+    companion-app devices register and unregister at any time. Discovery is re-run
+    once Home Assistant has started and, debounced, after every component load and
+    every mobile_app entry change; an application is rewritten only when its desired
+    content changed.
     """
 
     async def _refresh() -> None:
-        found = discover_open_paths(hass)
-        if found == data.open_paths:
+        open_paths = discover_open_paths(hass)
+        gated_paths = device_webhook_paths(hass)
+        if open_paths == data.open_paths and gated_paths == data.gated_paths:
             return
         _LOGGER.info(
-            "Open paths changed (added %s, removed %s); updating the bypass application",
-            sorted(set(found) - set(data.open_paths)),
-            sorted(set(data.open_paths) - set(found)),
+            "Surface changed (open paths added %s, removed %s; devices added %d, removed %d)",
+            sorted(set(open_paths) - set(data.open_paths)),
+            sorted(set(data.open_paths) - set(open_paths)),
+            len(set(gated_paths) - set(data.gated_paths)),
+            len(set(data.gated_paths) - set(gated_paths)),
         )
         try:
             await _async_provision_entry(
-                hass, entry, data.api, data.options, found, vendor_paths=data.vendor_bypass
+                hass,
+                entry,
+                data.api,
+                data.options,
+                open_paths,
+                gated_paths,
+                vendor_paths=data.vendor_bypass,
             )
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
-                "Could not update the bypass application; reload the integration to retry: %s",
+                "Could not update the Access applications; reload the integration to retry: %s",
                 err,
             )
             return
-        data.open_paths = found
+        data.open_paths = open_paths
+        data.gated_paths = gated_paths
 
     debouncer = Debouncer(
         hass,
@@ -260,11 +299,19 @@ def _async_track_open_paths(hass: HomeAssistant, entry: ConfigEntry, data: Relay
         debouncer.async_schedule_call()
 
     @callback
+    def _entry_changed(_change: ConfigEntryChange, changed: ConfigEntry) -> None:
+        if changed.domain == MOBILE_APP_DOMAIN:
+            debouncer.async_schedule_call()
+
+    @callback
     def _stop(_event: Event) -> None:
         debouncer.async_shutdown()
 
     entry.async_on_unload(debouncer.async_shutdown)
     entry.async_on_unload(hass.bus.async_listen(EVENT_COMPONENT_LOADED, _schedule))
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
+    )
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
     entry.async_on_unload(async_at_started(hass, _schedule))
 

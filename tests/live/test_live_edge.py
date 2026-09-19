@@ -28,17 +28,21 @@ from collections.abc import Callable, Iterator
 import contextlib
 import json
 import os
+import secrets
 import socket
 import time
 from typing import Any
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import CONF_WEBHOOK_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.setup import async_setup_component
 import httpx
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 import pytest_socket
 
 from custom_components.cloudflare_access_relay.cloudflare_api import (
@@ -66,6 +70,7 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_TEAM_DOMAIN,
     DOMAIN,
     HEADER_JWT,
+    MOBILE_APP_DOMAIN,
     URL_CALLBACK,
 )
 
@@ -287,6 +292,12 @@ async def _lifecycle(
     async with httpx.AsyncClient(follow_redirects=False, timeout=30) as http:
         edge = Edge(http)
 
+        # a registered companion-app device: its webhook path must be gated although the
+        # /api/webhook prefix (registered by the webhook component) is bypassed
+        assert await async_setup_component(hass, "webhook", {})
+        hook = secrets.token_hex()
+        MockConfigEntry(domain=MOBILE_APP_DOMAIN, data={CONF_WEBHOOK_ID: hook}).add_to_hass(hass)
+
         print(
             "== config flow creates the entry and provisions (gate off: only the callback is gated)"
         )
@@ -335,6 +346,11 @@ async def _lifecycle(
             "a bypassed prefix under /api must beat the hostname-wide gate"
         )
         assert (await edge.get("/auth/token")).status_code == 200
+        print("== a device webhook path in the gate beats the bypassed /api/webhook prefix")
+        await edge.wait_gate(f"/api/webhook/{hook}", True)
+        assert (await edge.get("/api/webhook/not-a-registered-device")).status_code == 200, (
+            "other webhooks stay bypassed"
+        )
         resp = await edge.post("/auth/token/setcookie", json={"v": "probe-value"})
         assert resp.status_code == 200
         assert resp.headers.get_list("set-cookie") == [

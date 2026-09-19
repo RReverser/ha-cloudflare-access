@@ -5,17 +5,23 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 from aiohttp import web
 from homeassistant.components.http.server import StaticPathConfig
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import EVENT_COMPONENT_LOADED
+from homeassistant.const import CONF_WEBHOOK_ID, EVENT_COMPONENT_LOADED
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.http import HomeAssistantView
 from homeassistant.setup import async_setup_component
 from homeassistant.util.dt import utcnow
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockModule,
+    async_fire_time_changed,
+    mock_integration,
+)
 
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCESS_GROUP_ID,
@@ -28,6 +34,7 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_GATE_APP_ID,
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
+    MOBILE_APP_DOMAIN,
     REDISCOVER_COOLDOWN_SECONDS,
 )
 from custom_components.cloudflare_access_relay.paths import (
@@ -447,3 +454,84 @@ def test_desired_bypass_uses_destinations_not_deprecated_field() -> None:
 
 def test_entry_type(config_entry: MockConfigEntry) -> None:
     assert config_entry.domain == "cloudflare_access_relay"
+
+
+def _device(hook: str) -> MockConfigEntry:
+    return MockConfigEntry(domain=MOBILE_APP_DOMAIN, data={CONF_WEBHOOK_ID: hook}, title=hook[:8])
+
+
+async def test_device_webhooks_are_gated_under_the_bypassed_prefix(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    """Each companion-app device's webhook path goes on the gate application.
+
+    `/api/webhook` itself stays bypassed for every other webhook caller; the device's
+    longer path wins in Access.
+    """
+    assert await async_setup_component(hass, "webhook", {})
+    for hook in ("b" * 64, "a" * 64):
+        _device(hook).add_to_hass(hass)
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    gate = fake_cloudflare.by_name(GATE)
+    assert gate["domain"] == HOSTNAME
+    assert _uris(gate) == [
+        HOSTNAME,
+        f"{HOSTNAME}/api/webhook/{'a' * 64}",
+        f"{HOSTNAME}/api/webhook/{'b' * 64}",
+    ]
+    assert f"{HOSTNAME}/api/webhook" in _uris(fake_cloudflare.by_name(BYPASS))
+    assert entry.runtime_data.gated_paths == [
+        f"/api/webhook/{'a' * 64}",
+        f"/api/webhook/{'b' * 64}",
+    ]
+
+
+async def test_device_webhooks_stay_open_while_gate_is_disabled(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    _device("c" * 64).add_to_hass(hass)
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    gate = fake_cloudflare.by_name(GATE)
+    assert _uris(gate) == [f"{HOSTNAME}/cloudflare_access_relay/callback"]
+
+
+async def test_device_registered_or_removed_later_updates_gate(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    """A device that registers or unregisters after setup changes the gate application."""
+    mock_integration(
+        hass,
+        MockModule(
+            MOBILE_APP_DOMAIN,
+            async_setup_entry=AsyncMock(return_value=True),
+            async_unload_entry=AsyncMock(return_value=True),
+        ),
+    )
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    cf = fake_cloudflare
+    assert cf.writes("PUT") == []
+
+    device = _device("d" * 64)
+    await hass.config_entries.async_add(device)
+    await hass.async_block_till_done()
+    assert cf.writes("PUT") == [], "debounced"
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=REDISCOVER_COOLDOWN_SECONDS + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    puts = cf.writes("PUT")
+    assert [p[2]["name"] for p in puts] == [GATE]
+    assert _uris(puts[0][2]) == [HOSTNAME, f"{HOSTNAME}/api/webhook/{'d' * 64}"]
+    assert entry.runtime_data.gated_paths == [f"/api/webhook/{'d' * 64}"]
+
+    await hass.config_entries.async_remove(device.entry_id)
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=2 * REDISCOVER_COOLDOWN_SECONDS + 2))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    puts = cf.writes("PUT")
+    assert [p[2]["name"] for p in puts] == [GATE, GATE]
+    assert _uris(puts[1][2]) == [HOSTNAME]
+    assert entry.runtime_data.gated_paths == []

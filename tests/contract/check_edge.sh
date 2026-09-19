@@ -8,6 +8,8 @@
 #   MODE=gated | staged             gated: gate_enabled=true; staged: only the callback path is gated
 # Optional:
 #   EXTRA_BYPASS="/api/webhook/abc /api/google_assistant"   extra_bypass_paths from the options
+#   DEVICE_WEBHOOK=<webhook id>     a companion-app device's webhook id (Settings → Devices →
+#                                   the device → download diagnostics), expected gated
 #
 # Exit status is non-zero on any mismatch. Run before and after every Access change.
 set -u
@@ -17,6 +19,7 @@ set -u
 : "${HA_TOKEN:?set HA_TOKEN}"
 MODE="${MODE:-gated}"
 EXTRA_BYPASS="${EXTRA_BYPASS:-}"
+DEVICE_WEBHOOK="${DEVICE_WEBHOOK:-}"
 BASE="https://${HA_HOST}"
 COOKIE="Cookie: CF_Authorization=${CF_JWT}"
 fail=0
@@ -71,6 +74,8 @@ if [[ "$MODE" == "gated" ]]; then
   expect_gated /api/
   # webhooks carry their own secret id and are bypassed by rule; Home Assistant answers 200 to unknown ids
   expect_status 200 /api/webhook/definitely-not-a-real-webhook-id -X POST
+  # a companion-app device's own webhook is gated: its exact path beats the bypassed prefix
+  [[ -n "$DEVICE_WEBHOOK" ]] && expect_gated "/api/webhook/${DEVICE_WEBHOOK}" -X POST
   expect_gated /api/websocket
   expect_status 200 /api/ -H "$COOKIE" -H "Authorization: Bearer ${HA_TOKEN}"
   expect_status 401 /api/ -H "$COOKIE"
