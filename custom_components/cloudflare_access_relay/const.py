@@ -93,6 +93,15 @@ GATED_OPEN_PATHS: Final[tuple[str, ...]] = (
 # the router.
 TOKEN_CALLER_BYPASS_PATHS: Final[tuple[str, ...]] = ("/api/google_assistant", "/api/alexa")
 
+# The companion app reports through a webhook whose only credential is its id in the URL.
+# Unlike other webhook callers the app holds the Access cookie (the relay gave it one, and
+# the Android app sends it with every request), so each device's webhook path is added to
+# the gate application: a path longer than the bypassed `/api/webhook` prefix wins in
+# Access. Discovered from the mobile_app config entries and kept in step as devices come
+# and go.
+MOBILE_APP_DOMAIN: Final = "mobile_app"
+WEBHOOK_PATH: Final = "/api/webhook"
+
 APP_NAME_PREFIX: Final = "ha-relay:"
 GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
 BYPASS_APP_NAME_FMT: Final = APP_NAME_PREFIX + " bypass {hostname}"

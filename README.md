@@ -85,6 +85,7 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 | `/cloudflare_access_relay/connect`, `/cloudflare_access_relay/static` | The connect page and the relay's own JavaScript |
 | `/api/cloudflare_access_relay` | Flow creation, status poll, session check; every view there requires Home Assistant authentication |
 | `/api/google_assistant`, `/api/alexa` | Google's and Amazon's servers authenticate with a Home Assistant OAuth token and never hold the cookie. The router cannot tell these from the rest of the API, so they are declared; bypassed whenever the origin enforces Access-bound tokens (below), whether or not the integration is loaded |
+| **except** `/api/webhook/<id>` of every companion-app device | Gated, not bypassed: the exact path goes on the gate application and beats the bypassed prefix (see *Companion-app device webhooks*) |
 | *extra bypassed paths* option | Anything else a token-bearing external caller must reach, e.g. a Prometheus scraper on `/api/prometheus` |
 
 Not bypassed although registered without authentication: the WebSocket, onboarding, the
@@ -125,8 +126,25 @@ for; until then the vendor endpoints stay gated rather than bypassed. Requests o
 network never see the rule. The option *Require Access-bound tokens on bypassed paths* turns
 it off, in which case the vendor endpoints rely on Home Assistant authentication alone.
 
-Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
-is what makes the bypass list work; the live test asserts it on every run.
+### Companion-app device webhooks
+
+The companion app reports location, sensors and events through `/api/webhook/<id>`, whose only
+credential is the id in the URL, and that webhook accepts any service call and template. Every
+other webhook caller is a foreign server that cannot hold the cookie, but the app can: the relay
+gave it one, and the Android app sends it with every native request. So each registered
+device's webhook path is added to the gate application, where its longer path wins over the
+bypassed `/api/webhook` prefix, and the device webhook requires the Access cookie like the rest
+of the app's traffic. Devices are read from the mobile_app entries and followed as they register
+and unregister; the gate application is rewritten only when the set changes, and only while
+the gate is enabled.
+
+The iOS app never sends cookies with its native requests, so an iOS device's webhook stops
+working once gated. On iOS use Home Assistant in the browser, or a build of the app that
+presents the WebView's cookies on native requests.
+
+Cloudflare precedence: a more specific path rule wins over the hostname-wide application, and
+an exact path on the gate application wins over a bypassed prefix above it. That is what makes
+the bypass list and the device-webhook exception work; the live test asserts both on every run.
 
 Removing the integration deletes both applications (option, default on), which restores the
 un-gated state. Flipping the gate off in the options takes seconds and keeps everything else.
@@ -183,6 +201,7 @@ code, and are re-checked by `tests/live` in CI.
 | With *Binding Cookie* enabled a copied cookie is refused, so it must stay off | verified: cookie alone → redirect to login |
 | Session duration ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
 | A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
+| An exact path on the gate application takes precedence over a bypassed prefix above it (`/api/webhook/<id>` under `/api/webhook`) | verified 19 Sep 2026, re-checked by `tests/live` |
 | Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
 | The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
 | The app's WebView hands only the Access redirect to the browser and stays on the page | **still open**. The app's WebView only loads its own server, so this is observed on the Home Assistant hostname itself during rollout step 3 (gate off, callback path gated): tap *Sign in with Cloudflare* on the connect page and watch whether the system browser opens while the app stays on the page. Either outcome works: if the WebView follows the redirect itself, the login lands the cookie in the shared jar directly |
@@ -235,8 +254,9 @@ logs in with its run-scoped service token, so nobody can open the test host in a
    change.** Rollback is the same switch, or removing the integration.
 5. Device acceptance, gate on: dashboard, HACS panel, camera images and notification
    tap-throughs load; the device's refresh token `last_used_ip` keeps updating; kill and
-   relaunch the app, background sensor updates (which arrive on the bypassed
-   `/api/webhook/<id>`) continue.
+   relaunch the app, background sensor updates (which arrive on the device's gated
+   `/api/webhook/<id>`, so they prove the cookie travels with native requests) continue.
+   `check_edge.sh` with `DEVICE_WEBHOOK=<id>` confirms the path is gated at the edge.
 6. Expiry rehearsal: set the session duration to `15m`, wait, confirm the banner and the
    notification appear and that *Connect* restores service. Set the duration back.
 
@@ -283,7 +303,8 @@ Assistant's own login page. Everything it needs is bypassed.
   surface that a Home Assistant session reaches (the frontend, the API, the WebSocket, user
   content). Endpoints Home Assistant exposes without a session keep exactly the protection
   they have without Access (a webhook id, a signed URL, an OAuth token); they are not
-  weakened, and not strengthened either. Callers that authenticate with a Home Assistant
+  weakened, and not strengthened either, except the companion app's own device webhooks,
+  which are gated. Callers that authenticate with a Home Assistant
   token from outside a session (scripts, Prometheus, a reverse-proxied dashboard) are gated:
   give them an Access service token, or list their path in the extra bypassed paths.
 - If Access is also an OIDC identity provider for a login integration, that SaaS application

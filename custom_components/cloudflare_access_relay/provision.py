@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 import logging
 from typing import Any
@@ -70,17 +71,19 @@ def gate_include_rules(options: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"email": {"email": e}} for e in emails]
 
 
-def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
+def desired_gate_app(options: dict[str, Any], gated_paths: Sequence[str] = ()) -> dict[str, Any]:
     """Return the desired gate application body.
 
     While the gate is disabled the application covers only the relay callback
     path, so the relay can be exercised end to end with no other change in
     behaviour. Enabling the gate widens the same application (same id, same
-    audience) to the whole hostname.
+    audience) to the whole hostname plus `gated_paths`: paths that lie under a
+    bypassed prefix but must be gated anyway (the companion-app device webhooks).
     """
     hostname = options[CONF_HOSTNAME]
     gated = bool(options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED))
     domain = hostname if gated else f"{hostname}{URL_CALLBACK}"
+    paths = sorted(map(normalise_path, gated_paths)) if gated else []
     policies: list[dict[str, Any]] = [
         {
             "name": GATE_POLICY_NAME,
@@ -105,7 +108,7 @@ def desired_gate_app(options: dict[str, Any]) -> dict[str, Any]:
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
         "domain": domain,
-        "destinations": [{"type": "public", "uri": domain}],
+        "destinations": [{"type": "public", "uri": domain}, *_destinations(hostname, paths)],
         "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
         "enable_binding_cookie": False,
         "path_cookie_attribute": False,
@@ -259,6 +262,7 @@ async def async_provision(
     bypass_app_id: str | None,
     team_domain: str | None,
     vendor_paths: bool = True,
+    gated_paths: Sequence[str] = (),
 ) -> ProvisionResult:
     """Bring the Cloudflare objects in line with the options.
 
@@ -274,7 +278,7 @@ async def async_provision(
         desired_bypass_app(options, open_paths, vendor_paths=vendor_paths),
         writes,
     )
-    gate = await _reconcile(api, gate_app_id, desired_gate_app(options), writes)
+    gate = await _reconcile(api, gate_app_id, desired_gate_app(options, gated_paths), writes)
     aud = gate.get("aud")
     if not isinstance(aud, str) or not aud:
         gate_full = await api.get_app(gate["id"])
