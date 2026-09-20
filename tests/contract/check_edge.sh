@@ -25,13 +25,18 @@ COOKIE="Cookie: CF_Authorization=${CF_JWT}"
 fail=0
 
 # status_and_location <path> [curl args...] -> "STATUS LOCATION"
+hdrs=$(mktemp)
+trap 'rm -f "$hdrs"' EXIT
 probe() {
   local path=$1; shift
-  curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$@" "${BASE}${path}"
+  local r; r=$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code} %{redirect_url}' --max-time 20 "$@" "${BASE}${path}")
+  # Access answers a non-browser client with 401 + WWW-Authenticate (managed OAuth); mark it
+  if grep -qi '^www-authenticate:' "$hdrs"; then r="$r WWW-Authenticate"; fi
+  echo "$r"
 }
 
-is_access_redirect() {  # "302 https://team.cloudflareaccess.com/..."
-  [[ "$1" =~ ^30[0-9]\ https://[^/]*\.cloudflareaccess\.com/ ]]
+is_access_redirect() {  # "302 https://team.cloudflareaccess.com/..." or "401 ... WWW-Authenticate"
+  [[ "$1" =~ ^30[0-9]\ https://[^/]*\.cloudflareaccess\.com/ ]] || [[ "$1" == 401*WWW-Authenticate ]]
 }
 
 expect_gated() {
@@ -72,6 +77,15 @@ if [[ "$MODE" == "gated" ]]; then
   echo "== hostname is gated"
   expect_gated /
   expect_gated /api/
+  # token-bearing clients go through Access too: nothing under /api is open
+  expect_gated /api/google_assistant -X POST
+  expect_gated /api/alexa/smart_home -X POST
+  # Access serves the OAuth discovery document for self-registering clients
+  if curl -sS --max-time 20 "${BASE}/.well-known/oauth-authorization-server" | grep -q authorization_endpoint; then
+    echo "ok    oauth    /.well-known/oauth-authorization-server served by Access"
+  else
+    echo "FAIL  oauth    /.well-known/oauth-authorization-server is not Access's document"; fail=1
+  fi
   # webhooks carry their own secret id and are bypassed by rule; Home Assistant answers 200 to unknown ids
   expect_status 200 /api/webhook/definitely-not-a-real-webhook-id -X POST
   # a companion-app device's own webhook is gated: its exact path beats the bypassed prefix

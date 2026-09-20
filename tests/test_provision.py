@@ -52,18 +52,15 @@ from .conftest import ALICE, BOB, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwk
 
 GATE = f"ha-relay: gate {HOSTNAME}"
 BYPASS = f"ha-relay: bypass {HOSTNAME}"
-# always bypassed: the relay's own surface and the token-authenticated vendor endpoints
+# always bypassed: the relay's own surface
 OWN = [
     "/cloudflare_access_relay/connect",
     "/cloudflare_access_relay/static",
     "/api/cloudflare_access_relay",
-    "/api/google_assistant",
-    "/api/alexa",
 ]
-# what core serves to cookie-less clients, as the router exposes it on this Home Assistant version
+# what core serves to cookie-less clients, as the router exposes it on this Home Assistant
+# version, minus the OAuth discovery documents that Access serves itself (managed OAuth)
 CORE_OPEN = [
-    "/.well-known/oauth-authorization-server",
-    "/.well-known/oauth-protected-resource",
     "/auth/authorize",
     "/auth/external/callback",
     "/auth/login_flow",
@@ -243,11 +240,49 @@ async def test_access_group_replaces_emails(
     assert gate["policies"][0]["include"] == [{"group": {"id": "grp-1"}}]
 
 
-def test_token_caller_paths_are_always_bypassed() -> None:
-    """Google's and Amazon's servers never hold a cookie; the paths are declared unconditionally."""
+def test_vendor_endpoints_and_discovery_documents_are_gated() -> None:
+    """Token-bearing clients go through Access; nothing under /api is declared open.
+
+    The OAuth discovery documents stay gated too: Access serves its own there, so a
+    self-registering client finds Access, not Home Assistant.
+    """
     paths = bypass_paths({CONF_EXTRA_BYPASS_PATHS: []}, CORE_OPEN)
-    assert "/api/google_assistant" in paths
-    assert "/api/alexa" in paths
+    assert [p for p in paths if p.startswith("/api/")] == ["/api/cloudflare_access_relay"]
+    assert not any(p.startswith("/.well-known/") for p in paths)
+
+
+def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
+    opts = {
+        "hostname": HOSTNAME,
+        "allowed_emails": [ALICE],
+        "gate_enabled": True,
+        "client_redirect_uris": ["https://claude.ai/api/mcp/auth_callback", " "],
+    }
+    gate = desired_gate_app(opts)
+    assert gate["oauth_configuration"] == {
+        "enabled": True,
+        "dynamic_client_registration": {
+            "enabled": True,
+            "allow_any_on_localhost": False,
+            "allow_any_on_loopback": False,
+            "allowed_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        },
+    }
+    assert [p["name"] for p in gate["policies"]] == ["ha-relay: allow"]
+    gate = desired_gate_app(opts, linked_app_ids=["app-b", "app-a"])
+    assert gate["policies"][-1] == {
+        "name": "ha-relay: registered clients",
+        "decision": "non_identity",
+        "precedence": 3,
+        "include": [
+            {"linked_app_token": {"app_uid": "app-a"}},
+            {"linked_app_token": {"app_uid": "app-b"}},
+        ],
+    }
+    existing = {**gate, "id": "x", "policies": [{**p, "id": "p"} for p in gate["policies"]]}
+    assert app_matches(existing, gate)
+    existing["oauth_configuration"] = {**gate["oauth_configuration"], "enabled": False}
+    assert not app_matches(existing, gate)
     # normalised, de-duplicated and collapsed onto covering prefixes
     paths = bypass_paths({CONF_EXTRA_BYPASS_PATHS: ["/static/", "static/x", "/x/"]}, CORE_OPEN)
     assert paths.count("/static") == 1 and "/static/x" not in paths and paths[-1] == "/x"
@@ -535,3 +570,112 @@ async def test_device_registered_or_removed_later_updates_gate(
     assert [p[2]["name"] for p in puts] == [GATE, GATE]
     assert _uris(puts[1][2]) == [HOSTNAME]
     assert entry.runtime_data.gated_paths == []
+
+
+async def _register_client(
+    hass: HomeAssistant, entry: MockConfigEntry, name: str, uris: list[str]
+) -> dict[str, Any]:
+    """Drive the subentry flow; return the credentials page's placeholders."""
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "oauth_client"), context={"source": "user"}
+    )
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user"
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"name": name, "redirect_uris": uris}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+    placeholders = dict(result["description_placeholders"])
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    return placeholders
+
+
+async def test_registered_client_gets_an_access_application_and_the_gate_accepts_it(
+    hass: HomeAssistant, relay: Relay
+) -> None:
+    cf = relay.cloudflare
+    shown = await _register_client(
+        hass, relay.entry, "Google Home", ["https://oauth-redirect.googleusercontent.com/r/p"]
+    )
+    client = cf.by_name(f"ha-relay: client {HOSTNAME} Google Home")
+    assert client is not None
+    assert client["type"] == "saas"
+    assert client["saas_app"]["auth_type"] == "oidc"
+    assert client["saas_app"]["redirect_uris"] == [
+        "https://oauth-redirect.googleusercontent.com/r/p"
+    ]
+    assert set(client["saas_app"]["grant_types"]) == {"authorization_code", "refresh_tokens"}
+    assert client["policies"][0]["include"] == [
+        {"email": {"email": ALICE}},
+        {"email": {"email": BOB}},
+    ]
+    # the credentials page carries what the client's console asks for
+    assert shown["client_id"] == client["saas_app"]["client_id"]
+    assert shown["client_secret"] == cf.secrets[client["id"]]
+    assert shown["authorization_url"] == (
+        f"https://{TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/{shown['client_id']}/authorization"
+    )
+    sub = next(iter(relay.entry.subentries.values()))
+    assert (
+        sub.data["app_id"] == client["id"] and sub.data["client_secret"] == shown["client_secret"]
+    )
+
+    # the entry change is picked up without a reload: the gate accepts the client's tokens
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=REDISCOVER_COOLDOWN_SECONDS + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    gate = cf.by_name(GATE)
+    assert gate["policies"][-1]["include"] == [{"linked_app_token": {"app_uid": client["id"]}}]
+
+    # removing the client removes its application and the rule
+    hass.config_entries.async_remove_subentry(relay.entry, sub.subentry_id)
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=2 * REDISCOVER_COOLDOWN_SECONDS + 2))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert cf.by_name(f"ha-relay: client {HOSTNAME} Google Home") is None
+    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-relay: allow"]
+
+
+async def test_client_registration_survives_a_reload_and_a_lost_application(
+    hass: HomeAssistant, relay: Relay
+) -> None:
+    cf = relay.cloudflare
+    shown = await _register_client(
+        hass, relay.entry, "Alexa", ["https://layla.amazon.com/api/skill/link/x"]
+    )
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=REDISCOVER_COOLDOWN_SECONDS + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    client_id = cf.by_name(f"ha-relay: client {HOSTNAME} Alexa")["id"]
+    writes = len(cf.writes())
+
+    assert await hass.config_entries.async_reload(relay.entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(cf.writes()) == writes, "a reload writes nothing"
+    assert relay.entry.runtime_data.client_apps == {next(iter(relay.entry.subentries)): client_id}
+
+    # the application was deleted in the dashboard: recreated, with new credentials
+    del cf.apps[client_id]
+    assert await hass.config_entries.async_reload(relay.entry.entry_id)
+    await hass.async_block_till_done()
+    recreated = cf.by_name(f"ha-relay: client {HOSTNAME} Alexa")
+    assert recreated is not None and recreated["id"] != client_id
+    sub = next(iter(relay.entry.subentries.values()))
+    assert sub.data["app_id"] == recreated["id"]
+    assert sub.data["client_secret"] == cf.secrets[recreated["id"]] != shown["client_secret"]
+    gate = cf.by_name(GATE)
+    assert gate["policies"][-1]["include"] == [{"linked_app_token": {"app_uid": recreated["id"]}}]
+
+    # an application left behind by a client removed while Home Assistant was down
+    stray = {**recreated, "id": "stray", "name": f"ha-relay: client {HOSTNAME} Old"}
+    cf.apps["stray"] = stray
+    assert await hass.config_entries.async_reload(relay.entry.entry_id)
+    await hass.async_block_till_done()
+    assert "stray" not in cf.apps
+
+
+async def test_remove_entry_deletes_client_apps(hass: HomeAssistant, relay: Relay) -> None:
+    cf = relay.cloudflare
+    await _register_client(hass, relay.entry, "Google Home", ["https://example.com/cb"])
+    assert cf.by_name(f"ha-relay: client {HOSTNAME} Google Home") is not None
+    await hass.config_entries.async_remove(relay.entry.entry_id)
+    await hass.async_block_till_done()
+    assert cf.apps == {}

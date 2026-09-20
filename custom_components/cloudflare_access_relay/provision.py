@@ -11,8 +11,10 @@ from .cloudflare_api import CloudflareAccessApi
 from .const import (
     BYPASS_APP_NAME_FMT,
     BYPASS_POLICY_NAME,
+    CLIENT_APP_NAME_FMT,
     CONF_ACCESS_GROUP_ID,
     CONF_ALLOWED_EMAILS,
+    CONF_CLIENT_REDIRECT_URIS,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
@@ -21,10 +23,10 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     GATE_APP_NAME_FMT,
+    GATE_LINKED_POLICY_NAME,
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
     OWN_BYPASS_PATHS,
-    TOKEN_CALLER_BYPASS_PATHS,
     URL_CALLBACK,
 )
 from .paths import collapse_prefixes
@@ -40,19 +42,14 @@ def normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def bypass_paths(
-    options: dict[str, Any], open_paths: list[str], *, vendor_paths: bool = True
-) -> list[str]:
+def bypass_paths(options: dict[str, Any], open_paths: list[str]) -> list[str]:
     """Return the sorted, prefix-collapsed list of bypassed paths.
 
     `open_paths` is what Home Assistant serves to cookie-less clients, as discovered
     from the router (`paths.discover_open_paths`); the integration's own paths and the
-    configured extras are added to it, and the token-authenticated vendor endpoints
-    when `vendor_paths` is set (only while the origin enforces Access-bound tokens).
+    configured extras are added to it.
     """
     paths: list[str] = [*open_paths, *OWN_BYPASS_PATHS]
-    if vendor_paths:
-        paths.extend(TOKEN_CALLER_BYPASS_PATHS)
     for raw in options.get(CONF_EXTRA_BYPASS_PATHS) or []:
         if raw and raw.strip():
             paths.append(raw)
@@ -71,7 +68,11 @@ def gate_include_rules(options: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"email": {"email": e}} for e in emails]
 
 
-def desired_gate_app(options: dict[str, Any], gated_paths: Sequence[str] = ()) -> dict[str, Any]:
+def desired_gate_app(
+    options: dict[str, Any],
+    gated_paths: Sequence[str] = (),
+    linked_app_ids: Sequence[str] = (),
+) -> dict[str, Any]:
     """Return the desired gate application body.
 
     While the gate is disabled the application covers only the relay callback
@@ -79,6 +80,12 @@ def desired_gate_app(options: dict[str, Any], gated_paths: Sequence[str] = ()) -
     behaviour. Enabling the gate widens the same application (same id, same
     audience) to the whole hostname plus `gated_paths`: paths that lie under a
     bypassed prefix but must be gated anyway (the companion-app device webhooks).
+
+    Token-bearing clients are admitted by Access itself. Managed OAuth makes the gate
+    an OAuth server for clients that discover and register themselves (MCP clients);
+    the redirect URIs such clients may use come from the options. Clients registered
+    through the integration (`desired_client_app`) are admitted by a Service Auth
+    policy that accepts their applications' tokens (`linked_app_ids`).
     """
     hostname = options[CONF_HOSTNAME]
     gated = bool(options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED))
@@ -104,6 +111,16 @@ def desired_gate_app(options: dict[str, Any], gated_paths: Sequence[str] = ()) -
                 "include": [{"service_token": {"token_id": t}} for t in token_ids],
             }
         )
+    if linked_app_ids:
+        policies.append(
+            {
+                "name": GATE_LINKED_POLICY_NAME,
+                "decision": "non_identity",
+                "precedence": 3,
+                "include": [{"linked_app_token": {"app_uid": i}} for i in sorted(linked_app_ids)],
+            }
+        )
+    redirect_uris = [u.strip() for u in options.get(CONF_CLIENT_REDIRECT_URIS) or [] if u.strip()]
     return {
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
@@ -116,15 +133,54 @@ def desired_gate_app(options: dict[str, Any], gated_paths: Sequence[str] = ()) -
         "same_site_cookie_attribute": "lax",
         "app_launcher_visible": False,
         "policies": policies,
+        "oauth_configuration": {
+            "enabled": True,
+            "dynamic_client_registration": {
+                "enabled": True,
+                "allow_any_on_localhost": False,
+                "allow_any_on_loopback": False,
+                "allowed_uris": sorted(redirect_uris),
+            },
+        },
     }
 
 
-def desired_bypass_app(
-    options: dict[str, Any], open_paths: list[str], *, vendor_paths: bool = True
+def desired_client_app(
+    options: dict[str, Any], name: str, redirect_uris: list[str]
 ) -> dict[str, Any]:
+    """Return the desired application body for a client registered by hand.
+
+    An Access for SaaS OIDC application: it is the client's registration with
+    Access, with the client id and secret its console wants and Access's own
+    authorization and token endpoints. Who may link the client is the gate's own
+    allow rule. The tokens it issues are accepted by the gate (`desired_gate_app`).
+    """
+    hostname = options[CONF_HOSTNAME]
+    return {
+        "type": "saas",
+        "name": CLIENT_APP_NAME_FMT.format(hostname=hostname, name=name),
+        "app_launcher_visible": False,
+        "saas_app": {
+            "auth_type": "oidc",
+            "redirect_uris": sorted(u.strip() for u in redirect_uris if u.strip()),
+            "grant_types": ["authorization_code", "refresh_tokens"],
+            "scopes": ["openid", "email", "profile"],
+        },
+        "policies": [
+            {
+                "name": GATE_POLICY_NAME,
+                "decision": "allow",
+                "precedence": 1,
+                "include": gate_include_rules(options),
+            }
+        ],
+    }
+
+
+def desired_bypass_app(options: dict[str, Any], open_paths: list[str]) -> dict[str, Any]:
     """Return the desired bypass application body."""
     hostname = options[CONF_HOSTNAME]
-    paths = bypass_paths(options, open_paths, vendor_paths=vendor_paths)
+    paths = bypass_paths(options, open_paths)
     destinations = _destinations(hostname, paths)
     return {
         "type": "self_hosted",
@@ -181,14 +237,49 @@ def _json_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _oauth_key(config: dict[str, Any] | None) -> str:
+    config = config or {}
+    dcr = config.get("dynamic_client_registration") or {}
+    return _json_key(
+        {
+            "enabled": bool(config.get("enabled")),
+            "dcr": bool(dcr.get("enabled")),
+            "localhost": bool(dcr.get("allow_any_on_localhost")),
+            "loopback": bool(dcr.get("allow_any_on_loopback")),
+            "uris": sorted(dcr.get("allowed_uris") or []),
+        }
+    )
+
+
+def _saas_key(config: dict[str, Any] | None) -> str:
+    config = config or {}
+    return _json_key(
+        {
+            "auth_type": config.get("auth_type"),
+            "redirect_uris": sorted(config.get("redirect_uris") or []),
+            "grant_types": sorted(config.get("grant_types") or []),
+            "scopes": sorted(config.get("scopes") or []),
+        }
+    )
+
+
 def app_matches(existing: dict[str, Any], desired: dict[str, Any]) -> bool:
     """Return True when the existing app already carries the desired config."""
     for key in _COMPARED_FIELDS:
         if key in desired and existing.get(key, _CF_DEFAULTS.get(key)) != desired[key]:
             return False
-    have = {(d.get("type"), d.get("uri")) for d in existing.get("destinations") or []}
-    want = {(d.get("type"), d.get("uri")) for d in desired["destinations"]}
-    if have != want:
+    if "destinations" in desired:
+        have = {(d.get("type"), d.get("uri")) for d in existing.get("destinations") or []}
+        want = {(d.get("type"), d.get("uri")) for d in desired["destinations"]}
+        if have != want:
+            return False
+    if "oauth_configuration" in desired and _oauth_key(
+        existing.get("oauth_configuration")
+    ) != _oauth_key(desired["oauth_configuration"]):
+        return False
+    if "saas_app" in desired and _saas_key(existing.get("saas_app")) != _saas_key(
+        desired["saas_app"]
+    ):
         return False
     have_pol = [_norm_policy(p) for p in existing.get("policies") or []]
     want_pol = [_norm_policy(p) for p in desired["policies"]]
@@ -213,12 +304,13 @@ async def _find_by_name(api: CloudflareAccessApi, name: str) -> dict[str, Any] |
     return None
 
 
-async def _reconcile(
+async def reconcile_app(
     api: CloudflareAccessApi,
     known_id: str | None,
     desired: dict[str, Any],
     writes: list[str],
 ) -> dict[str, Any]:
+    """Create, update or leave alone one application; return it as Cloudflare has it."""
     existing: dict[str, Any] | None = None
     if known_id:
         existing = await api.get_app(known_id)
@@ -261,8 +353,8 @@ async def async_provision(
     gate_app_id: str | None,
     bypass_app_id: str | None,
     team_domain: str | None,
-    vendor_paths: bool = True,
     gated_paths: Sequence[str] = (),
+    linked_app_ids: Sequence[str] = (),
 ) -> ProvisionResult:
     """Bring the Cloudflare objects in line with the options.
 
@@ -272,13 +364,12 @@ async def async_provision(
     writes: list[str] = []
     if not team_domain:
         team_domain = await api.get_team_domain()
-    bypass = await _reconcile(
-        api,
-        bypass_app_id,
-        desired_bypass_app(options, open_paths, vendor_paths=vendor_paths),
-        writes,
+    bypass = await reconcile_app(
+        api, bypass_app_id, desired_bypass_app(options, open_paths), writes
     )
-    gate = await _reconcile(api, gate_app_id, desired_gate_app(options, gated_paths), writes)
+    gate = await reconcile_app(
+        api, gate_app_id, desired_gate_app(options, gated_paths, linked_app_ids), writes
+    )
     aud = gate.get("aud")
     if not isinstance(aud, str) or not aud:
         gate_full = await api.get_app(gate["id"])

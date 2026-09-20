@@ -97,6 +97,10 @@ def _claims(token: str) -> dict[str, Any]:
 
 
 def _is_access_redirect(resp: httpx.Response) -> bool:
+    """Access's answer to an unauthenticated request: a redirect to the login page for a
+    browser, or (managed OAuth) a 401 pointing a non-browser client at its OAuth metadata."""
+    if resp.status_code == 401 and "www-authenticate" in resp.headers:
+        return True
     return resp.status_code in (
         301,
         302,
@@ -351,6 +355,56 @@ async def _lifecycle(
         assert (await edge.get("/api/webhook/not-a-registered-device")).status_code == 200, (
             "other webhooks stay bypassed"
         )
+
+        print("== the gate is an OAuth server: Access serves the discovery document itself")
+        gate_app = await api.get_app(entry.data[DATA_GATE_APP_ID])
+        assert gate_app and gate_app.get("oauth_configuration", {}).get("enabled") is True, gate_app
+        resp = await edge.get("/.well-known/oauth-authorization-server")
+        assert resp.status_code == 200, (resp.status_code, resp.text[:300])
+        metadata = resp.json()
+        assert "authorization_endpoint" in metadata and "headers" not in metadata, (
+            "the document must come from Access, not from the origin"
+        )
+        resp = await edge.get("/api/echo", headers={"Accept": "application/json"})
+        assert resp.status_code == 401 and "www-authenticate" in resp.headers, (
+            "a non-browser client is pointed at the OAuth metadata instead of the login page"
+        )
+
+        print("== a registered client gets an Access for SaaS application the gate accepts")
+        flow = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, "oauth_client"), context={"source": "user"}
+        )
+        result = await hass.config_entries.subentries.async_configure(
+            flow["flow_id"],
+            {"name": "Live client", "redirect_uris": ["https://example.com/oauth/callback"]},
+        )
+        assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+        shown = result["description_placeholders"]
+        assert shown["client_id"] and shown["client_secret"], shown
+        result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+        assert result["type"] is FlowResultType.CREATE_ENTRY, result
+        subentry = next(iter(entry.subentries.values()))
+        client_app = await api.get_app(subentry.data["app_id"])
+        assert client_app and client_app["type"] == "saas", client_app
+        assert client_app["saas_app"]["client_id"] == shown["client_id"]
+        resp = await http.get(f"https://{team}/cdn-cgi/access/sso/oidc/{shown['client_id']}/jwks")
+        assert resp.status_code == 200 and resp.json().get("keys"), "the client's own key endpoint"
+
+        async def gate_links_client() -> bool:
+            app = await api.get_app(entry.data[DATA_GATE_APP_ID])
+            return bool(app) and any(
+                rule.get("linked_app_token", {}).get("app_uid") == subentry.data["app_id"]
+                for pol in app["policies"]
+                for rule in pol.get("include", [])
+            )
+
+        assert await _until(gate_links_client, "linked client rule on the gate", 60)
+        hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+
+        async def client_gone() -> bool:
+            return await api.get_app(subentry.data["app_id"]) is None
+
+        assert await _until(client_gone, "client application deleted", 60)
         resp = await edge.post("/auth/token/setcookie", json={"v": "probe-value"})
         assert resp.status_code == 200
         assert resp.headers.get_list("set-cookie") == [

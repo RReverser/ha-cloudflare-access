@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Cloudflare Access relay",
-        "description": "The integration creates and maintains two Access applications for the hostname: a gate (allow policy for the people listed) and a bypass (login, static assets and the relay endpoints). The gate starts disabled: only the relay callback path is protected until you enable it in the options.",
+        "description": "The integration creates and maintains two Access applications for the hostname: a gate (allow policy for the people listed, and Access's own OAuth server for token-bearing clients) and a bypass (login, static assets and the relay endpoints). The gate starts disabled: only the relay callback path is protected until you enable it in the options.",
         "data": {
           "api_token": "Cloudflare API token",
           "account_id": "Cloudflare account ID",
@@ -19,7 +19,7 @@
           "renew_days": "Renew when fewer days remain",
           "check_interval_min": "Check interval",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
-          "require_bound_tokens": "Require Access-bound tokens on bypassed paths"
+          "client_redirect_uris": "Redirect URIs allowed for self-registering clients"
         },
         "data_description": {
           "api_token": "Account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
@@ -30,12 +30,14 @@
           "session_duration": "Lifetime of the Access token, e.g. 720h. Cloudflare's ceiling is one month.",
           "identity_claim": "JWT claim compared with the Home Assistant user, usually email.",
           "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers.",
-          "require_bound_tokens": "On requests that reach Home Assistant through Cloudflare without an Access token (bypassed paths, e.g. vendor endpoints), accept a Home Assistant bearer token only if it was issued by a login made under an Access identity. Off: bypassed paths rely on Home Assistant authentication alone."
+          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\"."
         }
       },
       "reauth_confirm": {
         "title": "Replace the Cloudflare API token",
-        "data": { "api_token": "Cloudflare API token" }
+        "data": {
+          "api_token": "Cloudflare API token"
+        }
       }
     },
     "error": {
@@ -46,7 +48,8 @@
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
       "no_policy_subject": "List at least one e-mail address or an Access group ID.",
       "invalid_email": "One of the e-mail addresses is not valid.",
-      "required": "This field is required."
+      "required": "This field is required.",
+      "invalid_redirect_uri": "Redirect URIs must start with https://."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
@@ -71,20 +74,68 @@
           "renew_days": "Renew when fewer days remain",
           "check_interval_min": "Check interval",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
-          "require_bound_tokens": "Require Access-bound tokens on bypassed paths"
+          "client_redirect_uris": "Redirect URIs allowed for self-registering clients"
+        },
+        "data_description": {
+          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\"."
         }
       }
     },
     "error": {
       "no_policy_subject": "List at least one e-mail address or an Access group ID.",
       "invalid_email": "One of the e-mail addresses is not valid.",
-      "required": "This field is required."
+      "required": "This field is required.",
+      "invalid_redirect_uri": "Redirect URIs must start with https://."
     }
   },
   "issues": {
     "restart_required": {
-      "title": "Restart Home Assistant to enforce Access-bound tokens",
-      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed. Until Home Assistant is restarted, the vendor endpoints (Google Assistant, Alexa) stay gated by Access instead of being bypassed."
+      "title": "Restart Home Assistant to accept clients authenticated by Cloudflare Access",
+      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed. Until Home Assistant is restarted, requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access admitted are rejected by Home Assistant."
+    }
+  },
+  "config_subentries": {
+    "oauth_client": {
+      "entry_type": "OAuth client",
+      "initiate_flow": {
+        "user": "Add OAuth client"
+      },
+      "step": {
+        "user": {
+          "title": "Register an OAuth client",
+          "description": "For a client whose console asks for a client id and secret (Google Home account linking, the Alexa skill, any service that cannot register itself). Access issues the credentials; the next page shows them together with the authorization and token URLs to enter in that console. Who may link the client is the gate's own allow rule.",
+          "data": {
+            "name": "Name",
+            "redirect_uris": "Redirect URIs"
+          },
+          "data_description": {
+            "name": "Anything that identifies the client to you, e.g. Google Home.",
+            "redirect_uris": "The callback URL(s) the client's console shows. Exact https:// URLs."
+          }
+        },
+        "reconfigure": {
+          "title": "Change the OAuth client",
+          "description": "Saving updates the registration in Access and shows the credentials again.",
+          "data": {
+            "name": "Name",
+            "redirect_uris": "Redirect URIs"
+          }
+        },
+        "credentials": {
+          "title": "Credentials for {name}",
+          "description": "Enter these in the client's console. The secret is shown only here and on reconfiguration.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+        }
+      },
+      "error": {
+        "required": "This field is required.",
+        "invalid_redirect_uri": "Redirect URIs must start with https://.",
+        "invalid_auth": "Cloudflare rejected the API token.",
+        "cannot_connect": "Cloudflare could not be reached.",
+        "api_error": "Cloudflare returned an error; see the log."
+      },
+      "abort": {
+        "reconfigure_successful": "The client was updated."
+      }
     }
   }
 }
