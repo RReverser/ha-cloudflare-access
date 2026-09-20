@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -84,15 +85,36 @@ def find_client(api: Api) -> dict[str, Any] | None:
     return next((c for c in clients if c.get("client_name") == CLIENT_NAME), None)
 
 
+def permission_group(groups: list[dict[str, Any]], pattern: str, scope: str) -> dict[str, Any]:
+    """Return the permission group whose name matches `pattern` for the resource scope."""
+    found = [
+        g
+        for g in groups
+        if re.search(pattern, g["name"], re.IGNORECASE) and scope in (g.get("scopes") or [scope])
+    ]
+    if len(found) != 1:
+        names = sorted(g["name"] for g in groups if scope in (g.get("scopes") or [scope]))
+        raise SystemExit(f"{len(found)} permission groups match {pattern!r}; available: {names}")
+    return found[0]
+
+
 def cmd_grant(api: Api, args: argparse.Namespace) -> None:
     """Give this token OAuth Clients Write and DNS Write on the client URL's zone."""
     me = api.call("GET", "/user/tokens/verify")
     token = api.call("GET", f"/user/tokens/{me['id']}")
-    groups = {g["name"]: g for g in api.call("GET", "/user/tokens/permission_groups")}
+    groups = api.call("GET", "/user/tokens/permission_groups")
     zone = zone_for(api, urlparse(args.client_uri).hostname or "")
     wanted = [
-        (groups["OAuth Clients Write"], {f"com.cloudflare.api.account.{api.account_id}": "*"}),
-        (groups["DNS Write"], {f"com.cloudflare.api.account.zone.{zone['id']}": "*"}),
+        (
+            permission_group(
+                groups, r"oauth.?clients?.*(write|edit)", "com.cloudflare.api.account"
+            ),
+            {f"com.cloudflare.api.account.{api.account_id}": "*"},
+        ),
+        (
+            permission_group(groups, r"^dns (write|edit)$", "com.cloudflare.api.account.zone"),
+            {f"com.cloudflare.api.account.zone.{zone['id']}": "*"},
+        ),
     ]
     policies = list(token["policies"])
     present = {
