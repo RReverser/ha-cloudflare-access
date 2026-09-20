@@ -123,28 +123,15 @@ async def _async_reconcile_clients(
     entry: ConfigEntry,
     api: CloudflareAccessApi,
     options: dict[str, Any],
-    previous: dict[str, str],
 ) -> dict[str, str]:
     """Bring the registered clients' applications in line with the subentries.
 
-    A client whose subentry was removed loses its application; a client whose
-    application was lost outside the integration gets a new one, with new
-    credentials that its console must be given again (the subentry is updated and a
-    warning logged).
+    A client whose application was lost outside the integration gets a new one,
+    with new credentials that its console must be given again (the subentry is
+    updated and a warning logged). Applications of removed clients are deleted by
+    `_async_delete_stale_clients`, once the gate no longer refers to them.
     """
     current = client_subentries(entry)
-    for sid, app_id in previous.items():
-        if sid not in current:
-            _LOGGER.info("Deleting the Access application of removed client %s", sid)
-            await api.delete_app(app_id)
-    if not previous:
-        # Setup: a client removed while Home Assistant was down left its application behind.
-        prefix = CLIENT_APP_NAME_FMT.format(hostname=options[CONF_HOSTNAME], name="")
-        referenced = {sub.data.get(DATA_CLIENT_APP_ID) for sub in current.values()}
-        for app in await api.list_apps():
-            if app.get("name", "").startswith(prefix) and app["id"] not in referenced:
-                _LOGGER.info("Deleting the orphaned client application %s", app["name"])
-                await api.delete_app(app["id"])
     apps: dict[str, str] = {}
     for sid, sub in current.items():
         desired = desired_client_app(
@@ -167,6 +154,32 @@ async def _async_reconcile_clients(
         if writes:
             _LOGGER.info("Cloudflare Access objects written: %s", ", ".join(writes))
     return apps
+
+
+async def _async_delete_stale_clients(
+    api: CloudflareAccessApi,
+    options: dict[str, Any],
+    previous: dict[str, str] | None,
+    current: dict[str, str],
+) -> None:
+    """Delete the applications of removed clients.
+
+    Runs after the gate was written without their rules: Cloudflare accepts the
+    deletion of a still-referenced application but refuses every later write of the
+    gate that carries the stale rule. `previous` is None at setup, when a client
+    removed while Home Assistant was down is found by its application name instead.
+    """
+    if previous is not None:
+        for sid, app_id in previous.items():
+            if sid not in current:
+                _LOGGER.info("Deleting the Access application of removed client %s", sid)
+                await api.delete_app(app_id)
+        return
+    prefix = CLIENT_APP_NAME_FMT.format(hostname=options[CONF_HOSTNAME], name="")
+    for app in await api.list_apps():
+        if app.get("name", "").startswith(prefix) and app["id"] not in current.values():
+            _LOGGER.info("Deleting the orphaned client application %s", app["name"])
+            await api.delete_app(app["id"])
 
 
 async def _async_provision_entry(
@@ -213,10 +226,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: RelayConfigEntry) -> boo
     open_paths = discover_open_paths(hass)
     gated_paths = device_webhook_paths(hass)
     try:
-        client_apps = await _async_reconcile_clients(hass, entry, api, options, {})
+        client_apps = await _async_reconcile_clients(hass, entry, api, options)
         result = await _async_provision_entry(
             hass, entry, api, options, open_paths, gated_paths, client_apps
         )
+        await _async_delete_stale_clients(api, options, None, client_apps)
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except CloudflareUnavailableError as err:
@@ -299,13 +313,12 @@ def _async_track_surface(hass: HomeAssistant, entry: ConfigEntry, data: RelayDat
             len(set(data.client_apps) - clients),
         )
         try:
-            client_apps = await _async_reconcile_clients(
-                hass, entry, data.api, data.options, data.client_apps
-            )
-            data.client_apps = client_apps
+            client_apps = await _async_reconcile_clients(hass, entry, data.api, data.options)
             await _async_provision_entry(
                 hass, entry, data.api, data.options, open_paths, gated_paths, client_apps
             )
+            await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
+            data.client_apps = client_apps
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
                 "Could not update the Access applications; reload the integration to retry: %s",
