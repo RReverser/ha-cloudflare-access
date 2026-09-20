@@ -7,4 +7,4 @@ __pycache__/
 .coverage
 coverage.xml
 node_modules/
-preflight/worker/.wrangler/
+tests/live/worker/.wrangler/
