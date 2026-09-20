@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import logging
 from typing import Any
 
+from homeassistant.auth import EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED
 from homeassistant.config_entries import (
     SIGNAL_CONFIG_ENTRY_CHANGED,
     ConfigEntry,
@@ -25,10 +26,14 @@ from homeassistant.exceptions import (
     ConfigEntryError,
     ConfigEntryNotReady,
 )
+from homeassistant.helpers import config_entry_oauth2_flow, issue_registry as ir
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.typing import ConfigType
 
+from .application_credentials import CloudflareOAuth2Implementation
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -39,8 +44,10 @@ from .const import (
     CLIENT_APP_NAME_FMT,
     CONF_CLIENT_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
+    CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_REDIRECT_URIS,
+    CONF_USER_MATCH,
     DATA_BYPASS_APP_ID,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
@@ -49,6 +56,10 @@ from .const import (
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
     DOMAIN,
+    ISSUE_NO_ALLOWED_USERS,
+    OAUTH_AUTHORIZE_URL,
+    OAUTH_CLIENT_ID,
+    OAUTH_TOKEN_URL,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
 )
@@ -62,8 +73,24 @@ from .provision import (
     desired_client_app,
     reconcile_app,
 )
+from .users import allowed_emails
 
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Offer the project's public OAuth client, when one is published."""
+    if OAUTH_CLIENT_ID:
+        config_entry_oauth2_flow.async_register_implementation(
+            hass,
+            DOMAIN,
+            CloudflareOAuth2Implementation(
+                hass, DOMAIN, OAUTH_CLIENT_ID, OAUTH_AUTHORIZE_URL, OAUTH_TOKEN_URL
+            ),
+        )
+    return True
 
 
 @dataclass
@@ -77,6 +104,8 @@ class EntryData:
     team_domain: str
     # The gate's audience tag while the gate exists; None while it is disabled.
     policy_aud: str | None
+    # The users' e-mail addresses on the allow policies, as last reconciled.
+    emails: list[str]
     # Registered clients' Access applications, by subentry id, as last reconciled.
     client_apps: dict[str, str]
 
@@ -98,6 +127,7 @@ async def _async_reconcile_clients(
     entry: ConfigEntry,
     api: CloudflareAccessApi,
     options: dict[str, Any],
+    emails: list[str],
 ) -> dict[str, str]:
     """Bring the registered clients' applications in line with the subentries.
 
@@ -109,7 +139,7 @@ async def _async_reconcile_clients(
     apps: dict[str, str] = {}
     for sid, sub in client_subentries(entry).items():
         desired = desired_client_app(
-            options, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
+            options, emails, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
         )
         writes: list[str] = []
         app = await reconcile_app(api, sub.data.get(DATA_CLIENT_APP_ID), desired, writes)
@@ -161,12 +191,14 @@ async def _async_provision_entry(
     entry: ConfigEntry,
     api: CloudflareAccessApi,
     options: dict[str, Any],
+    emails: list[str],
     client_apps: dict[str, str],
 ) -> ProvisionResult:
     """Reconcile the Access applications and persist what Cloudflare derived."""
     result = await async_provision(
         api,
         options,
+        emails,
         gate_app_id=entry.data.get(DATA_GATE_APP_ID),
         bypass_app_id=entry.data.get(DATA_BYPASS_APP_ID),
         team_domain=entry.data.get(DATA_TEAM_DOMAIN),
@@ -188,13 +220,20 @@ async def _async_provision_entry(
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
     options = effective_options(entry)
-    api = api_for(hass, entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
+    emails = allowed_emails(hass, options)
+    if not emails and (options[CONF_GATE_ENABLED] or client_subentries(entry)):
+        # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
+        raise ConfigEntryError(
+            f"No Home Assistant user has an e-mail address in the field "
+            f"{options[CONF_USER_MATCH]!r}; nobody could log in, so nothing is provisioned"
+        )
     try:
-        client_apps = await _async_reconcile_clients(hass, entry, api, options)
-        result = await _async_provision_entry(hass, entry, api, options, client_apps)
+        api = await api_for(hass, entry)
+        client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
+        result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
@@ -210,30 +249,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         verifier=JwksVerifier(get_async_client(hass), result.team_domain),
         team_domain=result.team_domain,
         policy_aud=result.policy_aud,
+        emails=emails,
         client_apps=client_apps,
     )
     entry.runtime_data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
-    _async_track_clients(hass, entry, data)
+    _async_track_changes(hass, entry, data)
     return True
 
 
 @callback
-def _async_track_clients(hass: HomeAssistant, entry: ConfigEntry, data: EntryData) -> None:
-    """Keep the applications in step with the registered clients.
+def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryData) -> None:
+    """Keep the applications in step with the users and the registered clients.
 
-    Clients are registered and removed through subentries at any time; every change
-    to this entry schedules a debounced reconciliation, which rewrites an application
-    only when its desired content changed.
+    Users come and go, and clients are registered and removed through subentries at
+    any time; every such change schedules a debounced reconciliation, which rewrites
+    an application only when its desired content changed.
     """
 
     async def _refresh() -> None:
-        if set(client_subentries(entry)) == set(data.client_apps):
+        emails = allowed_emails(hass, data.options)
+        if emails == data.emails and set(client_subentries(entry)) == set(data.client_apps):
             return
+        if not emails and (data.options[CONF_GATE_ENABLED] or client_subentries(entry)):
+            _LOGGER.warning(
+                "No Home Assistant user has an e-mail address in the field %r any more; "
+                "the Access allow policy keeps its last subjects",
+                data.options[CONF_USER_MATCH],
+            )
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                ISSUE_NO_ALLOWED_USERS,
+                is_fixable=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key=ISSUE_NO_ALLOWED_USERS,
+                translation_placeholders={CONF_USER_MATCH: data.options[CONF_USER_MATCH]},
+            )
+            return
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_NO_ALLOWED_USERS)
         try:
-            client_apps = await _async_reconcile_clients(hass, entry, data.api, data.options)
-            await _async_provision_entry(hass, entry, data.api, data.options, client_apps)
+            client_apps = await _async_reconcile_clients(
+                hass, entry, data.api, data.options, emails
+            )
+            await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
+            data.emails = emails
             data.client_apps = client_apps
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
@@ -256,6 +317,10 @@ def _async_track_clients(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             debouncer.async_schedule_call()
 
     @callback
+    def _schedule(_event: Event) -> None:
+        debouncer.async_schedule_call()
+
+    @callback
     def _stop(_event: Event) -> None:
         debouncer.async_shutdown()
 
@@ -263,6 +328,8 @@ def _async_track_clients(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
     )
+    for event in (EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED):
+        entry.async_on_unload(hass.bus.async_listen(event, _schedule))
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
 
 
@@ -278,8 +345,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     options = effective_options(entry)
     if not options[CONF_DELETE_OBJECTS_ON_REMOVE]:
         return
-    api = api_for(hass, entry)
     try:
+        api = await api_for(hass, entry)
         await async_delete_apps(
             api,
             entry.data.get(DATA_GATE_APP_ID),

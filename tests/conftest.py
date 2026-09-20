@@ -22,11 +22,10 @@ from homeassistant.auth.models import Credentials, User
 from homeassistant.core import HomeAssistant
 import jwt
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
-    CONF_ALLOWED_EMAILS,
     CONF_API_TOKEN,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_GATE_ENABLED,
@@ -189,6 +188,8 @@ class FakeCloudflare:
     secrets: dict[str, str] = field(default_factory=dict)
     requests: list[tuple[str, str, dict[str, Any] | None]] = field(default_factory=list)
     auth_fail: bool = False
+    tokens_seen: set[str] = field(default_factory=set)
+    accounts: dict[str, str] = field(default_factory=lambda: {ACCOUNT_ID: "Example"})
     org_auth_fail: bool = False
     fail_status: int | None = None
     fail_predicate: Callable[[str, str], bool] | None = None
@@ -233,7 +234,29 @@ class FakeCloudflare:
     async def _record(self, request: web.Request) -> dict[str, Any] | None:
         body = await request.json() if request.can_read_body else None
         self.requests.append((request.method, request.path, body))
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            self.tokens_seen.add(auth.removeprefix("Bearer "))
         return body
+
+    async def list_accounts(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        # paged like list_apps: the SDK asks for pages until one comes back empty
+        page = int(request.query.get("page", "1"))
+        per_page = int(request.query.get("per_page", "20"))
+        accounts = [{"id": a, "name": n} for a, n in self.accounts.items()]
+        return self._ok(
+            accounts[(page - 1) * per_page : page * per_page],
+            result_info={
+                "page": page,
+                "per_page": per_page,
+                "total_pages": max(1, -(-len(accounts) // per_page)),
+                "count": len(accounts),
+                "total_count": len(accounts),
+            },
+        )
 
     async def organizations(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -371,6 +394,7 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     fake = FakeCloudflare()
     app = web.Application()
     base = f"/accounts/{ACCOUNT_ID}/access"
+    app.router.add_get("/accounts", fake.list_accounts)
     app.router.add_get(f"{base}/organizations", fake.organizations)
     app.router.add_get(f"{base}/apps", fake.list_apps)
     app.router.add_post(f"{base}/apps", fake.create_app)
@@ -394,7 +418,6 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
 def make_entry(**options: Any) -> MockConfigEntry:
     opts: dict[str, Any] = {
         CONF_HOSTNAME: HOSTNAME,
-        CONF_ALLOWED_EMAILS: [ALICE, BOB],
         CONF_GATE_ENABLED: False,
         CONF_DELETE_OBJECTS_ON_REMOVE: True,
     }
@@ -426,8 +449,13 @@ async def access(
     fake_cloudflare: FakeCloudflare,
     jwks_server: FakeJwks,
     rsa_keys: dict[str, RsaKey],
+    alice: User,
+    bob: User,
 ) -> Access:
-    """Set the integration up against the fake servers with the gate enabled."""
+    """Set the integration up against the fake servers with the gate enabled.
+
+    Alice and Bob are the Home Assistant users, so they are the gate's allow policy.
+    """
     entry = make_entry(**{CONF_GATE_ENABLED: True})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -437,8 +465,11 @@ async def access(
 
 
 async def add_user(hass: HomeAssistant, username: str, *, name: str | None = None) -> User:
-    """Create an HA user whose built-in credential username is `username`."""
-    user = MockUser(name=name or username.split("@")[0]).add_to_hass(hass)
+    """Create an HA user whose built-in credential username is `username`.
+
+    Through the auth manager, as the UI does, so the user events fire.
+    """
+    user = await hass.auth.async_create_user(name or username.split("@")[0])
     cred = Credentials(
         auth_provider_type="homeassistant",
         auth_provider_id=None,

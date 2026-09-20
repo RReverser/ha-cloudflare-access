@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING
 
 from aiohttp import hdrs, web
 from aiohttp.typedefs import Handler
-from homeassistant.auth.models import User
 from homeassistant.components.http.const import KEY_HASS_USER
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
@@ -37,9 +36,9 @@ from .const import (
     HEADER_CF_RAY,
     HEADER_JWT,
     ISSUE_RESTART_REQUIRED,
-    USER_MATCH_NAME,
 )
 from .jwks import JwtVerifyError
+from .users import async_find_user
 
 if TYPE_CHECKING:
     from . import EntryData
@@ -68,25 +67,6 @@ def entry_for(request: web.Request) -> _Ctx | None:
     if len(entries) == 1:
         return _Ctx(hass, next(iter(entries.values())))
     return None
-
-
-def user_matches(user: User, mode: str, value: str) -> bool:
-    """Return whether the identity claim value belongs to the HA user.
-
-    `mode` is "name" (the user's display name) or the key of a credential data
-    field, such as "username" (the built-in provider) or "email" (OIDC providers
-    that store it).
-    """
-    wanted = value.strip().casefold()
-    if not wanted:
-        return False
-    if mode == USER_MATCH_NAME:
-        return (user.name or "").strip().casefold() == wanted
-    for cred in user.credentials:
-        stored = cred.data.get(mode)
-        if isinstance(stored, str) and stored.strip().casefold() == wanted:
-            return True
-    return False
 
 
 def _via_edge(request: web.Request, hostname: str) -> bool:
@@ -129,14 +109,7 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
     if not isinstance(identity, str) or not identity:
         return _reject(request, f"the assertion carries no {claim_name} claim")
     mode = options[CONF_USER_MATCH]
-    user = next(
-        (
-            u
-            for u in await ctx.hass.auth.async_get_users()
-            if u.is_active and not u.system_generated and user_matches(u, mode, identity)
-        ),
-        None,
-    )
+    user = await async_find_user(ctx.hass, mode, identity)
     if user is None:
         return _reject(request, f"no Home Assistant user has {mode} = {identity!r}")
     request[KEY_AUTHENTICATED] = True

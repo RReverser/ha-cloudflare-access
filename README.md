@@ -26,20 +26,25 @@ Google Home or Alexa link, nor on a real phone.
   zone in the account.
 - A Zero Trust organization with an identity provider. Everything used is documented by
   Cloudflare without a plan restriction; managed OAuth is marked beta by Cloudflare.
-- A Cloudflare **account-level API token** with two permissions: **Access: Apps and Policies:
-  Edit** and **Access: Organizations, Identity Providers, and Groups: Read** (only to read the
-  team domain). The integration stores it in the config entry and uses it for nothing else.
-- Home Assistant users whose identity can be matched to the Access identity (by default: the
-  built-in login username equals the identity provider e-mail; see *Options*).
+- A way for the integration to call the Cloudflare API as you: **sign in with Cloudflare**
+  through an OAuth client of your own (see *Sign-in*), or an account-level API token with the
+  permissions **Access: Apps and Policies: Edit** and **Access: Organizations, Identity
+  Providers, and Groups: Read**. Either is stored in the config entry and used for nothing
+  else.
+- Home Assistant users whose login identity is their identity-provider e-mail address (by
+  default the built-in login username; see *Options*). Those addresses are the gate's allow
+  policy, and the address of an admitted request picks the user.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.
 
 ## How it works
 
-One Access application, the **gate**, covers the hostname. Its allow policy lists the people
-(or an Access group) who may log in. Every request for the hostname goes through it: the
-frontend, the login pages, the API, the WebSocket, webhooks, media, everything.
+One Access application, the **gate**, covers the hostname. Its allow policy lists the e-mail
+addresses of the Home Assistant users, and follows them: a user added, removed, deactivated or
+renamed in Home Assistant is reflected in the policy within seconds, without a reload. Every
+request for the hostname goes through it: the frontend, the login pages, the API, the
+WebSocket, webhooks, media, everything.
 
 **Browsers and the companion app.** The browser lands on the Access login page, logs in with
 the identity provider, then reaches Home Assistant's own login with the Access cookie set.
@@ -100,7 +105,7 @@ writer; an application edited outside the integration is repaired on the next re
 
 | Application | Exists | Destinations | Policies | Other |
 |---|---|---|---|---|
-| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the listed e-mails or group; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the listed redirect URIs |
+| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the listed redirect URIs |
 | `ha-access: bypass <host>` | while *Bypassed paths* is non-empty | the listed paths | `bypass` for everyone | |
 | `ha-access: client <host> <name>` | one per registered client | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
@@ -115,12 +120,37 @@ and keeps everything else.
 
 1. HACS → Integrations → three dots → *Custom repositories* → add this repository as an
    *Integration*, then install **Cloudflare Access**. Restart Home Assistant.
-2. Settings → Devices & services → *Add integration* → **Cloudflare Access**.
-3. Fill in the form: the Cloudflare API token (permissions above), the account ID (Cloudflare
-   dashboard, right column of any zone overview), the hostname (pre-filled from the external
-   URL), and the allowed e-mail addresses or an Access group ID.
-4. The integration validates the token by reading the team domain and creates nothing yet:
-   the gate starts **off**. Read *Rollout* before enabling it.
+2. Settings → Devices & services → *Add integration* → **Cloudflare Access**, and choose
+   **Sign in with Cloudflare** (see *Sign-in*; needs the OAuth client created once) or **Use
+   an API token** (token and account ID; the account ID is in the right column of any zone
+   overview in the Cloudflare dashboard).
+3. After the sign-in, the account is picked if there is one, asked for otherwise. Then the
+   hostname (pre-filled from the external URL) and the advanced options. The form shows which
+   users' addresses the gate would let in.
+4. The integration validates the credential by listing the Access applications and reading
+   the team domain, and creates nothing yet: the gate starts **off**. Read *Rollout* before
+   enabling it.
+
+### Sign-in
+
+Cloudflare's OAuth lets the integration ask for exactly the permissions it uses, on the
+consent page, instead of a token you assemble by hand: `access.write` (Access: Apps and
+Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
+Read) and `offline_access` (a refresh token, so the sign-in lasts). Cloudflare OAuth clients
+are created by the account that uses them; one that any Cloudflare account could use has to
+be published by its owner, which this project has not done yet. Until then, create the client
+yourself, once:
+
+1. Cloudflare dashboard → *Manage Account* → *OAuth clients* → *Create client*: any name,
+   redirect URL `https://my.home-assistant.io/redirect/oauth`, grant types *authorization
+   code* and *refresh token*, response type *code*, token endpoint authentication *none*
+   (PKCE), and the three scopes above. The client can stay private to your account.
+2. Home Assistant → Settings → Devices & services → three dots → *Application credentials* →
+   *Add*: pick **Cloudflare Access**, enter the client ID and leave the secret empty.
+3. Add the integration and choose *Sign in with Cloudflare*.
+
+The token set is refreshed before every API call; when Cloudflare stops accepting it, the
+integration asks to sign in again.
 
 ## Rollout
 
@@ -145,18 +175,21 @@ and keeps everything else.
 | Option | Default | Meaning |
 |---|---|---|
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
-| Allowed e-mail addresses / Access group ID | | Who the gate lets in, and who may link a registered client |
 | Service token IDs allowed through the gate | empty | Adds a Service Auth policy so callers presenting `CF-Access-Client-Id/Secret` pass the gate. Used by the live tests; an alternative for your own machine callers |
 | Access session duration | `720h` | Lifetime of an Access session, `<n>h` or `<n>m`, and of a registered client's refresh token. The dashboard offers up to one month; the API accepted `8760h` and Access honoured it (verified) |
 | Redirect URIs allowed for self-registering clients | empty | `https://` URLs, optionally ending in `/*`, that a dynamically registering client may use. Without an entry here, managed OAuth registers no client |
 | Bypassed paths | empty | Hostname-relative path prefixes reachable without Access. Nothing is bypassed unless listed |
 | Identity claim | `email` | Claim of the Access assertion compared with the Home Assistant user |
-| Home Assistant user field | `username` | Which user field must equal the claim (case-insensitive): `username` (built-in login), `name` (display name), or any credential field a login integration stores, e.g. `email` |
+| Home Assistant user field | `username` | Which user field holds the address: `username` (built-in login), `name` (display name), or any credential field a login integration stores, e.g. `email`. The addresses found there (active, non-system users; values without `@` are skipped) are the allow policy, and the same field, compared case-insensitively with the identity claim, picks the user for an admitted request |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access → Reload), which is the way to repair
 applications edited outside the integration. Unchanged applications are never written.
+
+The gate cannot be enabled while no user has an address in the configured field: nobody could
+log in. If the last such user goes while the gate is on, the policy keeps its last subjects and
+a repair issue says so.
 
 Registered OAuth clients are subentries of the integration entry (*Add OAuth client*); each
 stores its application id, client id and secret, and *Reconfigure* shows the credentials
@@ -214,6 +247,11 @@ and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 - Access issues, validates and revokes the tokens of Google, Alexa and MCP clients; Home
   Assistant issues them none.
 - Bypassed paths are exactly what you listed; there is no discovery and no default.
+- Who may log in is not a list to maintain in two places: the people who have a Home Assistant
+  account are the people the gate lets in, and nobody else.
+- The Cloudflare credential is scoped to what the integration does. With the sign-in, the
+  consent page shows the three scopes; the token set lives in the config entry like any other
+  Home Assistant OAuth integration's.
 
 ## Out of scope by design
 
@@ -252,6 +290,14 @@ The repository needs a description, topics and a LICENSE file before HACS accept
 - An earlier design relayed the Access cookie into the companion app around a bypassed login;
   with the login gated, the app obtains the cookie from Access itself and nothing needs
   relaying. The integration's domain, `cloudflare_access_relay`, dates from that design.
+- The allow policy is derived from the Home Assistant users rather than entered, because the
+  two lists mean the same thing (an address that is not a user cannot log in anyway) and an
+  entered list drifts. A user without an address in the field cannot be a policy subject and
+  is left out; the options page and the setup form show who is in.
+- Signing in uses Cloudflare's self-managed OAuth clients (dashboard → Manage Account → OAuth
+  clients), which exist on every plan. A client is private to the account that created it
+  until its owner publishes it, so until this project publishes one, each installation
+  creates its own and adds it as an application credential.
 - Registered clients are Access for SaaS applications because Google's and Amazon's consoles
   take a static client id and secret and fixed endpoints and offer no discovery or dynamic
   registration (checked against their documentation on 20 Sep 2026). MCP clients do both,

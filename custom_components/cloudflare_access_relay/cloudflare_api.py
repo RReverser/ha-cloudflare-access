@@ -7,6 +7,7 @@ the SDK's exceptions onto three outcomes the integration cares about.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 import logging
 from typing import Any
 
@@ -62,6 +63,8 @@ def _errors_of(err: APIStatusError) -> list[dict[str, Any]]:
 
 def _translate(err: Exception, what: str) -> CloudflareError:
     """Map an SDK exception onto the integration's error classes."""
+    if isinstance(err, CloudflareError):
+        return err  # raised by the token source (an OAuth refresh that was refused)
     if isinstance(err, AuthenticationError | PermissionDeniedError):
         detail = "; ".join(f"{e.get('code')}: {e.get('message')}" for e in _errors_of(err))
         return CloudflareAuthError(
@@ -98,15 +101,26 @@ class CloudflareAccessApi:
         http_client: httpx.AsyncClient | None = None,
         base_url: str | None = None,
         max_retries: int | None = None,
+        token_source: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
-        """Initialise the client."""
+        """Initialise the client.
+
+        `token_source`, when given, is awaited before every call and must return the
+        bearer to use: an OAuth session that refreshes its access token, for example.
+        """
         self._account_id = account_id
+        self._token_source = token_source
         self._client = AsyncCloudflare(
             api_token=api_token,
             base_url=base_url or API_URL,
             max_retries=MAX_RETRIES if max_retries is None else max_retries,
             http_client=http_client,
         )
+
+    async def _c(self) -> AsyncCloudflare:
+        if self._token_source is not None:
+            self._client.api_token = await self._token_source()
+        return self._client
 
     @property
     def sdk(self) -> AsyncCloudflare:
@@ -118,10 +132,20 @@ class CloudflareAccessApi:
         """Return the account id."""
         return self._account_id
 
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        """Return the accounts the credential can see (id and name)."""
+        try:
+            return [
+                {"id": a.id, "name": a.name}
+                async for a in (await self._c()).accounts.list(per_page=50)
+            ]
+        except Exception as err:
+            raise _translate(err, "listing accounts") from err
+
     async def get_organization(self) -> dict[str, Any]:
         """Return the Zero Trust organization (holds auth_domain)."""
         try:
-            org = await self._client.zero_trust.organizations.list(account_id=self._account_id)
+            org = await (await self._c()).zero_trust.organizations.list(account_id=self._account_id)
         except Exception as err:
             raise _translate(err, "reading the Zero Trust organization") from err
         result: dict[str, Any] = _dump(org) or {}
@@ -139,7 +163,7 @@ class CloudflareAccessApi:
         """Return every Access application in the account."""
         apps: list[dict[str, Any]] = []
         try:
-            async for app in self._client.zero_trust.access.applications.list(
+            async for app in (await self._c()).zero_trust.access.applications.list(
                 account_id=self._account_id, per_page=100
             ):
                 apps.append(_dump(app))
@@ -150,7 +174,7 @@ class CloudflareAccessApi:
     async def get_app(self, app_id: str) -> dict[str, Any] | None:
         """Return one application, or None if it no longer exists."""
         try:
-            app = await self._client.zero_trust.access.applications.get(
+            app = await (await self._c()).zero_trust.access.applications.get(
                 app_id, account_id=self._account_id
             )
         except NotFoundError:
@@ -164,7 +188,7 @@ class CloudflareAccessApi:
         """Create an application and return it."""
         _LOGGER.debug("Creating Access application %s", body.get("name"))
         try:
-            app = await self._client.zero_trust.access.applications.create(
+            app = await (await self._c()).zero_trust.access.applications.create(
                 account_id=self._account_id, **body
             )
         except Exception as err:
@@ -176,7 +200,7 @@ class CloudflareAccessApi:
         """Replace an application's configuration and return it."""
         _LOGGER.debug("Updating Access application %s", body.get("name"))
         try:
-            app = await self._client.zero_trust.access.applications.update(
+            app = await (await self._c()).zero_trust.access.applications.update(
                 app_id, account_id=self._account_id, **body
             )
         except Exception as err:
@@ -187,7 +211,7 @@ class CloudflareAccessApi:
     async def delete_app(self, app_id: str) -> None:
         """Delete an application; a missing one is not an error."""
         try:
-            await self._client.zero_trust.access.applications.delete(
+            await (await self._c()).zero_trust.access.applications.delete(
                 app_id, account_id=self._account_id
             )
         except NotFoundError:
@@ -199,7 +223,7 @@ class CloudflareAccessApi:
         """Return the account's Access service tokens (without secrets)."""
         tokens: list[dict[str, Any]] = []
         try:
-            async for tok in self._client.zero_trust.access.service_tokens.list(
+            async for tok in (await self._c()).zero_trust.access.service_tokens.list(
                 account_id=self._account_id, per_page=100
             ):
                 tokens.append(_dump(tok))
@@ -210,7 +234,7 @@ class CloudflareAccessApi:
     async def create_service_token(self, name: str, duration: str = "24h") -> dict[str, Any]:
         """Create a service token; the result carries client_id and client_secret once."""
         try:
-            tok = await self._client.zero_trust.access.service_tokens.create(
+            tok = await (await self._c()).zero_trust.access.service_tokens.create(
                 account_id=self._account_id, name=name, duration=duration
             )
         except Exception as err:
@@ -221,7 +245,7 @@ class CloudflareAccessApi:
     async def delete_service_token(self, token_id: str) -> None:
         """Delete a service token; a missing one is not an error."""
         try:
-            await self._client.zero_trust.access.service_tokens.delete(
+            await (await self._c()).zero_trust.access.service_tokens.delete(
                 token_id, account_id=self._account_id
             )
         except NotFoundError:
