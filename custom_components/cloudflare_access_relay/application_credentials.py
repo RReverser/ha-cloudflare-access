@@ -12,12 +12,13 @@ from homeassistant.components.application_credentials import (
     AuthorizationServer,
     ClientCredential,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.config_entry_oauth2_flow import (
     LocalOAuth2ImplementationWithPkce,
+    async_register_implementation,
 )
 
-from .const import OAUTH_AUTHORIZE_URL, OAUTH_SCOPES, OAUTH_TOKEN_URL
+from .const import DOMAIN, OAUTH_AUTHORIZE_URL, OAUTH_CLIENT_ID, OAUTH_SCOPES, OAUTH_TOKEN_URL
 
 
 class CloudflareOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
@@ -28,6 +29,24 @@ class CloudflareOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
     def extra_authorize_data(self) -> dict[str, Any]:
         """Extra data that needs to be appended to the authorize url."""
         return super().extra_authorize_data | {"scope": " ".join(OAUTH_SCOPES)}
+
+
+@callback
+def async_register_project_client(hass: HomeAssistant) -> None:
+    """Offer the project's public client.
+
+    Called when the integration is set up and when a config flow starts, because a flow
+    can start before the integration has been set up. A credential the user added under
+    Application credentials takes precedence: providers override registered ones.
+    """
+    if OAUTH_CLIENT_ID:
+        async_register_implementation(
+            hass,
+            DOMAIN,
+            CloudflareOAuth2Implementation(
+                hass, DOMAIN, OAUTH_CLIENT_ID, OAUTH_AUTHORIZE_URL, OAUTH_TOKEN_URL
+            ),
+        )
 
 
 async def async_get_authorization_server(hass: HomeAssistant) -> AuthorizationServer:

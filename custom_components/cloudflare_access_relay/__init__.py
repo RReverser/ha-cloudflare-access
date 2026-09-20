@@ -26,14 +26,14 @@ from homeassistant.exceptions import (
     ConfigEntryError,
     ConfigEntryNotReady,
 )
-from homeassistant.helpers import config_entry_oauth2_flow, issue_registry as ir
+from homeassistant.helpers import issue_registry as ir
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 
-from .application_credentials import CloudflareOAuth2Implementation
+from .application_credentials import async_register_project_client
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -57,9 +57,6 @@ from .const import (
     DATA_TEAM_DOMAIN,
     DOMAIN,
     ISSUE_NO_ALLOWED_USERS,
-    OAUTH_AUTHORIZE_URL,
-    OAUTH_CLIENT_ID,
-    OAUTH_TOKEN_URL,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
 )
@@ -82,14 +79,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Offer the project's public OAuth client, when one is published."""
-    if OAUTH_CLIENT_ID:
-        config_entry_oauth2_flow.async_register_implementation(
-            hass,
-            DOMAIN,
-            CloudflareOAuth2Implementation(
-                hass, DOMAIN, OAUTH_CLIENT_ID, OAUTH_AUTHORIZE_URL, OAUTH_TOKEN_URL
-            ),
-        )
+    async_register_project_client(hass)
     return True
 
 
