@@ -46,6 +46,8 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run pytest -q --timeout=600 -rs -o log_level=WARNING tests/live
+      - if: always()
+        run: uv run python -m tests.live.cleanup --stale
 
   hassfest:
     runs-on: ubuntu-latest
