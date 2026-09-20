@@ -387,8 +387,15 @@ async def _lifecycle(
         client_app = await api.get_app(subentry.data["app_id"])
         assert client_app and client_app["type"] == "saas", client_app
         assert client_app["saas_app"]["client_id"] == shown["client_id"]
-        resp = await http.get(f"https://{team}/cdn-cgi/access/sso/oidc/{shown['client_id']}/jwks")
-        assert resp.status_code == 200 and resp.json().get("keys"), "the client's own key endpoint"
+        jwks_url = f"https://{team}/cdn-cgi/access/sso/oidc/{shown['client_id']}/jwks"
+
+        async def client_keys_served() -> bool:
+            resp = await http.get(jwks_url)
+            return resp.status_code == 200 and bool(resp.json().get("keys"))
+
+        assert await _until(client_keys_served, "the client's own key endpoint"), (
+            "the registration must be live at the team domain"
+        )
 
         async def gate_links_client() -> bool:
             app = await api.get_app(entry.data[DATA_GATE_APP_ID])
