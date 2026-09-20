@@ -178,7 +178,7 @@ async def _async_provision_entry(
         DATA_GATE_APP_ID: result.gate_app_id,
         DATA_BYPASS_APP_ID: result.bypass_app_id,
     }
-    if any(entry.data.get(k) != v for k, v in derived.items()):
+    if any(k not in entry.data or entry.data[k] != v for k, v in derived.items()):
         hass.config_entries.async_update_entry(entry, data={**entry.data, **derived})
     if result.writes:
         _LOGGER.info("Cloudflare Access objects written: %s", ", ".join(result.writes))
