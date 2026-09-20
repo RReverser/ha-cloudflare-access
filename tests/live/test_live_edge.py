@@ -45,7 +45,6 @@ import pytest_socket
 
 from custom_components.cloudflare_access_relay.cloudflare_api import (
     CloudflareAccessApi,
-    CloudflareApiError,
 )
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCESS_GROUP_ID,
@@ -69,6 +68,7 @@ from custom_components.cloudflare_access_relay.const import (
 )
 
 from ..conftest import add_user
+from .cleanup import delete_run, run_names, sweep_stale
 
 pytestmark = pytest.mark.skipif(
     not (os.environ.get("CF_API_TOKEN") and os.environ.get("CF_ACCOUNT_ID")),
@@ -78,11 +78,10 @@ pytestmark = pytest.mark.skipif(
 # the allow policy needs a subject; the test logs in with its service token instead
 EMAIL = "nobody@example.com"
 SESSION = "1h"
-# this run's service token and Worker carry the run id; leftovers of aborted runs are swept
+# this run's service token, Worker and applications carry the run id (tests/live/cleanup.py)
 RUN = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
-RUN_PREFIX = "ha-access-ci"
+WORKER_NAME, TOKEN_NAME, _ = run_names(RUN)
 WORKER_SOURCE = Path(__file__).with_name("worker") / "worker.js"
-STALE_AGE = 6 * 3600
 EDGE_TIMEOUT = 120
 
 
@@ -182,23 +181,9 @@ async def _login_until_forwarded(edge: Edge, headers: dict[str, str]) -> tuple[s
     return token, attempts
 
 
-def _stale(created: str) -> bool:
-    age = (
-        time.time() - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-    )
-    return age > STALE_AGE
-
-
 async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
-    """Create this run's token; sweep tokens left behind by aborted runs."""
-    for tok in await api.list_service_tokens():
-        name, created = tok.get("name") or "", tok.get("created_at") or ""
-        if name.startswith(RUN_PREFIX) and created and _stale(created):
-            # may still be referenced by the gate policy of an aborted run; this
-            # run's provisioning replaces that reference, the next sweep gets it
-            with contextlib.suppress(CloudflareApiError):
-                await api.delete_service_token(tok["id"])
-    created_tok: dict[str, Any] = await api.create_service_token(f"{RUN_PREFIX} {RUN}", "24h")
+    """Create this run's token."""
+    created_tok: dict[str, Any] = await api.create_service_token(TOKEN_NAME, "24h")
     return created_tok
 
 
@@ -206,36 +191,20 @@ async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
 async def _ephemeral_host(api: CloudflareAccessApi, http: httpx.AsyncClient) -> AsyncIterator[str]:
     """Deploy this run's echo Worker on workers.dev; yield its hostname; delete it after.
 
-    Workers, and Access applications naming them, left behind by aborted runs are
-    swept first, as are applications of the integration's previous design.
+    Leftovers of aborted earlier runs are swept first. The CI step that runs
+    tests/live/cleanup.py after the job is the primary safety net; this is the second.
     """
+    await sweep_stale(api)
     sdk, account = api.sdk, api.account_id
-    async for script in sdk.workers.scripts.list(account_id=account):
-        if (
-            (script.id or "").startswith(RUN_PREFIX)
-            and script.created_on
-            and time.time() - script.created_on.timestamp() > STALE_AGE
-        ):
-            await sdk.workers.scripts.delete(script.id, account_id=account, force=True)
-    for app in await api.list_apps():
-        name = app.get("name") or ""
-        if name.startswith("ha-relay:") or (
-            name.startswith("ha-access:")
-            and f" {RUN_PREFIX}-" in name
-            and f"{RUN_PREFIX}-{RUN}." not in name
-        ):
-            await api.delete_app(app["id"])
-
-    name = f"{RUN_PREFIX}-{RUN}"
     subdomain = (await sdk.workers.subdomains.get(account_id=account)).subdomain
     await sdk.workers.scripts.update(
-        name,
+        WORKER_NAME,
         account_id=account,
         metadata={"main_module": "worker.js", "compatibility_date": "2026-09-01"},
         files=[("worker.js", WORKER_SOURCE.read_bytes(), "application/javascript+module")],
     )
-    await sdk.workers.scripts.subdomain.create(name, account_id=account, enabled=True)
-    host = f"{name}.{subdomain}.workers.dev"
+    await sdk.workers.scripts.subdomain.create(WORKER_NAME, account_id=account, enabled=True)
+    host = f"{WORKER_NAME}.{subdomain}.workers.dev"
 
     async def serving() -> bool:
         try:
@@ -248,7 +217,7 @@ async def _ephemeral_host(api: CloudflareAccessApi, http: httpx.AsyncClient) -> 
         assert await _until(serving, "test host"), f"{host} did not come up in {EDGE_TIMEOUT}s"
         yield host
     finally:
-        await sdk.workers.scripts.delete(name, account_id=account, force=True)
+        await delete_run(api, RUN)
 
 
 async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any) -> None:
@@ -296,25 +265,19 @@ async def test_live_lifecycle(
         try:
             await _lifecycle(hass, hass_client_no_auth, api, token, Edge(http, host))
         finally:
-            await _remove_entry_and_token(hass, api, token["id"])
+            await _remove_entry(hass)
 
 
-async def _remove_entry_and_token(
-    hass: HomeAssistant, api: CloudflareAccessApi, token_id: str
-) -> None:
-    """Remove any surviving entry with its applications, then delete the token.
+async def _remove_entry(hass: HomeAssistant) -> None:
+    """Remove any surviving entry with its applications (the Home Assistant side).
 
-    Runs after a failed step too, so the token never stays referenced by the gate
-    policy (Cloudflare refuses to delete a referenced token) and no application
-    outlives the throwaway host.
+    Runs after a failed step too; the Cloudflare side is then cleaned by name
+    (`delete_run`), which never depends on Home Assistant's state.
     """
     for entry in hass.config_entries.async_entries(DOMAIN):
         with contextlib.suppress(Exception):
-            if entry.state is ConfigEntryState.LOADED:
-                await _save_options(hass, entry, **{CONF_SERVICE_TOKEN_IDS: []})
             await hass.config_entries.async_remove(entry.entry_id)
             await hass.async_block_till_done()
-    await api.delete_service_token(token_id)
 
 
 async def _lifecycle(

@@ -193,7 +193,9 @@ The live test needs no hostname of its own: it deploys the echo Worker in `tests
 on the account's `workers.dev` subdomain under a run-scoped name, which Access accepts as an
 application domain like any hostname, drives the integration through Home Assistant against
 it with a run-scoped Access service token, and deletes the Worker, the token and every
-application it created. CI reads the credentials from the secrets `CF_API_TOKEN` (the two
+application it created; a CI step that always runs afterwards (`tests/live/cleanup.py`)
+deletes them by name even when the job was cancelled, and sweeps leftovers of older runs.
+CI reads the credentials from the secrets `CF_API_TOKEN` (the two
 Access permissions above plus **Access: Service Tokens: Edit** and **Workers Scripts: Edit**)
 and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 
