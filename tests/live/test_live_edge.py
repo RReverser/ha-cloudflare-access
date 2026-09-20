@@ -10,24 +10,25 @@ real Access assertion verified against the real JWKS.
 The raw Cloudflare API is used only to create and delete this run's service
 token, to observe the applications, and to inject drift.
 
-Environment (GitHub Actions repository secrets and variables):
-  CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
-                  "Access: Organizations, Identity Providers, and Groups: Read"
-                  and "Access: Service Tokens: Edit"
-  CF_ACCOUNT_ID
-  CF_TEST_HOST    a hostname in a zone of that account, served by tests/live/worker
+The test host is a throwaway Worker the test deploys on the account's workers.dev
+subdomain (tests/live/worker), which Access accepts as an application domain like
+any hostname; it is deleted at the end. Nothing has to exist beforehand.
 
-Prerequisites that already exist and are not touched: the Worker on the test
-hostname, and whatever exempts that host from the zone's bot protection.
+Environment (GitHub Actions repository secrets):
+  CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
+                  "Access: Organizations, Identity Providers, and Groups: Read",
+                  "Access: Service Tokens: Edit" and "Workers Scripts: Edit"
+  CF_ACCOUNT_ID
 """
 
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import json
 import os
+from pathlib import Path
 import socket
 import time
 from typing import Any
@@ -70,19 +71,18 @@ from custom_components.cloudflare_access_relay.const import (
 from ..conftest import add_user
 
 pytestmark = pytest.mark.skipif(
-    not all(os.environ.get(k) for k in ("CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_TEST_HOST")),
-    reason="live Cloudflare settings not set (CF_API_TOKEN, CF_ACCOUNT_ID, CF_TEST_HOST)",
+    not (os.environ.get("CF_API_TOKEN") and os.environ.get("CF_ACCOUNT_ID")),
+    reason="live Cloudflare credentials not set (CF_API_TOKEN, CF_ACCOUNT_ID)",
 )
 
-HOST = os.environ.get("CF_TEST_HOST", "")
 # the allow policy needs a subject; the test logs in with its service token instead
 EMAIL = "nobody@example.com"
-BASE = f"https://{HOST}"
 SESSION = "1h"
-TOKEN_PREFIX = "ha-access-ci"
-# application name prefixes of this and the previous design; leftovers of both are swept
-APP_PREFIXES = ("ha-access:", "ha-relay:")
-STALE_TOKEN_AGE = 6 * 3600
+# this run's service token and Worker carry the run id; leftovers of aborted runs are swept
+RUN = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
+RUN_PREFIX = "ha-access-ci"
+WORKER_SOURCE = Path(__file__).with_name("worker") / "worker.js"
+STALE_AGE = 6 * 3600
 EDGE_TIMEOUT = 120
 
 
@@ -144,16 +144,13 @@ def internet() -> Iterator[None]:
 class Edge:
     """HTTP client for the test host; no redirects followed, no cookies remembered."""
 
-    def __init__(self, http: httpx.AsyncClient) -> None:
+    def __init__(self, http: httpx.AsyncClient, host: str) -> None:
         self.http = http
+        self.host = host
 
     async def get(self, path: str, **kw: Any) -> httpx.Response:
         self.http.cookies.clear()
-        return await self.http.get(f"{BASE}{path}", **kw)
-
-    async def post(self, path: str, **kw: Any) -> httpx.Response:
-        self.http.cookies.clear()
-        return await self.http.post(f"{BASE}{path}", **kw)
+        return await self.http.get(f"https://{self.host}{path}", **kw)
 
     async def wait_gate(self, path: str, gated: bool) -> None:
         async def check() -> bool:
@@ -185,23 +182,73 @@ async def _login_until_forwarded(edge: Edge, headers: dict[str, str]) -> tuple[s
     return token, attempts
 
 
+def _stale(created: str) -> bool:
+    age = (
+        time.time() - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+    )
+    return age > STALE_AGE
+
+
 async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
     """Create this run's token; sweep tokens left behind by aborted runs."""
-    now = time.time()
     for tok in await api.list_service_tokens():
         name, created = tok.get("name") or "", tok.get("created_at") or ""
-        if name.startswith(TOKEN_PREFIX) and created:
-            age = (
-                now - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-            )
-            if age > STALE_TOKEN_AGE:
-                # may still be referenced by the gate policy of an aborted run; this
-                # run's provisioning replaces that reference, the next sweep gets it
-                with contextlib.suppress(CloudflareApiError):
-                    await api.delete_service_token(tok["id"])
-    run = os.environ.get("GITHUB_RUN_ID", str(int(now)))
-    created_tok: dict[str, Any] = await api.create_service_token(f"{TOKEN_PREFIX} {run}", "24h")
+        if name.startswith(RUN_PREFIX) and created and _stale(created):
+            # may still be referenced by the gate policy of an aborted run; this
+            # run's provisioning replaces that reference, the next sweep gets it
+            with contextlib.suppress(CloudflareApiError):
+                await api.delete_service_token(tok["id"])
+    created_tok: dict[str, Any] = await api.create_service_token(f"{RUN_PREFIX} {RUN}", "24h")
     return created_tok
+
+
+@contextlib.asynccontextmanager
+async def _ephemeral_host(api: CloudflareAccessApi, http: httpx.AsyncClient) -> AsyncIterator[str]:
+    """Deploy this run's echo Worker on workers.dev; yield its hostname; delete it after.
+
+    Workers, and Access applications naming them, left behind by aborted runs are
+    swept first, as are applications of the integration's previous design.
+    """
+    sdk, account = api.sdk, api.account_id
+    async for script in sdk.workers.scripts.list(account_id=account):
+        if (
+            (script.id or "").startswith(RUN_PREFIX)
+            and script.created_on
+            and time.time() - script.created_on.timestamp() > STALE_AGE
+        ):
+            await sdk.workers.scripts.delete(script.id, account_id=account, force=True)
+    for app in await api.list_apps():
+        name = app.get("name") or ""
+        if name.startswith("ha-relay:") or (
+            name.startswith("ha-access:")
+            and f" {RUN_PREFIX}-" in name
+            and f"{RUN_PREFIX}-{RUN}." not in name
+        ):
+            await api.delete_app(app["id"])
+
+    name = f"{RUN_PREFIX}-{RUN}"
+    subdomain = (await sdk.workers.subdomains.get(account_id=account)).subdomain
+    await sdk.workers.scripts.update(
+        name,
+        account_id=account,
+        metadata={"main_module": "worker.js", "compatibility_date": "2026-09-01"},
+        files=[("worker.js", WORKER_SOURCE.read_bytes(), "application/javascript+module")],
+    )
+    await sdk.workers.scripts.subdomain.create(name, account_id=account, enabled=True)
+    host = f"{name}.{subdomain}.workers.dev"
+
+    async def serving() -> bool:
+        try:
+            resp = await http.get(f"https://{host}/api/echo")
+        except httpx.HTTPError:
+            return False
+        return resp.status_code == 200 and resp.json().get("path") == "/api/echo"
+
+    try:
+        assert await _until(serving, "test host"), f"{host} did not come up in {EDGE_TIMEOUT}s"
+        yield host
+    finally:
+        await sdk.workers.scripts.delete(name, account_id=account, force=True)
 
 
 async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any) -> None:
@@ -241,38 +288,30 @@ async def test_live_lifecycle(
     api = CloudflareAccessApi(
         os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"], http_client=get_async_client(hass)
     )
-    await _sweep_previous_design(api)
-    token = await _service_token(api)
-    try:
-        await _lifecycle(hass, hass_client_no_auth, api, token)
-    finally:
-        await _release_and_delete_token(hass, api, token["id"])
+    async with (
+        httpx.AsyncClient(follow_redirects=False, timeout=30) as http,
+        _ephemeral_host(api, http) as host,
+    ):
+        token = await _service_token(api)
+        try:
+            await _lifecycle(hass, hass_client_no_auth, api, token, Edge(http, host))
+        finally:
+            await _remove_entry_and_token(hass, api, token["id"])
 
 
-async def _sweep_previous_design(api: CloudflareAccessApi) -> None:
-    """Delete applications a previous design of the integration left on the test host."""
-    for app in await api.list_apps():
-        name = app.get("name") or ""
-        if name.startswith("ha-relay:") and HOST in name:
-            await api.delete_app(app["id"])
-
-
-async def _release_and_delete_token(
+async def _remove_entry_and_token(
     hass: HomeAssistant, api: CloudflareAccessApi, token_id: str
 ) -> None:
-    """Drop the token from any surviving entry's options, then delete it.
+    """Remove any surviving entry with its applications, then delete the token.
 
     Runs after a failed step too, so the token never stays referenced by the gate
-    policy (Cloudflare refuses to delete a referenced token).
+    policy (Cloudflare refuses to delete a referenced token) and no application
+    outlives the throwaway host.
     """
     for entry in hass.config_entries.async_entries(DOMAIN):
         with contextlib.suppress(Exception):
             if entry.state is ConfigEntryState.LOADED:
-                await _save_options(
-                    hass,
-                    entry,
-                    **{CONF_SERVICE_TOKEN_IDS: [], CONF_DELETE_OBJECTS_ON_REMOVE: False},
-                )
+                await _save_options(hass, entry, **{CONF_SERVICE_TOKEN_IDS: []})
             await hass.config_entries.async_remove(entry.entry_id)
             await hass.async_block_till_done()
     await api.delete_service_token(token_id)
@@ -283,15 +322,15 @@ async def _lifecycle(
     hass_client_no_auth: Any,
     api: CloudflareAccessApi,
     token: dict[str, Any],
+    edge: Edge,
 ) -> None:
     service_headers = {
         "CF-Access-Client-Id": token["client_id"],
         "CF-Access-Client-Secret": token["client_secret"],
     }
+    http, host = edge.http, edge.host
     assert await async_setup_component(hass, "api", {})
-    async with httpx.AsyncClient(follow_redirects=False, timeout=30) as http:
-        edge = Edge(http)
-
+    if True:
         print("== config flow creates the entry; gate off: nothing at the edge changes")
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -302,7 +341,7 @@ async def _lifecycle(
             {
                 CONF_API_TOKEN: os.environ["CF_API_TOKEN"],
                 CONF_ACCOUNT_ID: os.environ["CF_ACCOUNT_ID"],
-                CONF_HOSTNAME: HOST,
+                CONF_HOSTNAME: host,
                 CONF_ALLOWED_EMAILS: [EMAIL],
                 CONF_ACCESS_GROUP_ID: "",
                 CONF_SERVICE_TOKEN_IDS: [token["id"]],
@@ -329,7 +368,7 @@ async def _lifecycle(
         assert isinstance(aud, str) and len(aud) == 64
         gate_id = entry.data[DATA_GATE_APP_ID]
         gate = await api.get_app(gate_id)
-        assert gate and gate["domain"] == HOST
+        assert gate and gate["domain"] == host
         assert gate.get("oauth_configuration", {}).get("enabled") is True, gate
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
@@ -371,7 +410,7 @@ async def _lifecycle(
         origin = await hass_client_no_auth()
         headers = {
             "Authorization": "Bearer not-a-ha-token",
-            "Host": HOST,
+            "Host": host,
             "CF-Ray": "live",
             HEADER_JWT: real_jwt,
         }
@@ -496,9 +535,7 @@ async def _lifecycle(
         assert await _until(reusable, "cookie reuse restored")
 
         print("== dropping the service token from the options removes it from the gate policy")
-        await _save_options(
-            hass, entry, **{CONF_SERVICE_TOKEN_IDS: [], CONF_DELETE_OBJECTS_ON_REMOVE: False}
-        )
+        await _save_options(hass, entry, **{CONF_SERVICE_TOKEN_IDS: []})
 
         async def token_gone() -> bool:
             app = await api.get_app(gate_id)
@@ -506,7 +543,7 @@ async def _lifecycle(
 
         assert await _until(token_gone, "policy without service token", 60)
 
-        print("== removal with 'delete objects' off keeps the application for the next run")
+        print("== removal deletes the application")
         await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
-        assert await api.get_app(gate_id) is not None
+        assert await api.get_app(gate_id) is None

@@ -109,6 +109,11 @@ class CloudflareAccessApi:
         )
 
     @property
+    def sdk(self) -> AsyncCloudflare:
+        """The underlying SDK client, for callers that need other Cloudflare APIs."""
+        return self._client
+
+    @property
     def account_id(self) -> str:
         """Return the account id."""
         return self._account_id
