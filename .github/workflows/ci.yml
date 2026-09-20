@@ -45,7 +45,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest -q --timeout=600 -rs tests/live
+      - run: uv run pytest -q --timeout=600 -rs -o log_level=WARNING tests/live
 
   hassfest:
     runs-on: ubuntu-latest
