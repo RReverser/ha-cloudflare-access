@@ -29,7 +29,7 @@ CONF_CHECK_INTERVAL_MIN: Final = "check_interval_min"
 CONF_DELETE_OBJECTS_ON_REMOVE: Final = "delete_objects_on_remove"
 CONF_GATE_ENABLED: Final = "gate_enabled"
 CONF_SESSION_DURATION: Final = "session_duration"
-CONF_REQUIRE_BOUND_TOKENS: Final = "require_bound_tokens"
+CONF_CLIENT_REDIRECT_URIS: Final = "client_redirect_uris"
 
 DEFAULT_COOKIE_NAME: Final = "CF_Authorization"
 DEFAULT_IDENTITY_CLAIM: Final = "email"
@@ -40,14 +40,19 @@ DEFAULT_DELETE_OBJECTS_ON_REMOVE: Final = True
 DEFAULT_GATE_ENABLED: Final = False
 # Cloudflare documents the application session ceiling as "one month".
 DEFAULT_SESSION_DURATION: Final = "720h"
-DEFAULT_REQUIRE_BOUND_TOKENS: Final = True
 
-# Access-bound tokens (see bound.py)
-STORAGE_KEY_BOUND: Final = f"{DOMAIN}.bound_tokens"
-STORAGE_VERSION_BOUND: Final = 1
-# Home Assistant's own authorization codes live ten minutes; remembered codes match.
-AUTH_CODE_TTL_SECONDS: Final = 600
+# Edge identity (see edge_auth.py): the middleware must be installed before the web
+# server starts, so the first setup after installation asks for a restart.
 ISSUE_RESTART_REQUIRED: Final = "restart_required"
+
+# Registered OAuth clients (config subentries): clients that cannot register themselves
+# get an Access for SaaS OIDC application each, whose tokens the gate accepts.
+SUBENTRY_TYPE_CLIENT: Final = "oauth_client"
+CONF_CLIENT_NAME: Final = "name"
+CONF_REDIRECT_URIS: Final = "redirect_uris"
+DATA_CLIENT_APP_ID: Final = "app_id"
+DATA_CLIENT_ID: Final = "client_id"
+DATA_CLIENT_SECRET: Final = "client_secret"
 
 USER_MATCH_NAME: Final = "name"
 
@@ -75,6 +80,8 @@ OWN_BYPASS_PATHS: Final[tuple[str, ...]] = (URL_CONNECT, URL_STATIC, API_BASE)
 # Unauthenticated at the HTTP level but reached only by a client that holds the frontend
 # session (and therefore the cookie): these stay gated even though Home Assistant registers
 # them with requires_auth = False. The relay's own callback must be gated by definition.
+# The OAuth discovery documents stay gated because Access serves its own at these paths
+# (managed OAuth): a self-registering client must find Access, not Home Assistant.
 GATED_OPEN_PATHS: Final[tuple[str, ...]] = (
     "/api/websocket",
     "/api/onboarding",
@@ -82,16 +89,10 @@ GATED_OPEN_PATHS: Final[tuple[str, ...]] = (
     "/api/hassio_ingress",
     "/api/map_tiles",
     "/manifest.json",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-protected-resource",
     URL_CALLBACK,
 )
-
-# Endpoints called by a vendor's servers with a Home Assistant OAuth token: they require
-# Home Assistant authentication, so the router cannot tell them from the rest of the API,
-# and the caller can never hold a cookie. Bypassed whenever the origin enforces Access-bound
-# tokens (bound.py), whether or not the integration is loaded, so enabling it later needs no
-# reload. Login integrations need no entry here; their pages and views are discovered from
-# the router.
-TOKEN_CALLER_BYPASS_PATHS: Final[tuple[str, ...]] = ("/api/google_assistant", "/api/alexa")
 
 # The companion app reports through a webhook whose only credential is its id in the URL.
 # Unlike other webhook callers the app holds the Access cookie (the relay gave it one, and
@@ -105,8 +106,10 @@ WEBHOOK_PATH: Final = "/api/webhook"
 APP_NAME_PREFIX: Final = "ha-relay:"
 GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
 BYPASS_APP_NAME_FMT: Final = APP_NAME_PREFIX + " bypass {hostname}"
+CLIENT_APP_NAME_FMT: Final = APP_NAME_PREFIX + " client {hostname} {name}"
 GATE_POLICY_NAME: Final = APP_NAME_PREFIX + " allow"
 GATE_SERVICE_POLICY_NAME: Final = APP_NAME_PREFIX + " service tokens"
+GATE_LINKED_POLICY_NAME: Final = APP_NAME_PREFIX + " registered clients"
 BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 
 FLOW_TTL_SECONDS: Final = 600

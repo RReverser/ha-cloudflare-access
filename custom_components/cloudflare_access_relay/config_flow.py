@@ -11,7 +11,9 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentryFlow,
     OptionsFlowWithReload,
+    SubentryFlowResult,
 )
 from homeassistant.core import callback
 from homeassistant.helpers.httpx_client import get_async_client
@@ -38,17 +40,22 @@ from .const import (
     CONF_ALLOWED_EMAILS,
     CONF_API_TOKEN,
     CONF_CHECK_INTERVAL_MIN,
+    CONF_CLIENT_NAME,
+    CONF_CLIENT_REDIRECT_URIS,
     CONF_COOKIE_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_IDENTITY_CLAIM,
+    CONF_REDIRECT_URIS,
     CONF_RENEW_DAYS,
-    CONF_REQUIRE_BOUND_TOKENS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     CONF_USER_MATCH,
+    DATA_CLIENT_APP_ID,
+    DATA_CLIENT_ID,
+    DATA_CLIENT_SECRET,
     DATA_TEAM_DOMAIN,
     DEFAULT_CHECK_INTERVAL_MIN,
     DEFAULT_COOKIE_NAME,
@@ -56,11 +63,13 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_IDENTITY_CLAIM,
     DEFAULT_RENEW_DAYS,
-    DEFAULT_REQUIRE_BOUND_TOKENS,
     DEFAULT_SESSION_DURATION,
     DEFAULT_USER_MATCH,
     DOMAIN,
+    SUBENTRY_TYPE_CLIENT,
 )
+from .options import api_for, effective_options
+from .provision import desired_client_app
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -132,9 +141,9 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
             default=defaults.get(CONF_DELETE_OBJECTS_ON_REMOVE, DEFAULT_DELETE_OBJECTS_ON_REMOVE),
         ): BooleanSelector(),
         vol.Optional(
-            CONF_REQUIRE_BOUND_TOKENS,
-            default=defaults.get(CONF_REQUIRE_BOUND_TOKENS, DEFAULT_REQUIRE_BOUND_TOKENS),
-        ): BooleanSelector(),
+            CONF_CLIENT_REDIRECT_URIS,
+            default=list(defaults.get(CONF_CLIENT_REDIRECT_URIS) or []),
+        ): _MULTI_TEXT,
     }
 
 
@@ -145,6 +154,9 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     out[CONF_ACCESS_GROUP_ID] = (out.get(CONF_ACCESS_GROUP_ID) or "").strip()
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
     out[CONF_SERVICE_TOKEN_IDS] = _clean_list(out.get(CONF_SERVICE_TOKEN_IDS))
+    out[CONF_CLIENT_REDIRECT_URIS] = _clean_list(out.get(CONF_CLIENT_REDIRECT_URIS))
+    if any(not u.startswith("https://") for u in out[CONF_CLIENT_REDIRECT_URIS]):
+        errors[CONF_CLIENT_REDIRECT_URIS] = "invalid_redirect_uri"
     for key in (CONF_RENEW_DAYS, CONF_CHECK_INTERVAL_MIN):
         if key in out:
             out[key] = int(out[key])
@@ -197,6 +209,14 @@ class CloudflareAccessRelayConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlowHandler:
         """Return the options flow."""
         return OptionsFlowHandler()
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return the subentry flows: registered OAuth clients."""
+        return {SUBENTRY_TYPE_CLIENT: ClientSubentryFlow}
 
     def _default_hostname(self) -> str:
         if self.hass.config.external_url:
@@ -305,3 +325,127 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             errors=errors,
             description_placeholders={CONF_HOSTNAME: current.get(CONF_HOSTNAME, "")},
         )
+
+
+def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
+    base = f"https://{team_domain}/cdn-cgi/access/sso/oidc/{client_id}"
+    return {
+        "authorization_url": f"{base}/authorization",
+        "token_url": f"{base}/token",
+        "userinfo_url": f"{base}/userinfo",
+    }
+
+
+class ClientSubentryFlow(ConfigSubentryFlow):
+    """Register an OAuth client that cannot register itself.
+
+    The client's console (Google Home, the Alexa developer console, any service that
+    asks for a client id and secret) gets Access's endpoints and the credentials this
+    flow shows; nothing about the client is known to the integration beyond the name
+    and redirect URIs entered here.
+    """
+
+    _created: dict[str, Any]
+
+    async def _async_register(
+        self, user_input: dict[str, Any], errors: dict[str, str], app_id: str | None
+    ) -> dict[str, Any] | None:
+        entry = self._get_entry()
+        api = api_for(self.hass, entry)
+        name = user_input[CONF_CLIENT_NAME].strip()
+        uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
+        if not name:
+            errors[CONF_CLIENT_NAME] = "required"
+        if not uris:
+            errors[CONF_REDIRECT_URIS] = "required"
+        elif any(not u.startswith("https://") for u in uris):
+            errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
+        if errors:
+            return None
+        desired = desired_client_app(effective_options(entry), name, uris)
+        try:
+            app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
+        except CloudflareAuthError:
+            errors["base"] = "invalid_auth"
+        except CloudflareUnavailableError:
+            errors["base"] = "cannot_connect"
+        except CloudflareApiError as err:
+            _LOGGER.warning("Cloudflare rejected the client registration: %s", err)
+            errors["base"] = "api_error"
+        else:
+            saas = app.get("saas_app") or {}
+            return {
+                CONF_CLIENT_NAME: name,
+                CONF_REDIRECT_URIS: uris,
+                DATA_CLIENT_APP_ID: app["id"],
+                DATA_CLIENT_ID: saas.get("client_id"),
+                DATA_CLIENT_SECRET: saas.get("client_secret"),
+            }
+        return None
+
+    def _form(
+        self, step_id: str, defaults: Mapping[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult:
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
+                vol.Required(
+                    CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
+                ): _MULTI_TEXT,
+            }
+        )
+        return self.async_show_form(step_id=step_id, data_schema=schema, errors=errors)
+
+    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+        team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
+        return self.async_show_form(
+            step_id="credentials",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
+                DATA_CLIENT_ID: data[DATA_CLIENT_ID] or "",
+                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unchanged)",
+                **_client_endpoints(team_domain, data[DATA_CLIENT_ID] or ""),
+            },
+        )
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Name and redirect URIs; then Access issues the credentials."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            created = await self._async_register(user_input, errors, None)
+            if created:
+                self._created = created
+                return self._credentials(created)
+        return self._form("user", user_input or {}, errors)
+
+    async def async_step_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store the registration once the credentials were shown."""
+        if user_input is None:
+            return self._credentials(self._created)
+        if self.source == "reconfigure":
+            return self.async_update_and_abort(
+                self._get_entry(),
+                self._get_reconfigure_subentry(),
+                title=self._created[CONF_CLIENT_NAME],
+                data_updates={k: v for k, v in self._created.items() if v is not None},
+            )
+        return self.async_create_entry(title=self._created[CONF_CLIENT_NAME], data=self._created)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change the name or redirect URIs, and show the credentials again."""
+        errors: dict[str, str] = {}
+        sub = self._get_reconfigure_subentry()
+        if user_input is not None:
+            updated = await self._async_register(user_input, errors, sub.data[DATA_CLIENT_APP_ID])
+            if updated:
+                self._created = {
+                    **dict(sub.data),
+                    **{k: v for k, v in updated.items() if v is not None},
+                }
+                return self._credentials(self._created)
+        return self._form("reconfigure", user_input or sub.data, errors)

@@ -80,51 +80,63 @@ Bypassed paths (all are prefixes; Access inherits a path rule to everything belo
 
 | Path | Why |
 |---|---|
-| Every view Home Assistant registers **without its own authentication**, read from the router. In core that is the login surface (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`, the OAuth discovery documents under `/.well-known/`) and the inbound endpoints other systems call (`/api/webhook`, the TTS, stream, image and camera proxies, integration-specific receivers); login integrations add theirs (hass-openid's `/auth/openid/*`) | A client that can reach these has no Home Assistant session, so it cannot hold the Access cookie either. Each endpoint carries its own protection: a webhook id, a signed URL, a shared secret. Gating them would only break the callers |
+| Every view Home Assistant registers **without its own authentication**, read from the router. In core that is the login surface (`/auth/login_flow`, `/auth/providers`, `/auth/token`, `/auth/revoke`, `/auth/external/callback`) and the inbound endpoints other systems call (`/api/webhook`, the TTS, stream, image and camera proxies, integration-specific receivers); login integrations add theirs (hass-openid's `/auth/openid/*`) | A client that can reach these has no Home Assistant session, so it cannot hold the Access cookie either. Each endpoint carries its own protection: a webhook id, a signed URL, a shared secret. Gating them would only break the callers |
 | Every static file an integration serves from **its own package directory**, read from the router: the frontend's `/auth/authorize`, `/frontend_latest`, `/frontend_es5`, `/static`, service worker files, `/onboarding.html`, `/robots.txt`; a login integration's pages and scripts (hass-openid's `/openid/*`) | The login page and its assets are fetched before any cookie exists. Only code is bypassed: user content mounted from the configuration directory (`/local`, `/hacsfiles`) stays gated |
 | `/cloudflare_access_relay/connect`, `/cloudflare_access_relay/static` | The connect page and the relay's own JavaScript |
 | `/api/cloudflare_access_relay` | Flow creation, status poll, session check; every view there requires Home Assistant authentication |
-| `/api/google_assistant`, `/api/alexa` | Google's and Amazon's servers authenticate with a Home Assistant OAuth token and never hold the cookie. The router cannot tell these from the rest of the API, so they are declared; bypassed whenever the origin enforces Access-bound tokens (below), whether or not the integration is loaded |
 | **except** `/api/webhook/<id>` of every companion-app device | Gated, not bypassed: the exact path goes on the gate application and beats the bypassed prefix (see *Companion-app device webhooks*) |
 | *extra bypassed paths* option | Anything else a token-bearing external caller must reach, e.g. a Prometheus scraper on `/api/prometheus` |
 
 Not bypassed although registered without authentication: the WebSocket, onboarding, the
 Supervisor proxy and ingress, map tiles and the web manifest. They are entry points of the
 frontend session, so the client always holds the cookie, and the relay's own callback must be
-gated by definition. Everything else, including `/`, `/api/*`, `/api/websocket`, `/local/*`,
-`/media/*` and `/hacsfiles/*`, is gated once the gate is enabled.
+gated by definition. The OAuth discovery documents under `/.well-known/` stay gated too: Access
+serves its own there (see *Token-bearing clients*). Everything else, including `/`, `/api/*`
+(Google Assistant, Alexa and MCP endpoints included), `/api/websocket`, `/local/*`, `/media/*`
+and `/hacsfiles/*`, is gated once the gate is enabled.
 
 The router is read again once Home Assistant has finished starting and after every component
 load, so an integration installed later (or set up after this entry during the same start) has
 its endpoints bypassed within seconds without a reload; only a real change rewrites the
 bypass application.
 
-### Access-bound tokens
+### Token-bearing clients
 
-Access cannot check a bearer token, so a request to a bypassed path carries no Access
-identity at all. The integration closes that gap at the origin with one rule, applied to every
-request that arrives through Cloudflare for the gated hostname:
+Google's and Amazon's servers, MCP clients and scripts authenticate with a bearer token and
+can never hold the cookie. They are not bypassed: they authenticate **with Access**, which
+issues them a token and validates it at the edge on every request, then forwards the request
+to Home Assistant with the same signed assertion a browser session gets. Access's own policies
+decide who may link, and revoking a person in Access ends their clients at the next token
+refresh. Two ways to obtain such a token, one mechanism behind both:
 
-- a request that presents a valid Access token (the cookie, or the assertion header Access
-  adds on gated paths) passes;
-- otherwise a Home Assistant bearer token is accepted only if it is **Access-bound**: its
-  refresh token was issued by a login whose final step was made under an Access identity, i.e.
-  from a browser that had already passed Access;
-- otherwise the request is rejected with 401 and an INFO log naming the client.
+- **Clients that discover and register themselves** (MCP clients such as Claude): the gate
+  application has *managed OAuth* enabled, which makes Access the OAuth server for the
+  hostname. An unauthenticated non-browser request gets a 401 pointing at Access's discovery
+  document at `/.well-known/oauth-authorization-server`, the client registers dynamically,
+  sends the person through the Access login, and receives a token. Access accepts a dynamic
+  registration only for redirect URIs listed in the option *Redirect URIs allowed for
+  self-registering clients* (Claude: `https://claude.ai/api/mcp/auth_callback`).
+- **Clients with a console that asks for a client id and secret** (Google Home account
+  linking, an Alexa skill): *Add OAuth client* on the integration entry, with a name and the
+  redirect URI the console shows. The integration creates an Access for SaaS OIDC application,
+  which is that client's registration with Access, shows the client id, secret, authorization
+  and token URLs to enter in the console, and adds a rule to the gate that accepts the tokens
+  of that application. Removing the client removes both. Nothing in the integration knows
+  what Google or Alexa are.
 
-Nothing is named: no client id, no path. Linking Google Assistant, Alexa or an MCP client from
-a browser that is signed in to Access yields a bound token; the same link made from a browser
-without the cookie yields an unbound one, which those callers cannot use. The companion app's
-first sign-in is cookie-less and yields an unbound token too, which it never uses without the
-cookie the relay gives it. Long-lived tokens created on the profile page are not bound; for
-your own machine callers use a service token or the extra bypassed paths. Links made before
-the integration was installed are unbound and must be made again.
+At the origin, one rule turns the edge identity into a Home Assistant user: a request that
+came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
+carries a valid Access assertion is authenticated as the Home Assistant user whose configured
+field equals the identity claim (the same mapping the relay uses). No bearer, or a Home
+Assistant token: Home Assistant decides as usual. The rule runs in a middleware that has to be
+installed before the web server starts, so the first setup after installing the integration
+needs a restart, which a repair issue asks for; until then Home Assistant rejects those
+requests with 401. Requests on the local network never see the rule.
 
-The rule runs in a middleware that has to be installed before the web server starts. The first
-setup after installing the integration therefore needs a restart, which a repair issue asks
-for; until then the vendor endpoints stay gated rather than bypassed. Requests on the local
-network never see the rule. The option *Require Access-bound tokens on bypassed paths* turns
-it off, in which case the vendor endpoints rely on Home Assistant authentication alone.
+Home Assistant's own OAuth server keeps serving the browser and the companion app on the
+bypassed `/auth/*` paths; only the discovery documents move to Access, since a client that
+finds Home Assistant's would obtain a Home Assistant token that the gate does not accept.
+Links made before the integration was installed must be made again against Access.
 
 ### Companion-app device webhooks
 
@@ -178,8 +190,12 @@ un-gated state. Flipping the gate off in the options takes seconds and keeps eve
 | Home Assistant user field | `username` | Which user field must equal the claim (case-insensitive): `username` (built-in login), `name` (display name), or any credential field a login integration stores, e.g. `email` |
 | Renew when fewer days remain | 3 | Lead time for the renewal banner and notification |
 | Check interval | 60 min | How often an open frontend re-checks the session |
-| Delete the Access applications when the integration is removed | on | |
-| Require Access-bound tokens on bypassed paths | on | See *Access-bound tokens*. Off: the vendor endpoints are bypassed and rely on Home Assistant authentication alone |
+| Delete the Access applications when the integration is removed | on | Registered clients' applications included |
+| Redirect URIs allowed for self-registering clients | empty | See *Token-bearing clients*. `https://` URLs, optionally ending in `/*` |
+
+Registered OAuth clients are subentries of the integration entry (*Add OAuth client*); each
+stores its application id, client id and secret, and *Reconfigure* shows the credentials
+again.
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access Relay → Reload), which is the way to repair
@@ -202,6 +218,9 @@ code, and are re-checked by `tests/live` in CI.
 | Session duration ceiling | the API accepts and honours `8760h`; the dashboard shows up to one month |
 | A path-specific bypass application takes precedence over the hostname-wide gate application | verified, including prefix inheritance (`/api/cloudflare_access_relay/echo`) |
 | An exact path on the gate application takes precedence over a bypassed prefix above it (`/api/webhook/<id>` under `/api/webhook`) | verified 19 Sep 2026, re-checked by `tests/live` |
+| Managed OAuth can be enabled through the API on the gate application; Access then serves `/.well-known/oauth-authorization-server` on the hostname itself and answers a non-browser client with 401 + `WWW-Authenticate` | verified 20 Sep 2026, re-checked by `tests/live` |
+| An Access for SaaS OIDC application can be created through the API with the client secret returned once, and a `linked_app_token` rule naming it is accepted on the gate application | verified 20 Sep 2026, re-checked by `tests/live` |
+| A registered client's token, presented as a bearer on the hostname, passes the gate and reaches the origin with an assertion whose audience is the gate's | **still open**: needs a real account-linking login (Google Home or Alexa); the origin rule is exercised in the unit tests with a minted assertion |
 | Access forwards the `CF_Authorization` cookie to the origin on bypassed paths (needed by the session endpoint) | verified |
 | The relay's verifier accepts a real token against the real JWKS and rejects a wrong audience and a tampered signature | verified |
 | The app's WebView hands only the Access redirect to the browser and stays on the page | **still open**. The app's WebView only loads its own server, so this is observed on the Home Assistant hostname itself during rollout step 3 (gate off, callback path gated): tap *Sign in with Cloudflare* on the connect page and watch whether the system browser opens while the app stays on the page. Either outcome works: if the WebView follows the redirect itself, the login lands the cookie in the shared jar directly |
@@ -252,6 +271,8 @@ logs in with its run-scoped service token, so nobody can open the test host in a
    removing the entry undoes everything.
 4. Enable the gate in the options. Run `check_edge.sh` with `MODE=gated`. **This is the exposure
    change.** Rollback is the same switch, or removing the integration.
+   Re-link Google Assistant, Alexa and MCP clients against Access (see *Token-bearing
+   clients*); links made against Home Assistant's own OAuth stop working at the gate.
 5. Device acceptance, gate on: dashboard, HACS panel, camera images and notification
    tap-throughs load; the device's refresh token `last_used_ip` keeps updating; kill and
    relaunch the app, background sensor updates (which arrive on the device's gated
@@ -304,9 +325,12 @@ Assistant's own login page. Everything it needs is bypassed.
   content). Endpoints Home Assistant exposes without a session keep exactly the protection
   they have without Access (a webhook id, a signed URL, an OAuth token); they are not
   weakened, and not strengthened either, except the companion app's own device webhooks,
-  which are gated. Callers that authenticate with a Home Assistant
-  token from outside a session (scripts, Prometheus, a reverse-proxied dashboard) are gated:
-  give them an Access service token, or list their path in the extra bypassed paths.
+  which are gated. Token-bearing clients (Google, Alexa, MCP) are gated and authenticate with
+  Access. Your own machine callers (scripts, Prometheus) can do the same through managed OAuth,
+  use an Access service token, or have their path listed in the extra bypassed paths.
+- Home Assistant's IP ban counts a 401 as a failed login. Behind Cloudflare, configure
+  `http.use_x_forwarded_for` with Cloudflare's ranges as `trusted_proxies`, as for any reverse
+  proxy, so a misbehaving client bans itself and not the edge.
 - If Access is also an OIDC identity provider for a login integration, that SaaS application
   is separate and untouched.
 
@@ -328,8 +352,9 @@ Assistant's own login page. Everything it needs is bypassed.
   is the only writer of the two objects it names.
 - LAN behaviour is unchanged: an internal URL never touches Cloudflare, and the relay stays
   silent when a request did not come through Cloudflare.
-- No revocation coupling: Home Assistant refresh tokens keep their own lifetime; the edge is the
-  gate. If Access refuses a user, their app breaks at the next request regardless of token state.
+- No revocation coupling for the companion app: Home Assistant refresh tokens keep their own
+  lifetime; the edge is the gate. If Access refuses a user, their app breaks at the next request
+  regardless of token state, and their token-bearing clients at their next token refresh.
 
 ## Development
 
@@ -374,6 +399,7 @@ Facts checked on 14 Sep 2026 that shaped the implementation:
   session (views registered without authentication, static files served from integration
   packages), and the integration reads it at setup, once start-up is complete and after
   every component load. A core release that adds a login endpoint, or an integration
-  installed later, is picked up without configuration. The only declared entries are the
-  vendor endpoints that require a Home Assistant OAuth token, which the router cannot tell
-  from the rest of the API.
+  installed later, is picked up without configuration. Nothing under `/api` is declared open:
+  token-bearing clients authenticate with Access (managed OAuth for those that register
+  themselves, an Access for SaaS registration made by the integration for the rest), so the
+  integration never names a vendor.

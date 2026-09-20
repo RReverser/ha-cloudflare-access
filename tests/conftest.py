@@ -186,6 +186,7 @@ class FakeCloudflare:
     """Records every request; behaves like the Access applications API."""
 
     apps: dict[str, dict[str, Any]] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
     requests: list[tuple[str, str, dict[str, Any] | None]] = field(default_factory=list)
     auth_fail: bool = False
     org_auth_fail: bool = False
@@ -287,6 +288,14 @@ class FakeCloudflare:
         app["policies"] = policies
         if existing:
             app["created_at"] = existing.get("created_at")
+        if body.get("type") == "saas":
+            # Cloudflare assigns the OIDC client id once; the secret is returned only on POST
+            saas = dict(app.get("saas_app") or {})
+            saas["client_id"] = (existing or {}).get("saas_app", {}).get(
+                "client_id"
+            ) or uuid.uuid4().hex
+            saas.pop("client_secret", None)
+            app["saas_app"] = saas
         return app
 
     async def create_app(self, request: web.Request) -> web.Response:
@@ -296,7 +305,14 @@ class FakeCloudflare:
         assert body is not None
         app_id = str(uuid.uuid4())
         self.apps[app_id] = self._stored(body, app_id, None)
-        return self._ok(self.apps[app_id], status=201)
+        created = self.apps[app_id]
+        if body.get("type") == "saas":
+            self.secrets[app_id] = uuid.uuid4().hex
+            created = {
+                **created,
+                "saas_app": {**created["saas_app"], "client_secret": self.secrets[app_id]},
+            }
+        return self._ok(created, status=201)
 
     async def get_app(self, request: web.Request) -> web.Response:
         await self._record(request)
