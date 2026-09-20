@@ -104,12 +104,15 @@ def cmd_grant(api: Api, args: argparse.Namespace) -> None:
     token = api.call("GET", f"/user/tokens/{me['id']}")
     groups = api.call("GET", "/user/tokens/permission_groups")
     zone = zone_for(api, urlparse(args.client_uri).hostname or "")
+    account = {f"com.cloudflare.api.account.{api.account_id}": "*"}
     wanted = [
+        # Listing needs Read; Write alone answers "Authentication error" to a GET.
+        (permission_group(groups, r"oauth.?clients?.*read", "com.cloudflare.api.account"), account),
         (
             permission_group(
                 groups, r"oauth.?clients?.*(write|edit)", "com.cloudflare.api.account"
             ),
-            {f"com.cloudflare.api.account.{api.account_id}": "*"},
+            account,
         ),
         (
             permission_group(groups, r"^dns (write|edit)$", "com.cloudflare.api.account.zone"),
