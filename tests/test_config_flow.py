@@ -62,6 +62,7 @@ async def test_user_flow_creates_entry(
     await hass.async_block_till_done()
     assert entry.state is config_entries.ConfigEntryState.LOADED
     assert fake_cloudflare.apps == {}, "gate disabled: nothing at the edge yet"
+    assert entry.data["policy_aud"] is None and entry.data["gate_app_id"] is None
 
     # second entry for the same hostname aborts
     result = await hass.config_entries.flow.async_init(
