@@ -129,7 +129,13 @@ def cmd_grant(api: Api, args: argparse.Namespace) -> None:
     body = {k: token[k] for k in ("name", "status", "condition", "expires_on") if k in token}
     body["policies"] = policies
     api.call("PUT", f"/user/tokens/{me['id']}", json=body)
-    print(f"token {token['name']!r}: {len(policies)} policies")
+    token = api.call("GET", f"/user/tokens/{me['id']}")
+    print(f"token {token['name']!r} now carries:")
+    for policy in token["policies"]:
+        names = [pg.get("name") or pg["id"] for pg in policy["permission_groups"]]
+        print(f"  {policy['effect']} {names} on {sorted(policy['resources'])}")
+    oauth_groups = [g["name"] for g in groups if re.search("oauth", g["name"], re.IGNORECASE)]
+    print(f"permission groups mentioning OAuth: {oauth_groups}")
 
 
 def client_body(args: argparse.Namespace) -> dict[str, Any]:
