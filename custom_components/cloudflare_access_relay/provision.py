@@ -1,9 +1,10 @@
-"""Compute and reconcile the Access applications the relay owns."""
+"""Compute and reconcile the Access applications the integration owns."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+import json
 import logging
 from typing import Any
 
@@ -26,10 +27,7 @@ from .const import (
     GATE_LINKED_POLICY_NAME,
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
-    OWN_BYPASS_PATHS,
-    URL_CALLBACK,
 )
-from .paths import collapse_prefixes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,55 +40,33 @@ def normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def bypass_paths(options: dict[str, Any], open_paths: list[str]) -> list[str]:
-    """Return the sorted, prefix-collapsed list of bypassed paths.
-
-    `open_paths` is what Home Assistant serves to cookie-less clients, as discovered
-    from the router (`paths.discover_open_paths`); the integration's own paths and the
-    configured extras are added to it.
-    """
-    paths: list[str] = [*open_paths, *OWN_BYPASS_PATHS]
-    for raw in options.get(CONF_EXTRA_BYPASS_PATHS) or []:
-        if raw and raw.strip():
-            paths.append(raw)
-    return collapse_prefixes({p for p in map(normalise_path, paths) if p != "/"})
-
-
-def _destinations(hostname: str, paths: list[str]) -> list[dict[str, str]]:
-    return [{"type": "public", "uri": f"{hostname}{p}"} for p in paths]
+def _clean(values: Sequence[str] | None) -> list[str]:
+    return [v.strip() for v in values or [] if v and v.strip()]
 
 
 def gate_include_rules(options: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the include rules of the allow policy."""
     if group_id := options.get(CONF_ACCESS_GROUP_ID):
         return [{"group": {"id": group_id}}]
-    emails = [e.strip() for e in options.get(CONF_ALLOWED_EMAILS) or [] if e.strip()]
-    return [{"email": {"email": e}} for e in emails]
+    return [{"email": {"email": e}} for e in _clean(options.get(CONF_ALLOWED_EMAILS))]
 
 
 def desired_gate_app(
-    options: dict[str, Any],
-    gated_paths: Sequence[str] = (),
-    linked_app_ids: Sequence[str] = (),
-) -> dict[str, Any]:
-    """Return the desired gate application body.
+    options: dict[str, Any], linked_app_ids: Sequence[str] = ()
+) -> dict[str, Any] | None:
+    """Return the desired gate application body, or None while the gate is disabled.
 
-    While the gate is disabled the application covers only the relay callback
-    path, so the relay can be exercised end to end with no other change in
-    behaviour. Enabling the gate widens the same application (same id, same
-    audience) to the whole hostname plus `gated_paths`: paths that lie under a
-    bypassed prefix but must be gated anyway (the companion-app device webhooks).
-
-    Token-bearing clients are admitted by Access itself. Managed OAuth makes the gate
-    an OAuth server for clients that discover and register themselves (MCP clients);
-    the redirect URIs such clients may use come from the options. Clients registered
+    The gate covers the whole hostname. People pass its allow policy in a browser
+    (the companion app included: it shares the cookie with its native requests).
+    Token-bearing clients are admitted by Access itself: managed OAuth makes the
+    gate an OAuth server for clients that discover and register themselves (MCP
+    clients), for the redirect URIs listed in the options; clients registered
     through the integration (`desired_client_app`) are admitted by a Service Auth
     policy that accepts their applications' tokens (`linked_app_ids`).
     """
+    if not options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED):
+        return None
     hostname = options[CONF_HOSTNAME]
-    gated = bool(options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED))
-    domain = hostname if gated else f"{hostname}{URL_CALLBACK}"
-    paths = sorted(map(normalise_path, gated_paths)) if gated else []
     policies: list[dict[str, Any]] = [
         {
             "name": GATE_POLICY_NAME,
@@ -99,8 +75,7 @@ def desired_gate_app(
             "include": gate_include_rules(options),
         }
     ]
-    token_ids = [t.strip() for t in options.get(CONF_SERVICE_TOKEN_IDS) or [] if t.strip()]
-    if token_ids:
+    if token_ids := _clean(options.get(CONF_SERVICE_TOKEN_IDS)):
         # Service Auth: machine callers present CF-Access-Client-Id/Secret headers
         # and receive an application token like a user would.
         policies.append(
@@ -120,13 +95,14 @@ def desired_gate_app(
                 "include": [{"linked_app_token": {"app_uid": i}} for i in sorted(linked_app_ids)],
             }
         )
-    redirect_uris = [u.strip() for u in options.get(CONF_CLIENT_REDIRECT_URIS) or [] if u.strip()]
     return {
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
-        "domain": domain,
-        "destinations": [{"type": "public", "uri": domain}, *_destinations(hostname, paths)],
+        "domain": hostname,
+        "destinations": [{"type": "public", "uri": hostname}],
         "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
+        # The companion app's native client reuses the cookie its WebView obtained; a
+        # binding cookie would tie the token to the WebView alone.
         "enable_binding_cookie": False,
         "path_cookie_attribute": False,
         "http_only_cookie_attribute": True,
@@ -139,9 +115,39 @@ def desired_gate_app(
                 "enabled": True,
                 "allow_any_on_localhost": False,
                 "allow_any_on_loopback": False,
-                "allowed_uris": sorted(redirect_uris),
+                "allowed_uris": sorted(_clean(options.get(CONF_CLIENT_REDIRECT_URIS))),
             },
         },
+    }
+
+
+def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the desired bypass application body, or None when nothing is bypassed.
+
+    Only the paths listed in the options are bypassed, each a prefix (Access
+    inherits a path rule to everything below it). Nothing is bypassed by default.
+    """
+    paths = sorted(
+        {normalise_path(p) for p in _clean(options.get(CONF_EXTRA_BYPASS_PATHS))} - {"/"}
+    )
+    if not paths:
+        return None
+    hostname = options[CONF_HOSTNAME]
+    destinations = [{"type": "public", "uri": f"{hostname}{p}"} for p in paths]
+    return {
+        "type": "self_hosted",
+        "name": BYPASS_APP_NAME_FMT.format(hostname=hostname),
+        "domain": destinations[0]["uri"],
+        "destinations": destinations,
+        "app_launcher_visible": False,
+        "policies": [
+            {
+                "name": BYPASS_POLICY_NAME,
+                "decision": "bypass",
+                "precedence": 1,
+                "include": [{"everyone": {}}],
+            }
+        ],
     }
 
 
@@ -163,7 +169,7 @@ def desired_client_app(
         "app_launcher_visible": False,
         "saas_app": {
             "auth_type": "oidc",
-            "redirect_uris": sorted(u.strip() for u in redirect_uris if u.strip()),
+            "redirect_uris": sorted(_clean(redirect_uris)),
             "grant_types": ["authorization_code", "refresh_tokens"],
             "refresh_token_options": {
                 "lifetime": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
@@ -176,28 +182,6 @@ def desired_client_app(
                 "decision": "allow",
                 "precedence": 1,
                 "include": gate_include_rules(options),
-            }
-        ],
-    }
-
-
-def desired_bypass_app(options: dict[str, Any], open_paths: list[str]) -> dict[str, Any]:
-    """Return the desired bypass application body."""
-    hostname = options[CONF_HOSTNAME]
-    paths = bypass_paths(options, open_paths)
-    destinations = _destinations(hostname, paths)
-    return {
-        "type": "self_hosted",
-        "name": BYPASS_APP_NAME_FMT.format(hostname=hostname),
-        "domain": destinations[0]["uri"],
-        "destinations": destinations,
-        "app_launcher_visible": False,
-        "policies": [
-            {
-                "name": BYPASS_POLICY_NAME,
-                "decision": "bypass",
-                "precedence": 1,
-                "include": [{"everyone": {}}],
             }
         ],
     }
@@ -225,6 +209,10 @@ _CF_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _json_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def _norm_policy(policy: dict[str, Any]) -> tuple[Any, ...]:
     return (
         policy.get("name"),
@@ -233,12 +221,6 @@ def _norm_policy(policy: dict[str, Any]) -> tuple[Any, ...]:
         _json_key(policy.get("exclude") or []),
         _json_key(policy.get("require") or []),
     )
-
-
-def _json_key(value: Any) -> str:
-    import json
-
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _oauth_key(config: dict[str, Any] | None) -> str:
@@ -296,13 +278,15 @@ class ProvisionResult:
     """Outcome of one reconciliation."""
 
     team_domain: str
-    policy_aud: str
-    gate_app_id: str
-    bypass_app_id: str
+    # Set while the gate exists: the audience the origin verifies assertions against.
+    policy_aud: str | None
+    gate_app_id: str | None
+    bypass_app_id: str | None
     writes: list[str] = field(default_factory=list)
 
 
-async def _find_by_name(api: CloudflareAccessApi, name: str) -> dict[str, Any] | None:
+async def find_by_name(api: CloudflareAccessApi, name: str) -> dict[str, Any] | None:
+    """Return the application with that exact name, if any."""
     for app in await api.list_apps():
         if app.get("name") == name:
             return app
@@ -320,7 +304,7 @@ async def reconcile_app(
     if known_id:
         existing = await api.get_app(known_id)
     if existing is None:
-        existing = await _find_by_name(api, desired["name"])
+        existing = await find_by_name(api, desired["name"])
     if existing is None:
         _LOGGER.info("Creating Access application %s", desired["name"])
         created = await api.create_app(desired)
@@ -341,24 +325,29 @@ async def reconcile_app(
     ]
     updated = await api.update_app(existing["id"], body)
     writes.append(f"update {desired['name']}")
-    _LOGGER.info(
-        "Updated Access application %s (updated_at %s, binding cookie %s)",
-        desired["name"],
-        updated.get("updated_at"),
-        updated.get("enable_binding_cookie"),
-    )
     return updated
+
+
+async def retire_app(
+    api: CloudflareAccessApi, known_id: str | None, name: str, writes: list[str]
+) -> None:
+    """Delete an application the options no longer call for, if it exists."""
+    app = (await api.get_app(known_id)) if known_id else None
+    if app is None:
+        app = await find_by_name(api, name)
+    if app is not None:
+        _LOGGER.info("Deleting Access application %s", name)
+        await api.delete_app(app["id"])
+        writes.append(f"delete {name}")
 
 
 async def async_provision(
     api: CloudflareAccessApi,
     options: dict[str, Any],
-    open_paths: list[str],
     *,
     gate_app_id: str | None,
     bypass_app_id: str | None,
     team_domain: str | None,
-    gated_paths: Sequence[str] = (),
     linked_app_ids: Sequence[str] = (),
 ) -> ProvisionResult:
     """Bring the Cloudflare objects in line with the options.
@@ -369,32 +358,39 @@ async def async_provision(
     writes: list[str] = []
     if not team_domain:
         team_domain = await api.get_team_domain()
-    bypass = await reconcile_app(
-        api, bypass_app_id, desired_bypass_app(options, open_paths), writes
-    )
-    gate = await reconcile_app(
-        api, gate_app_id, desired_gate_app(options, gated_paths, linked_app_ids), writes
-    )
-    aud = gate.get("aud")
-    if not isinstance(aud, str) or not aud:
-        gate_full = await api.get_app(gate["id"])
-        aud = (gate_full or {}).get("aud")
-    if not isinstance(aud, str) or not aud:
-        raise RuntimeError("Cloudflare did not return an audience tag for the gate app")
+    hostname = options[CONF_HOSTNAME]
+
+    bypass_id: str | None = None
+    if (bypass := desired_bypass_app(options)) is not None:
+        bypass_id = (await reconcile_app(api, bypass_app_id, bypass, writes))["id"]
+    else:
+        await retire_app(api, bypass_app_id, BYPASS_APP_NAME_FMT.format(hostname=hostname), writes)
+
+    gate_id: str | None = None
+    aud: str | None = None
+    if (gate := desired_gate_app(options, linked_app_ids)) is not None:
+        app = await reconcile_app(api, gate_app_id, gate, writes)
+        gate_id = app["id"]
+        aud = app.get("aud")
+        if not isinstance(aud, str) or not aud:
+            full = await api.get_app(gate_id)
+            aud = (full or {}).get("aud")
+        if not isinstance(aud, str) or not aud:
+            raise RuntimeError("Cloudflare did not return an audience tag for the gate app")
+    else:
+        await retire_app(api, gate_app_id, GATE_APP_NAME_FMT.format(hostname=hostname), writes)
+
     return ProvisionResult(
         team_domain=team_domain,
         policy_aud=aud,
-        gate_app_id=gate["id"],
-        bypass_app_id=bypass["id"],
+        gate_app_id=gate_id,
+        bypass_app_id=bypass_id,
         writes=writes,
     )
 
 
-async def async_delete_apps(
-    api: CloudflareAccessApi, gate_app_id: str | None, bypass_app_id: str | None
-) -> None:
-    """Delete both applications (gate first so nothing stays gated)."""
-    if gate_app_id:
-        await api.delete_app(gate_app_id)
-    if bypass_app_id:
-        await api.delete_app(bypass_app_id)
+async def async_delete_apps(api: CloudflareAccessApi, *app_ids: str | None) -> None:
+    """Delete the given applications (gate first so nothing stays gated)."""
+    for app_id in app_ids:
+        if app_id and await api.get_app(app_id) is not None:
+            await api.delete_app(app_id)

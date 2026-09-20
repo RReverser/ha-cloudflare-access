@@ -2,35 +2,32 @@
   "config": {
     "step": {
       "user": {
-        "title": "Cloudflare Access relay",
-        "description": "The integration creates and maintains two Access applications for the hostname: a gate (allow policy for the people listed, and Access's own OAuth server for token-bearing clients) and a bypass (login, static assets and the relay endpoints). The gate starts disabled: only the relay callback path is protected until you enable it in the options.",
+        "title": "Cloudflare Access",
+        "description": "The integration creates and maintains an Access application that gates the whole hostname, with an allow policy for the people listed and Access's own OAuth server for token-bearing clients. The gate starts disabled: nothing changes at the edge until you enable it in the options.",
         "data": {
           "api_token": "Cloudflare API token",
           "account_id": "Cloudflare account ID",
           "hostname": "Hostname",
           "allowed_emails": "Allowed e-mail addresses",
           "access_group_id": "Access group ID (instead of e-mails)",
-          "extra_bypass_paths": "Extra bypassed paths",
           "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
-          "cookie_name": "Cookie name",
+          "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
+          "extra_bypass_paths": "Bypassed paths",
           "identity_claim": "Identity claim",
           "user_match": "Home Assistant user field",
-          "renew_days": "Renew when fewer days remain",
-          "check_interval_min": "Check interval",
-          "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
-          "client_redirect_uris": "Redirect URIs allowed for self-registering clients"
+          "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
           "api_token": "Account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
           "hostname": "The public hostname served through Cloudflare, e.g. ha.example.com.",
           "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
-          "extra_bypass_paths": "Hostname-relative path prefixes that server-to-server callers reach without a cookie, e.g. /api/webhook/abc.",
-          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy. Used by the live tests; safer than bypassing a path.",
-          "session_duration": "Lifetime of the Access token, e.g. 720h. Cloudflare's ceiling is one month.",
-          "identity_claim": "JWT claim compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers.",
-          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\"."
+          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
+          "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
+          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
+          "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
+          "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
+          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
         }
       },
       "reauth_confirm": {
@@ -59,25 +56,28 @@
   "options": {
     "step": {
       "init": {
-        "title": "Cloudflare Access relay for {hostname}",
-        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths.",
+        "title": "Cloudflare Access for {hostname}",
+        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths listed here.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "allowed_emails": "Allowed e-mail addresses",
           "access_group_id": "Access group ID (instead of e-mails)",
-          "extra_bypass_paths": "Extra bypassed paths",
           "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
-          "cookie_name": "Cookie name",
+          "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
+          "extra_bypass_paths": "Bypassed paths",
           "identity_claim": "Identity claim",
           "user_match": "Home Assistant user field",
-          "renew_days": "Renew when fewer days remain",
-          "check_interval_min": "Check interval",
-          "delete_objects_on_remove": "Delete the Access applications when the integration is removed",
-          "client_redirect_uris": "Redirect URIs allowed for self-registering clients"
+          "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\"."
+          "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
+          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
+          "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
+          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
+          "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
+          "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
+          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
         }
       }
     },

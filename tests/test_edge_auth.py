@@ -14,7 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cloudflare_access_relay.const import DOMAIN, ISSUE_RESTART_REQUIRED
 
-from .conftest import ALICE, BOB, HOSTNAME, FakeCloudflare, FakeJwks, Relay, make_entry, token_for
+from .conftest import ALICE, BOB, HOSTNAME, Access, FakeCloudflare, FakeJwks, make_entry, token_for
 
 HDR = "Cf-Access-Jwt-Assertion"
 # what Access forwards after validating a managed-OAuth or registered-client token
@@ -36,41 +36,62 @@ class WhoAmI(HomeAssistantView):
 
 
 async def test_access_admitted_bearer_is_authenticated_as_the_mapped_user(
-    hass: HomeAssistant, relay: Relay, alice: User, bob: User, hass_client_no_auth: Any
+    hass: HomeAssistant, access: Access, alice: User, bob: User, hass_client_no_auth: Any
 ) -> None:
     hass.http.register_view(WhoAmI())
     client = await hass_client_no_auth()
 
-    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: relay.mint(ALICE)})})
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(ALICE)})})
     assert resp.status == 200 and (await resp.json())["user"] == alice.id
-    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: relay.mint(BOB)})})
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(BOB)})})
     assert (await resp.json())["user"] == bob.id, "identity claim picks the user"
 
     resp = await client.get("/api/whoami", headers={**FOREIGN, **edge()})
     assert resp.status == 401, "no assertion: Home Assistant's own verdict on a foreign bearer"
-    resp = await client.get("/api/whoami", headers={**FOREIGN, HDR: relay.mint(ALICE)})
+    resp = await client.get("/api/whoami", headers={**FOREIGN, HDR: access.mint(ALICE)})
     assert resp.status == 401, "not through the edge: the assertion is not trusted"
     resp = await client.get(
-        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: relay.mint("nobody@example.com")})}
+        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("nobody@example.com")})}
     )
     assert resp.status == 401
     assert "no Home Assistant user" in (await resp.json())["message"]
-    bad = relay.mint(ALICE)[:-2] + "AA"
+    bad = access.mint(ALICE)[:-2] + "AA"
     resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: bad})})
     assert resp.status == 401 and "did not verify" in (await resp.json())["message"]
 
 
 async def test_home_assistant_tokens_and_cookie_sessions_are_untouched(
-    hass: HomeAssistant, relay: Relay, alice: User, bob: User, hass_client_no_auth: Any
+    hass: HomeAssistant, access: Access, alice: User, bob: User, hass_client_no_auth: Any
 ) -> None:
     hass.http.register_view(WhoAmI())
     client = await hass_client_no_auth()
     token = await token_for(hass, alice)
     ha = {"Authorization": f"Bearer {token}"}
-    resp = await client.get("/api/whoami", headers={**ha, **edge(**{HDR: relay.mint(BOB)})})
+    resp = await client.get("/api/whoami", headers={**ha, **edge(**{HDR: access.mint(BOB)})})
     assert (await resp.json())["user"] == alice.id, "a Home Assistant token wins over the assertion"
-    resp = await client.get("/api/whoami", headers=edge(**{HDR: relay.mint(ALICE)}))
+    resp = await client.get("/api/whoami", headers=edge(**{HDR: access.mint(ALICE)}))
     assert resp.status == 401, "no bearer at all: the assertion alone never authenticates"
+
+
+async def test_disabled_gate_leaves_bearers_to_home_assistant(
+    hass: HomeAssistant,
+    fake_cloudflare: FakeCloudflare,
+    jwks_server: FakeJwks,
+    rsa_keys: Any,
+    alice: User,
+    hass_client_no_auth: Any,
+) -> None:
+    """Without a gate there is no audience to verify against: nothing is mapped."""
+    from .conftest import Minter
+
+    entry: MockConfigEntry = make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    hass.http.register_view(WhoAmI())
+    client = await hass_client_no_auth()
+    assertion = Minter(rsa_keys, "some-aud")(ALICE)
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: assertion})})
+    assert resp.status == 401
 
 
 async def test_setup_after_server_start_asks_for_a_restart(

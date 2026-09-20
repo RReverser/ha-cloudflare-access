@@ -26,13 +26,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run playwright install --with-deps chromium
       - run: uv run pytest -q --timeout=300
 
   live:
     # Real Cloudflare: creates a run-scoped service token, sets the integration up
     # through Home Assistant against the test host, proves the edge behaviour the
-    # relay depends on (tests/live), deletes the token. Skipped when the two secrets
+    # integration depends on (tests/live), deletes the token. Skipped when the two secrets
     # are absent (forks).
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
