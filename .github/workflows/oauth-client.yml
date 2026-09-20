@@ -1,0 +1,41 @@
+name: OAuth client
+
+# Maintainer-only: manage the project's "Sign in with Cloudflare" OAuth client with the
+# repository's Cloudflare token (scripts/oauth_client.py). `setup` grants the token the
+# permissions it needs, creates the client and verifies the client URL's domain;
+# `publish` makes the client public, which is permanent and needs confirm=publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Command
+        type: choice
+        options: [setup, grant, create, verify, publish, show]
+        default: show
+      confirm:
+        description: Type "publish" to confirm making the client public
+        type: string
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    concurrency: oauth-client
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - if: inputs.command != 'publish'
+        run: uv run python -m scripts.oauth_client ${{ inputs.command }}
+      - if: inputs.command == 'publish' && inputs.confirm == 'publish'
+        run: uv run python -m scripts.oauth_client publish --yes
+      - if: inputs.command == 'publish' && inputs.confirm != 'publish'
+        run: |
+          echo "::error::publish needs confirm=publish"
+          exit 1
