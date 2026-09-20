@@ -72,8 +72,9 @@ _LOGGER = logging.getLogger(__name__)
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
-STEP_OAUTH = "oauth"
-STEP_API_TOKEN = "api_token"
+# Started with this source (tests, automation) instead of the sign-in; also the reauth
+# path of an entry created with a token.
+SOURCE_API_TOKEN = "api_token"
 
 
 def normalise_hostname(raw: str) -> str:
@@ -165,7 +166,7 @@ def _users_placeholder(emails: list[str]) -> str:
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
-    """Initial setup: sign in with Cloudflare (or paste an API token), then the hostname."""
+    """Initial setup: sign in with Cloudflare, pick the account, then the hostname."""
 
     DOMAIN = DOMAIN
     VERSION = 1
@@ -198,10 +199,6 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     # ----------------------------------------------------------------- credentials
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Choose how to authenticate with Cloudflare."""
-        return self.async_show_menu(step_id="user", menu_options=[STEP_OAUTH, STEP_API_TOKEN])
-
-    async def async_step_oauth(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Sign in with Cloudflare: the consent page asks for the integration's scopes."""
         return await self.async_step_pick_implementation()
 
@@ -269,7 +266,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_api_token(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Use an API token instead of signing in."""
+        """Use an API token instead of signing in (source "api_token", or reauth)."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self._credential = {
@@ -290,7 +287,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         if self.source == SOURCE_REAUTH:
             defaults.setdefault(CONF_ACCOUNT_ID, self._get_reauth_entry().data[CONF_ACCOUNT_ID])
         return self.async_show_form(
-            step_id=STEP_API_TOKEN,
+            step_id=SOURCE_API_TOKEN,
             data_schema=vol.Schema(
                 {
                     vol.Required(

@@ -26,11 +26,9 @@ Google Home or Alexa link, nor on a real phone.
   zone in the account.
 - A Zero Trust organization with an identity provider. Everything used is documented by
   Cloudflare without a plan restriction; managed OAuth is marked beta by Cloudflare.
-- A way for the integration to call the Cloudflare API as you: **sign in with Cloudflare**
-  through an OAuth client of your own (see *Sign-in*), or an account-level API token with the
-  permissions **Access: Apps and Policies: Edit** and **Access: Organizations, Identity
-  Providers, and Groups: Read**. Either is stored in the config entry and used for nothing
-  else.
+- Nothing else to prepare: the integration **signs in with Cloudflare** through the project's
+  published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
+  token set is stored in the config entry and used for nothing else.
 - Home Assistant users whose login identity is their identity-provider e-mail address (by
   default the built-in login username; see *Options*). Those addresses are the gate's allow
   policy, and the address of an admitted request picks the user.
@@ -120,13 +118,11 @@ and keeps everything else.
 
 1. HACS → Integrations → three dots → *Custom repositories* → add this repository as an
    *Integration*, then install **Cloudflare Access**. Restart Home Assistant.
-2. Settings → Devices & services → *Add integration* → **Cloudflare Access**, and choose
-   **Sign in with Cloudflare** (see *Sign-in*; needs the OAuth client created once) or **Use
-   an API token** (token and account ID; the account ID is in the right column of any zone
-   overview in the Cloudflare dashboard).
-3. After the sign-in, the account is picked if there is one, asked for otherwise. Then the
-   hostname (pre-filled from the external URL) and the advanced options. The form shows which
-   users' addresses the gate would let in.
+2. Settings → Devices & services → *Add integration* → **Cloudflare Access**. The browser is
+   sent to Cloudflare's consent page, which shows the three permissions; allow.
+3. Back in Home Assistant, the account is picked if the sign-in reaches one, asked for
+   otherwise. Then the hostname (pre-filled from the external URL) and the advanced options.
+   The form shows which users' addresses the gate would let in.
 4. The integration validates the credential by listing the Access applications and reading
    the team domain, and creates nothing yet: the gate starts **off**. Read *Rollout* before
    enabling it.
@@ -136,21 +132,20 @@ and keeps everything else.
 Cloudflare's OAuth lets the integration ask for exactly the permissions it uses, on the
 consent page, instead of a token you assemble by hand: `access.write` (Access: Apps and
 Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
-Read) and `offline_access` (a refresh token, so the sign-in lasts). Cloudflare OAuth clients
-are created by the account that uses them; one that any Cloudflare account could use has to
-be published by its owner, which this project has not done yet. Until then, create the client
-yourself, once:
+Read) and `offline_access` (a refresh token, so the sign-in lasts). The integration ships the
+client ID of the project's public OAuth client (PKCE, no secret), so there is nothing to
+register. The token set is refreshed before every API call; when Cloudflare stops accepting
+it, the integration asks to sign in again.
 
-1. Cloudflare dashboard → *Manage Account* → *OAuth clients* → *Create client*: any name,
-   redirect URL `https://my.home-assistant.io/redirect/oauth`, grant types *authorization
-   code* and *refresh token*, response type *code*, token endpoint authentication *none*
-   (PKCE), and the three scopes above. The client can stay private to your account.
-2. Home Assistant → Settings → Devices & services → three dots → *Application credentials* →
-   *Add*: pick **Cloudflare Access**, enter the client ID and leave the secret empty.
-3. Add the integration and choose *Sign in with Cloudflare*.
+To sign in through a client of your own instead, create one in the Cloudflare dashboard
+(*Manage Account* → *OAuth clients*: redirect URL `https://my.home-assistant.io/redirect/oauth`,
+grant types *authorization code* and *refresh token*, token endpoint authentication *none*,
+the scopes above) and add its client ID under Home Assistant's *Application credentials*; it
+then takes the project's client's place.
 
-The token set is refreshed before every API call; when Cloudflare stops accepting it, the
-integration asks to sign in again.
+An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
+Identity Providers, and Groups: Read**) can replace the sign-in where a browser cannot reach
+the consent page, as in this project's CI: start the flow with the source `api_token`.
 
 ## Rollout
 
@@ -279,6 +274,14 @@ CF_API_TOKEN=… CF_ACCOUNT_ID=… uv run pytest -q tests/live   # the real edge
 The repository needs a description, topics and a LICENSE file before HACS accepts it; the
 `hacs` CI job reports these until they exist.
 
+## The project's OAuth client
+
+`scripts/oauth_client.py` (run by the *OAuth client* workflow with the repository's Cloudflare
+token) creates and maintains the Cloudflare OAuth client the integration signs in with: name,
+logo (`logo.png`), redirect URL, grant types, PKCE, scopes, the client URL's DNS verification
+record, and the promotion to public visibility, which Cloudflare makes permanent. Its client
+ID is `OAUTH_CLIENT_ID` in `const.py`.
+
 ## Design notes
 
 - The Access API field `self_hosted_domains` is deprecated (support ended 21 Nov 2025); the
@@ -294,10 +297,12 @@ The repository needs a description, topics and a LICENSE file before HACS accept
   two lists mean the same thing (an address that is not a user cannot log in anyway) and an
   entered list drifts. A user without an address in the field cannot be a policy subject and
   is left out; the options page and the setup form show who is in.
-- Signing in uses Cloudflare's self-managed OAuth clients (dashboard → Manage Account → OAuth
-  clients), which exist on every plan. A client is private to the account that created it
-  until its owner publishes it, so until this project publishes one, each installation
-  creates its own and adds it as an application credential.
+- Signing in uses Cloudflare's self-managed OAuth clients, which exist on every plan. A client
+  is private to the account that created it until its owner publishes it (name, logo, a
+  client URL whose domain is verified by DNS), which this project has done, so the client ID
+  ships in the code like any "Sign in with" integration's. Cloudflare's OAuth server offers no
+  dynamic client registration, and creating a client through the API already needs an
+  authenticated token, so a per-installation client could not be automatic.
 - Registered clients are Access for SaaS applications because Google's and Amazon's consoles
   take a static client id and secret and fixed endpoints and offer no discovery or dynamic
   registration (checked against their documentation on 20 Sep 2026). MCP clients do both,
