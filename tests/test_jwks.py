@@ -69,7 +69,7 @@ async def test_rejected_tokens(
 async def test_tampered_signature(verifier: JwksVerifier, mint: Minter) -> None:
     token = mint()
     head, payload, sig = token.split(".")
-    flipped = ("A" if sig[-1] != "A" else "B") + sig[1:]
+    flipped = ("A" if sig[0] != "A" else "B") + sig[1:]
     with pytest.raises(JwtVerifyError) as err:
         await verifier.verify(f"{head}.{payload}.{flipped}", AUD)
     assert err.value.reason == "bad signature"
