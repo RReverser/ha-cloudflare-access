@@ -10,15 +10,15 @@ real Access assertion verified against the real JWKS.
 The raw Cloudflare API is used only to create and delete this run's service
 token, to observe the applications, and to inject drift.
 
-Environment (GitHub Actions repository secrets):
+Environment (GitHub Actions repository secrets and variables):
   CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
                   "Access: Organizations, Identity Providers, and Groups: Read"
                   and "Access: Service Tokens: Edit"
   CF_ACCOUNT_ID
+  CF_TEST_HOST    a hostname in a zone of that account, served by tests/live/worker
 
 Prerequisites that already exist and are not touched: the Worker on the test
-hostname with its custom domain, and the zone WAF rule exempting that host from
-bot protection.
+hostname, and whatever exempts that host from the zone's bot protection.
 """
 
 from __future__ import annotations
@@ -70,11 +70,11 @@ from custom_components.cloudflare_access_relay.const import (
 from ..conftest import add_user
 
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get("CF_API_TOKEN") and os.environ.get("CF_ACCOUNT_ID")),
-    reason="live Cloudflare credentials not set (CF_API_TOKEN, CF_ACCOUNT_ID)",
+    not all(os.environ.get(k) for k in ("CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_TEST_HOST")),
+    reason="live Cloudflare settings not set (CF_API_TOKEN, CF_ACCOUNT_ID, CF_TEST_HOST)",
 )
 
-HOST = "test-host.example.com"
+HOST = os.environ.get("CF_TEST_HOST", "")
 # the allow policy needs a subject; the test logs in with its service token instead
 EMAIL = "nobody@example.com"
 BASE = f"https://{HOST}"

@@ -31,14 +31,15 @@ jobs:
   live:
     # Real Cloudflare: creates a run-scoped service token, sets the integration up
     # through Home Assistant against the test host, proves the edge behaviour the
-    # integration depends on (tests/live), deletes the token. Skipped when the two secrets
-    # are absent (forks).
+    # integration depends on (tests/live), deletes the token. Skipped when the secrets
+    # and the CF_TEST_HOST variable are absent (forks).
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     concurrency: live-cloudflare
     env:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_TEST_HOST: ${{ vars.CF_TEST_HOST }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

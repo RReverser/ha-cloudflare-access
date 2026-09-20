@@ -189,11 +189,13 @@ and `common_name` instead of `email`. The integration accepts both `aud` shapes.
 
 ### Test host
 
-`test-host.example.com` is a permanent test hostname: a Cloudflare Worker
-(`preflight/worker`, deployed as `test-host` with a Workers custom domain) that echoes
-requests. The zone has one custom WAF rule scoped to this host that skips bot protection, so
-curl and CI can reach it. The live test creates a run-scoped Access service token, drives the
-integration through Home Assistant against this host, and deletes the token.
+The live test needs a hostname in a zone of the account, served by the echo Worker in
+`tests/live/worker` (deploy it with `npx wrangler deploy` and a route or a Workers custom
+domain), and exempt from the zone's bot protection so that CI can reach it. It creates a
+run-scoped Access service token, drives the integration through Home Assistant against that
+host, and deletes the token. CI reads the hostname from the repository variable
+`CF_TEST_HOST` and the credentials from the secrets `CF_API_TOKEN` and `CF_ACCOUNT_ID`; without
+them the live job is skipped, as on forks.
 
 ## Security properties
 
@@ -229,7 +231,7 @@ integration through Home Assistant against this host, and deletes the token.
 uv sync
 uv run pytest -q        # unit tests against a fake Cloudflare API and a fake JWKS
 uv run ruff check . && uv run ruff format --check . && uv run mypy
-CF_API_TOKEN=… CF_ACCOUNT_ID=… uv run pytest -q tests/live   # the real edge
+CF_API_TOKEN=… CF_ACCOUNT_ID=… CF_TEST_HOST=… uv run pytest -q tests/live   # the real edge
 ```
 
 ## Publishing to HACS
