@@ -408,13 +408,8 @@ def make_entry(**options: Any) -> MockConfigEntry:
     )
 
 
-@pytest.fixture
-def config_entry() -> MockConfigEntry:
-    return make_entry()
-
-
 @dataclass
-class Relay:
+class Access:
     entry: MockConfigEntry
     cloudflare: FakeCloudflare
     jwks: FakeJwks
@@ -426,19 +421,19 @@ class Relay:
 
 
 @pytest.fixture
-async def relay(
+async def access(
     hass: HomeAssistant,
-    config_entry: MockConfigEntry,
     fake_cloudflare: FakeCloudflare,
     jwks_server: FakeJwks,
     rsa_keys: dict[str, RsaKey],
-) -> Relay:
-    """Set the integration up against the fake servers."""
-    config_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
+) -> Access:
+    """Set the integration up against the fake servers with the gate enabled."""
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    aud = config_entry.data["policy_aud"]
-    return Relay(config_entry, fake_cloudflare, jwks_server, Minter(rsa_keys, aud))
+    aud = entry.data["policy_aud"]
+    return Access(entry, fake_cloudflare, jwks_server, Minter(rsa_keys, aud))
 
 
 async def add_user(hass: HomeAssistant, username: str, *, name: str | None = None) -> User:
@@ -467,16 +462,6 @@ async def alice(hass: HomeAssistant) -> User:
 @pytest.fixture
 async def bob(hass: HomeAssistant) -> User:
     return await add_user(hass, BOB, name="Bob")
-
-
-@pytest.fixture
-def user_client(hass: HomeAssistant, hass_client: Any) -> Callable[[User], Any]:
-    """Return a factory: authenticated client for a given user."""
-
-    async def _make(user: User) -> Any:
-        return await hass_client(await token_for(hass, user))
-
-    return _make
 
 
 @pytest.fixture

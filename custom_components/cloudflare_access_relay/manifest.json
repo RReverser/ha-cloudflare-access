@@ -1,14 +1,20 @@
 {
   "domain": "cloudflare_access_relay",
-  "name": "Cloudflare Access Relay",
-  "codeowners": ["@RReverser"],
+  "name": "Cloudflare Access",
+  "codeowners": [
+    "@RReverser"
+  ],
   "config_flow": true,
-  "dependencies": ["http", "frontend", "auth"],
+  "dependencies": [
+    "http"
+  ],
   "documentation": "https://github.com/RReverser/ha-cloudflare-access",
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/RReverser/ha-cloudflare-access/issues",
-  "requirements": ["cloudflare==5.7.0"],
+  "requirements": [
+    "cloudflare==5.7.0"
+  ],
   "single_config_entry": false,
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

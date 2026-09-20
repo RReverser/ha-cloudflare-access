@@ -19,9 +19,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -39,17 +36,14 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_ALLOWED_EMAILS,
     CONF_API_TOKEN,
-    CONF_CHECK_INTERVAL_MIN,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
-    CONF_COOKIE_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_IDENTITY_CLAIM,
     CONF_REDIRECT_URIS,
-    CONF_RENEW_DAYS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     CONF_USER_MATCH,
@@ -57,12 +51,9 @@ from .const import (
     DATA_CLIENT_ID,
     DATA_CLIENT_SECRET,
     DATA_TEAM_DOMAIN,
-    DEFAULT_CHECK_INTERVAL_MIN,
-    DEFAULT_COOKIE_NAME,
     DEFAULT_DELETE_OBJECTS_ON_REMOVE,
     DEFAULT_GATE_ENABLED,
     DEFAULT_IDENTITY_CLAIM,
-    DEFAULT_RENEW_DAYS,
     DEFAULT_SESSION_DURATION,
     DEFAULT_USER_MATCH,
     DOMAIN,
@@ -75,16 +66,6 @@ _LOGGER = logging.getLogger(__name__)
 
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
-_DAYS = NumberSelector(
-    NumberSelectorConfig(
-        min=0, max=30, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="d"
-    )
-)
-_MINUTES = NumberSelector(
-    NumberSelectorConfig(
-        min=1, max=1440, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="min"
-    )
-)
 
 
 def normalise_hostname(raw: str) -> str:
@@ -121,21 +102,11 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
             default=defaults.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
         ): str,
         vol.Optional(
-            CONF_COOKIE_NAME, default=defaults.get(CONF_COOKIE_NAME, DEFAULT_COOKIE_NAME)
-        ): str,
-        vol.Optional(
             CONF_IDENTITY_CLAIM, default=defaults.get(CONF_IDENTITY_CLAIM, DEFAULT_IDENTITY_CLAIM)
         ): str,
         vol.Optional(
             CONF_USER_MATCH, default=defaults.get(CONF_USER_MATCH, DEFAULT_USER_MATCH)
         ): str,
-        vol.Optional(
-            CONF_RENEW_DAYS, default=defaults.get(CONF_RENEW_DAYS, DEFAULT_RENEW_DAYS)
-        ): _DAYS,
-        vol.Optional(
-            CONF_CHECK_INTERVAL_MIN,
-            default=defaults.get(CONF_CHECK_INTERVAL_MIN, DEFAULT_CHECK_INTERVAL_MIN),
-        ): _MINUTES,
         vol.Optional(
             CONF_DELETE_OBJECTS_ON_REMOVE,
             default=defaults.get(CONF_DELETE_OBJECTS_ON_REMOVE, DEFAULT_DELETE_OBJECTS_ON_REMOVE),
@@ -157,10 +128,7 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     out[CONF_CLIENT_REDIRECT_URIS] = _clean_list(out.get(CONF_CLIENT_REDIRECT_URIS))
     if any(not u.startswith("https://") for u in out[CONF_CLIENT_REDIRECT_URIS]):
         errors[CONF_CLIENT_REDIRECT_URIS] = "invalid_redirect_uri"
-    for key in (CONF_RENEW_DAYS, CONF_CHECK_INTERVAL_MIN):
-        if key in out:
-            out[key] = int(out[key])
-    for key in (CONF_SESSION_DURATION, CONF_COOKIE_NAME, CONF_IDENTITY_CLAIM, CONF_USER_MATCH):
+    for key in (CONF_SESSION_DURATION, CONF_IDENTITY_CLAIM, CONF_USER_MATCH):
         if key in out:
             out[key] = str(out[key]).strip()
             if not out[key]:
