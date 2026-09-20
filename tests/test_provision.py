@@ -636,6 +636,12 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     await hass.async_block_till_done(wait_background_tasks=True)
     assert cf.by_name(f"ha-relay: client {HOSTNAME} Google Home") is None
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-relay: allow"]
+    # the gate drops its rule before the application goes: Cloudflare refuses a gate
+    # write that still refers to a deleted application
+    writes = cf.writes()
+    gate_put = max(i for i, w in enumerate(writes) if w[0] == "PUT" and w[2]["name"] == GATE)
+    delete = next(i for i, w in enumerate(writes) if w[0] == "DELETE" and client["id"] in w[1])
+    assert gate_put < delete
 
 
 async def test_client_registration_survives_a_reload_and_a_lost_application(
