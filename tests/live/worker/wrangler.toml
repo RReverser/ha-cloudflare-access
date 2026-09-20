@@ -1,6 +1,0 @@
-name = "ha-access-test-host"
-main = "worker.js"
-compatibility_date = "2026-09-01"
-
-# Serve it on the test hostname, e.g. with a Workers custom domain, or a route:
-# routes = [{ pattern = "ha-test.example.com/*", zone_name = "example.com" }]

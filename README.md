@@ -189,13 +189,13 @@ and `common_name` instead of `email`. The integration accepts both `aud` shapes.
 
 ### Test host
 
-The live test needs a hostname in a zone of the account, served by the echo Worker in
-`tests/live/worker` (deploy it with `npx wrangler deploy` and a route or a Workers custom
-domain), and exempt from the zone's bot protection so that CI can reach it. It creates a
-run-scoped Access service token, drives the integration through Home Assistant against that
-host, and deletes the token. CI reads the hostname from the repository variable
-`CF_TEST_HOST` and the credentials from the secrets `CF_API_TOKEN` and `CF_ACCOUNT_ID`; without
-them the live job is skipped, as on forks.
+The live test needs no hostname of its own: it deploys the echo Worker in `tests/live/worker`
+on the account's `workers.dev` subdomain under a run-scoped name, which Access accepts as an
+application domain like any hostname, drives the integration through Home Assistant against
+it with a run-scoped Access service token, and deletes the Worker, the token and every
+application it created. CI reads the credentials from the secrets `CF_API_TOKEN` (the two
+Access permissions above plus **Access: Service Tokens: Edit** and **Workers Scripts: Edit**)
+and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 
 ## Security properties
 
@@ -231,7 +231,7 @@ them the live job is skipped, as on forks.
 uv sync
 uv run pytest -q        # unit tests against a fake Cloudflare API and a fake JWKS
 uv run ruff check . && uv run ruff format --check . && uv run mypy
-CF_API_TOKEN=… CF_ACCOUNT_ID=… CF_TEST_HOST=… uv run pytest -q tests/live   # the real edge
+CF_API_TOKEN=… CF_ACCOUNT_ID=… uv run pytest -q tests/live   # the real edge
 ```
 
 ## Publishing to HACS
