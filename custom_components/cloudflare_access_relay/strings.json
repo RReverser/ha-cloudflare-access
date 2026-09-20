@@ -1,15 +1,43 @@
 {
+  "application_credentials": {
+    "description": "The integration signs in to Cloudflare with an OAuth client of your own: in the Cloudflare dashboard open Manage Account → OAuth clients and create a client with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}. Enter its client ID here; the client secret stays empty. [Details]({more_info_url})."
+  },
   "config": {
     "step": {
       "user": {
         "title": "Cloudflare Access",
-        "description": "The integration creates and maintains an Access application that gates the whole hostname, with an allow policy for the people listed and Access's own OAuth server for token-bearing clients. The gate starts disabled: nothing changes at the edge until you enable it in the options.",
+        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Choose how it authenticates with Cloudflare.",
+        "menu_options": {
+          "oauth": "Sign in with Cloudflare",
+          "api_token": "Use an API token"
+        }
+      },
+      "pick_implementation": {
+        "title": "Sign in with Cloudflare",
         "data": {
-          "api_token": "Cloudflare API token",
-          "account_id": "Cloudflare account ID",
+          "implementation": "Credentials"
+        }
+      },
+      "account": {
+        "title": "Cloudflare account",
+        "description": "The sign-in reaches several accounts. Choose the one whose zone serves the hostname.",
+        "data": {
+          "account_id": "Account"
+        }
+      },
+      "api_token": {
+        "title": "Cloudflare API token",
+        "description": "An account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
+        "data": {
+          "api_token": "API token",
+          "account_id": "Account ID"
+        }
+      },
+      "settings": {
+        "title": "Hostname and options",
+        "description": "The gate starts disabled: nothing changes at the edge until you enable it in the options. Its allow policy lists the e-mail addresses of the Home Assistant users (currently: {allowed_users}) and follows them as users come and go.",
+        "data": {
           "hostname": "Hostname",
-          "allowed_emails": "Allowed e-mail addresses",
-          "access_group_id": "Access group ID (instead of e-mails)",
           "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
           "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
@@ -19,49 +47,46 @@
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "api_token": "Account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. Stored in the config entry.",
           "hostname": "The public hostname served through Cloudflare, e.g. ha.example.com.",
-          "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
           "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
           "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
           "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
           "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
           "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
+          "user_match": "Which Home Assistant user field holds the e-mail address: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers. The same field feeds the allow policy and matches an admitted identity to the user."
         }
       },
       "reauth_confirm": {
-        "title": "Replace the Cloudflare API token",
-        "data": {
-          "api_token": "Cloudflare API token"
-        }
+        "title": "Sign in with Cloudflare again",
+        "description": "Cloudflare no longer accepts the sign-in. Continue to sign in again."
       }
     },
     "error": {
-      "invalid_auth": "Cloudflare rejected the token. It needs 'Access: Apps and Policies: Edit' on this account.",
-      "missing_org_read": "The token cannot read the Zero Trust organization (the team domain). Add the permission 'Access: Organizations, Identity Providers, and Groups: Read' to it.",
+      "invalid_auth": "Cloudflare rejected the credential. It needs 'Access: Apps and Policies: Edit' on this account.",
+      "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
-      "no_policy_subject": "List at least one e-mail address or an Access group ID.",
-      "invalid_email": "One of the e-mail addresses is not valid.",
       "required": "This field is required.",
       "invalid_redirect_uri": "Redirect URIs must start with https://."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
-      "reauth_successful": "The token was replaced."
+      "reauth_successful": "The credential was replaced.",
+      "invalid_auth": "Cloudflare rejected the credential. It needs 'Access: Apps and Policies: Edit' on this account.",
+      "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
+      "cannot_connect": "Cloudflare could not be reached.",
+      "api_error": "Cloudflare returned an error; see the log.",
+      "no_accounts": "The sign-in reaches no Cloudflare account."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths listed here.",
+        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths listed here. The allow policy lists the e-mail addresses of the Home Assistant users (currently: {allowed_users}) and follows them as users come and go.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
-          "allowed_emails": "Allowed e-mail addresses",
-          "access_group_id": "Access group ID (instead of e-mails)",
           "service_token_ids": "Service token IDs allowed through the gate",
           "session_duration": "Access session duration",
           "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
@@ -71,19 +96,17 @@
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "allowed_emails": "Identity-provider e-mail addresses the gate lets in. One per line.",
           "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
           "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
           "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
           "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
           "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field must equal the claim: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers."
+          "user_match": "Which Home Assistant user field holds the e-mail address: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers. The same field feeds the allow policy and matches an admitted identity to the user."
         }
       }
     },
     "error": {
-      "no_policy_subject": "List at least one e-mail address or an Access group ID.",
-      "invalid_email": "One of the e-mail addresses is not valid.",
+      "no_allowed_users": "No Home Assistant user has an e-mail address in the selected user field, so the gate would let nobody in. Give a user an address first.",
       "required": "This field is required.",
       "invalid_redirect_uri": "Redirect URIs must start with https://."
     }
@@ -92,6 +115,10 @@
     "restart_required": {
       "title": "Restart Home Assistant to accept clients authenticated by Cloudflare Access",
       "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed. Until Home Assistant is restarted, requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access admitted are rejected by Home Assistant."
+    },
+    "no_allowed_users": {
+      "title": "No Home Assistant user can pass the Cloudflare Access gate",
+      "description": "No active Home Assistant user has an e-mail address in the field the options name ({user_match}), so there is nobody to list in the gate's allow policy. The policy was left as it was. Give a user an address, or change the field in the options."
     }
   },
   "config_subentries": {
@@ -129,7 +156,7 @@
       "error": {
         "required": "This field is required.",
         "invalid_redirect_uri": "Redirect URIs must start with https://.",
-        "invalid_auth": "Cloudflare rejected the API token.",
+        "invalid_auth": "Cloudflare rejected the credential.",
         "cannot_connect": "Cloudflare could not be reached.",
         "api_error": "Cloudflare returned an error; see the log."
       },

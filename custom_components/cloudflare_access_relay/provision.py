@@ -13,8 +13,6 @@ from .const import (
     BYPASS_APP_NAME_FMT,
     BYPASS_POLICY_NAME,
     CLIENT_APP_NAME_FMT,
-    CONF_ACCESS_GROUP_ID,
-    CONF_ALLOWED_EMAILS,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
@@ -44,20 +42,20 @@ def _clean(values: Sequence[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
 
 
-def gate_include_rules(options: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the include rules of the allow policy."""
-    if group_id := options.get(CONF_ACCESS_GROUP_ID):
-        return [{"group": {"id": group_id}}]
-    return [{"email": {"email": e}} for e in _clean(options.get(CONF_ALLOWED_EMAILS))]
+def include_rules(emails: Sequence[str]) -> list[dict[str, Any]]:
+    """Return the include rules of an allow policy: one per e-mail address."""
+    return [{"email": {"email": e}} for e in sorted(set(_clean(emails)))]
 
 
 def desired_gate_app(
-    options: dict[str, Any], linked_app_ids: Sequence[str] = ()
+    options: dict[str, Any], emails: Sequence[str], linked_app_ids: Sequence[str] = ()
 ) -> dict[str, Any] | None:
     """Return the desired gate application body, or None while the gate is disabled.
 
     The gate covers the whole hostname. People pass its allow policy in a browser
-    (the companion app included: it shares the cookie with its native requests).
+    (the companion app included: it shares the cookie with its native requests);
+    `emails` are the Home Assistant users' addresses, so whoever has an account
+    here may log in and nobody else.
     Token-bearing clients are admitted by Access itself: managed OAuth makes the
     gate an OAuth server for clients that discover and register themselves (MCP
     clients), for the redirect URIs listed in the options; clients registered
@@ -72,7 +70,7 @@ def desired_gate_app(
             "name": GATE_POLICY_NAME,
             "decision": "allow",
             "precedence": 1,
-            "include": gate_include_rules(options),
+            "include": include_rules(emails),
         }
     ]
     if token_ids := _clean(options.get(CONF_SERVICE_TOKEN_IDS)):
@@ -152,7 +150,7 @@ def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def desired_client_app(
-    options: dict[str, Any], name: str, redirect_uris: list[str]
+    options: dict[str, Any], emails: Sequence[str], name: str, redirect_uris: list[str]
 ) -> dict[str, Any]:
     """Return the desired application body for a client registered by hand.
 
@@ -181,7 +179,7 @@ def desired_client_app(
                 "name": GATE_POLICY_NAME,
                 "decision": "allow",
                 "precedence": 1,
-                "include": gate_include_rules(options),
+                "include": include_rules(emails),
             }
         ],
     }
@@ -344,6 +342,7 @@ async def retire_app(
 async def async_provision(
     api: CloudflareAccessApi,
     options: dict[str, Any],
+    emails: Sequence[str],
     *,
     gate_app_id: str | None,
     bypass_app_id: str | None,
@@ -368,7 +367,7 @@ async def async_provision(
 
     gate_id: str | None = None
     aud: str | None = None
-    if (gate := desired_gate_app(options, linked_app_ids)) is not None:
+    if (gate := desired_gate_app(options, emails, linked_app_ids)) is not None:
         app = await reconcile_app(api, gate_app_id, gate, writes)
         gate_id = app["id"]
         aud = app.get("aud")

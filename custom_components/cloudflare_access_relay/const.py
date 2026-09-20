@@ -7,9 +7,11 @@ from typing import Final
 DOMAIN: Final = "cloudflare_access_relay"
 VERSION: Final = "0.2.0"
 
-# Config entry data (immutable credentials + derived values)
+# Config entry data (credentials + derived values). An entry holds either an OAuth
+# token set (Home Assistant's `token` and `auth_implementation` keys) or an API token.
 CONF_API_TOKEN: Final = "api_token"
 CONF_ACCOUNT_ID: Final = "account_id"
+DATA_TOKEN: Final = "token"
 DATA_TEAM_DOMAIN: Final = "team_domain"
 DATA_POLICY_AUD: Final = "policy_aud"
 DATA_GATE_APP_ID: Final = "gate_app_id"
@@ -18,8 +20,6 @@ DATA_BYPASS_APP_ID: Final = "bypass_app_id"
 # Options
 CONF_HOSTNAME: Final = "hostname"
 CONF_GATE_ENABLED: Final = "gate_enabled"
-CONF_ALLOWED_EMAILS: Final = "allowed_emails"
-CONF_ACCESS_GROUP_ID: Final = "access_group_id"
 CONF_SERVICE_TOKEN_IDS: Final = "service_token_ids"
 CONF_SESSION_DURATION: Final = "session_duration"
 CONF_CLIENT_REDIRECT_URIS: Final = "client_redirect_uris"
@@ -36,6 +36,20 @@ DEFAULT_USER_MATCH: Final = "username"
 DEFAULT_DELETE_OBJECTS_ON_REMOVE: Final = True
 
 USER_MATCH_NAME: Final = "name"
+
+# Signing in with Cloudflare: a self-managed Cloudflare OAuth client with PKCE (no
+# secret), asking for exactly what the integration does. `access.write` creates and
+# maintains the Access applications, `access-acct.read` reads the team domain,
+# `offline_access` gives a refresh token so the sign-in lasts.
+OAUTH_AUTHORIZE_URL: Final = "https://dash.cloudflare.com/oauth2/auth"
+OAUTH_TOKEN_URL: Final = "https://dash.cloudflare.com/oauth2/token"
+OAUTH_SCOPES: Final[tuple[str, ...]] = ("access.write", "access-acct.read", "offline_access")
+# The project's public OAuth client, once published; empty means only credentials added
+# under Settings → Application credentials are offered.
+OAUTH_CLIENT_ID: Final = ""
+
+# Repair issues
+ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.

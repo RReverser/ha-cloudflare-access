@@ -1,4 +1,4 @@
-"""Config and options flows."""
+"""Config, options and subentry flows."""
 
 from __future__ import annotations
 
@@ -8,17 +8,22 @@ from typing import Any
 from urllib.parse import urlparse
 
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
     ConfigEntry,
-    ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
     OptionsFlowWithReload,
     SubentryFlowResult,
 )
 from homeassistant.core import callback
+from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -32,9 +37,7 @@ from .cloudflare_api import (
     CloudflareUnavailableError,
 )
 from .const import (
-    CONF_ACCESS_GROUP_ID,
     CONF_ACCOUNT_ID,
-    CONF_ALLOWED_EMAILS,
     CONF_API_TOKEN,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
@@ -51,6 +54,7 @@ from .const import (
     DATA_CLIENT_ID,
     DATA_CLIENT_SECRET,
     DATA_TEAM_DOMAIN,
+    DATA_TOKEN,
     DEFAULT_DELETE_OBJECTS_ON_REMOVE,
     DEFAULT_GATE_ENABLED,
     DEFAULT_IDENTITY_CLAIM,
@@ -59,13 +63,17 @@ from .const import (
     DOMAIN,
     SUBENTRY_TYPE_CLIENT,
 )
-from .options import api_for, effective_options
+from .options import DEFAULT_OPTIONS, api_for, effective_options
 from .provision import desired_client_app
+from .users import allowed_emails
 
 _LOGGER = logging.getLogger(__name__)
 
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+STEP_OAUTH = "oauth"
+STEP_API_TOKEN = "api_token"
 
 
 def normalise_hostname(raw: str) -> str:
@@ -78,15 +86,6 @@ def normalise_hostname(raw: str) -> str:
 
 def _clean_list(values: list[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
-
-
-def _policy_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
-    return {
-        vol.Optional(
-            CONF_ALLOWED_EMAILS, default=list(defaults.get(CONF_ALLOWED_EMAILS) or [])
-        ): _MULTI_TEXT,
-        vol.Optional(CONF_ACCESS_GROUP_ID, default=defaults.get(CONF_ACCESS_GROUP_ID) or ""): str,
-    }
 
 
 def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
@@ -121,8 +120,6 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
 def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
     """Normalise option values and record validation errors."""
     out = dict(user_input)
-    out[CONF_ALLOWED_EMAILS] = _clean_list(out.get(CONF_ALLOWED_EMAILS))
-    out[CONF_ACCESS_GROUP_ID] = (out.get(CONF_ACCESS_GROUP_ID) or "").strip()
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
     out[CONF_SERVICE_TOKEN_IDS] = _clean_list(out.get(CONF_SERVICE_TOKEN_IDS))
     out[CONF_CLIENT_REDIRECT_URIS] = _clean_list(out.get(CONF_CLIENT_REDIRECT_URIS))
@@ -133,15 +130,11 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
             out[key] = str(out[key]).strip()
             if not out[key]:
                 errors[key] = "required"
-    if not out[CONF_ALLOWED_EMAILS] and not out[CONF_ACCESS_GROUP_ID]:
-        errors["base"] = "no_policy_subject"
-    if any("@" not in e for e in out[CONF_ALLOWED_EMAILS]):
-        errors[CONF_ALLOWED_EMAILS] = "invalid_email"
     return out
 
 
-async def _validate_token(api: CloudflareAccessApi, errors: dict[str, str]) -> str | None:
-    """Check the token's two permissions; return the team domain on success."""
+async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str]) -> str | None:
+    """Check the credential's two permissions; return the team domain on success."""
     try:
         await api.list_apps()
     except CloudflareAuthError:
@@ -157,7 +150,7 @@ async def _validate_token(api: CloudflareAccessApi, errors: dict[str, str]) -> s
     try:
         return await api.get_team_domain()
     except CloudflareAuthError as err:
-        _LOGGER.warning("Token cannot read the Zero Trust organization: %s", err)
+        _LOGGER.warning("Credential cannot read the Zero Trust organization: %s", err)
         errors["base"] = "missing_org_read"
     except CloudflareUnavailableError:
         errors["base"] = "cannot_connect"
@@ -167,10 +160,26 @@ async def _validate_token(api: CloudflareAccessApi, errors: dict[str, str]) -> s
     return None
 
 
-class CloudflareAccessRelayConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Initial setup: credentials, hostname and who may log in."""
+def _users_placeholder(emails: list[str]) -> str:
+    return ", ".join(emails) if emails else "(none)"
 
+
+class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
+    """Initial setup: sign in with Cloudflare (or paste an API token), then the hostname."""
+
+    DOMAIN = DOMAIN
     VERSION = 1
+
+    def __init__(self) -> None:
+        """Start with no credential."""
+        super().__init__()
+        self._credential: dict[str, Any] = {}
+        self._accounts: list[dict[str, Any]] = []
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Return the logger."""
+        return _LOGGER
 
     @staticmethod
     @callback
@@ -186,82 +195,174 @@ class CloudflareAccessRelayConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return the subentry flows: registered OAuth clients."""
         return {SUBENTRY_TYPE_CLIENT: ClientSubentryFlow}
 
+    # ----------------------------------------------------------------- credentials
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Choose how to authenticate with Cloudflare."""
+        return self.async_show_menu(step_id="user", menu_options=[STEP_OAUTH, STEP_API_TOKEN])
+
+    async def async_step_oauth(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Sign in with Cloudflare: the consent page asks for the integration's scopes."""
+        return await self.async_step_pick_implementation()
+
+    async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
+        """Signed in: pick the account (or verify the re-authenticated one)."""
+        self._credential = data
+        if self.source == SOURCE_REAUTH:
+            entry = self._get_reauth_entry()
+            errors: dict[str, str] = {}
+            api = self._api(entry.data[CONF_ACCOUNT_ID])
+            if await _validate_credential(api, errors) is None:
+                return self.async_abort(reason=errors["base"])
+            return self.async_update_reload_and_abort(entry, data_updates=data)
+        return await self.async_step_account()
+
+    def _api(self, account_id: str) -> CloudflareAccessApi:
+        token = self._credential.get(DATA_TOKEN)
+        secret = token["access_token"] if token else self._credential[CONF_API_TOKEN]
+        return CloudflareAccessApi(secret, account_id, http_client=get_async_client(self.hass))
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick the Cloudflare account the sign-in reaches; skipped when there is one."""
+        errors: dict[str, str] = {}
+        if not self._accounts:
+            try:
+                self._accounts = await self._api("").list_accounts()
+            except CloudflareAuthError:
+                return self.async_abort(reason="invalid_auth")
+            except CloudflareUnavailableError:
+                return self.async_abort(reason="cannot_connect")
+            except CloudflareApiError as err:
+                _LOGGER.warning("Cloudflare API error listing accounts: %s", err)
+                return self.async_abort(reason="api_error")
+            if not self._accounts:
+                return self.async_abort(reason="no_accounts")
+        if user_input is None and len(self._accounts) == 1:
+            user_input = {CONF_ACCOUNT_ID: self._accounts[0]["id"]}
+        if user_input is not None:
+            account_id = user_input[CONF_ACCOUNT_ID]
+            team_domain = await _validate_credential(self._api(account_id), errors)
+            if team_domain:
+                self._credential[CONF_ACCOUNT_ID] = account_id
+                self._credential[DATA_TEAM_DOMAIN] = team_domain
+                return await self.async_step_settings()
+            if len(self._accounts) == 1:
+                return self.async_abort(reason=errors["base"])
+        options = [
+            SelectOptionDict(value=a["id"], label=f"{a['name']} ({a['id']})")
+            for a in self._accounts
+        ]
+        return self.async_show_form(
+            step_id="account",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ACCOUNT_ID): SelectSelector(
+                        SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_api_token(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Use an API token instead of signing in."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._credential = {
+                CONF_API_TOKEN: user_input[CONF_API_TOKEN].strip(),
+                CONF_ACCOUNT_ID: user_input[CONF_ACCOUNT_ID].strip(),
+            }
+            team_domain = await _validate_credential(
+                self._api(self._credential[CONF_ACCOUNT_ID]), errors
+            )
+            if team_domain:
+                self._credential[DATA_TEAM_DOMAIN] = team_domain
+                if self.source == SOURCE_REAUTH:
+                    return self.async_update_reload_and_abort(
+                        self._get_reauth_entry(), data_updates=self._credential
+                    )
+                return await self.async_step_settings()
+        defaults: dict[str, Any] = dict(user_input or {})
+        if self.source == SOURCE_REAUTH:
+            defaults.setdefault(CONF_ACCOUNT_ID, self._get_reauth_entry().data[CONF_ACCOUNT_ID])
+        return self.async_show_form(
+            step_id=STEP_API_TOKEN,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_API_TOKEN, default=defaults.get(CONF_API_TOKEN, "")
+                    ): _PASSWORD,
+                    vol.Required(CONF_ACCOUNT_ID, default=defaults.get(CONF_ACCOUNT_ID, "")): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    # -------------------------------------------------------------------- settings
+
     def _default_hostname(self) -> str:
         if self.hass.config.external_url:
             return normalise_hostname(self.hass.config.external_url)
         return ""
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Handle the single setup form."""
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Hostname and the advanced options; the gate starts disabled."""
         errors: dict[str, str] = {}
         if user_input is not None:
             hostname = normalise_hostname(user_input[CONF_HOSTNAME])
             if not hostname:
                 errors[CONF_HOSTNAME] = "invalid_hostname"
-            options = _validate_options(
-                {k: v for k, v in user_input.items() if k not in (CONF_API_TOKEN, CONF_ACCOUNT_ID)},
-                errors,
-            )
+            options = _validate_options(user_input, errors)
             options[CONF_HOSTNAME] = hostname
-            team_domain = None
             if not errors:
-                api = CloudflareAccessApi(
-                    user_input[CONF_API_TOKEN].strip(),
-                    user_input[CONF_ACCOUNT_ID].strip(),
-                    http_client=get_async_client(self.hass),
-                )
-                team_domain = await _validate_token(api, errors)
-            if not errors and team_domain:
                 await self.async_set_unique_id(hostname)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=hostname,
-                    data={
-                        CONF_API_TOKEN: user_input[CONF_API_TOKEN].strip(),
-                        CONF_ACCOUNT_ID: user_input[CONF_ACCOUNT_ID].strip(),
-                        DATA_TEAM_DOMAIN: team_domain,
-                    },
+                    data=self._credential,
                     options={CONF_GATE_ENABLED: DEFAULT_GATE_ENABLED, **options},
                 )
         defaults: dict[str, Any] = dict(user_input or {})
         schema = vol.Schema(
             {
-                vol.Required(CONF_API_TOKEN, default=defaults.get(CONF_API_TOKEN, "")): _PASSWORD,
-                vol.Required(CONF_ACCOUNT_ID, default=defaults.get(CONF_ACCOUNT_ID, "")): str,
                 vol.Required(
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
-                **_policy_schema(defaults),
                 **_advanced_schema(defaults),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "allowed_users": _users_placeholder(
+                    allowed_emails(self.hass, {**DEFAULT_OPTIONS, **defaults})
+                )
+            },
+        )
+
+    # ---------------------------------------------------------------------- reauth
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        """Token rejected: ask for a new one."""
-        return await self.async_step_reauth_confirm()
+        """Credential rejected: sign in again, or enter a new API token."""
+        if DATA_TOKEN in entry_data:
+            return await self.async_step_reauth_confirm()
+        return await self.async_step_api_token()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate and store a replacement token."""
-        errors: dict[str, str] = {}
-        entry = self._get_reauth_entry()
-        if user_input is not None:
-            api = CloudflareAccessApi(
-                user_input[CONF_API_TOKEN].strip(),
-                entry.data[CONF_ACCOUNT_ID],
-                http_client=get_async_client(self.hass),
-            )
-            if await _validate_token(api, errors):
-                return self.async_update_reload_and_abort(
-                    entry, data_updates={CONF_API_TOKEN: user_input[CONF_API_TOKEN].strip()}
-                )
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_API_TOKEN): _PASSWORD}),
-            errors=errors,
-        )
+        """Confirm before the browser is sent to Cloudflare again."""
+        if user_input is None:
+            return self.async_show_form(step_id="reauth_confirm", data_schema=vol.Schema({}))
+        return await self.async_step_pick_implementation()
 
 
 class OptionsFlowHandler(OptionsFlowWithReload):
@@ -270,11 +371,16 @@ class OptionsFlowHandler(OptionsFlowWithReload):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and process the options form."""
         errors: dict[str, str] = {}
-        current = dict(self.config_entry.options)
+        current = effective_options(self.config_entry)
         if user_input is not None:
             options = _validate_options(user_input, errors)
             if not errors:
                 options[CONF_HOSTNAME] = current[CONF_HOSTNAME]
+                if options[CONF_GATE_ENABLED] and not allowed_emails(
+                    self.hass, {**DEFAULT_OPTIONS, **options}
+                ):
+                    errors["base"] = "no_allowed_users"
+            if not errors:
                 return self.async_create_entry(data=options)
             current = {**current, **user_input}
         schema = vol.Schema(
@@ -283,7 +389,6 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     CONF_GATE_ENABLED,
                     default=bool(current.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED)),
                 ): BooleanSelector(),
-                **_policy_schema(current),
                 **_advanced_schema(current),
             }
         )
@@ -291,7 +396,10 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             step_id="init",
             data_schema=schema,
             errors=errors,
-            description_placeholders={CONF_HOSTNAME: current.get(CONF_HOSTNAME, "")},
+            description_placeholders={
+                CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
+                "allowed_users": _users_placeholder(allowed_emails(self.hass, current)),
+            },
         )
 
 
@@ -319,7 +427,6 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any], errors: dict[str, str], app_id: str | None
     ) -> dict[str, Any] | None:
         entry = self._get_entry()
-        api = api_for(self.hass, entry)
         name = user_input[CONF_CLIENT_NAME].strip()
         uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
         if not name:
@@ -330,8 +437,10 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
         if errors:
             return None
-        desired = desired_client_app(effective_options(entry), name, uris)
+        options = effective_options(entry)
+        desired = desired_client_app(options, allowed_emails(self.hass, options), name, uris)
         try:
+            api = await api_for(self.hass, entry)
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
         except CloudflareAuthError:
             errors["base"] = "invalid_auth"

@@ -47,9 +47,7 @@ from custom_components.cloudflare_access_relay.cloudflare_api import (
     CloudflareAccessApi,
 )
 from custom_components.cloudflare_access_relay.const import (
-    CONF_ACCESS_GROUP_ID,
     CONF_ACCOUNT_ID,
-    CONF_ALLOWED_EMAILS,
     CONF_API_TOKEN,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
@@ -227,8 +225,6 @@ async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any)
     current = dict(entry.options)
     user_input = {
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
-        CONF_ALLOWED_EMAILS: current[CONF_ALLOWED_EMAILS],
-        CONF_ACCESS_GROUP_ID: current.get(CONF_ACCESS_GROUP_ID, ""),
         CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
         CONF_SESSION_DURATION: current[CONF_SESSION_DURATION],
         CONF_IDENTITY_CLAIM: current[CONF_IDENTITY_CLAIM],
@@ -295,18 +291,28 @@ async def _lifecycle(
     assert await async_setup_component(hass, "api", {})
     if True:
         print("== config flow creates the entry; gate off: nothing at the edge changes")
+        # the allow policy is derived from the Home Assistant users: one with an address
+        await add_user(hass, EMAIL, name=EMAIL)
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        assert result["type"] is FlowResultType.FORM
+        assert result["type"] is FlowResultType.MENU
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "api_token"}
+        )
+        assert result["type"] is FlowResultType.FORM and result["step_id"] == "api_token"
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
                 CONF_API_TOKEN: os.environ["CF_API_TOKEN"],
                 CONF_ACCOUNT_ID: os.environ["CF_ACCOUNT_ID"],
+            },
+        )
+        assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
                 CONF_HOSTNAME: host,
-                CONF_ALLOWED_EMAILS: [EMAIL],
-                CONF_ACCESS_GROUP_ID: "",
                 CONF_SERVICE_TOKEN_IDS: [token["id"]],
                 CONF_SESSION_DURATION: SESSION,
                 # a service-token JWT identifies itself by common_name (its client id);
@@ -333,6 +339,21 @@ async def _lifecycle(
         gate = await api.get_app(gate_id)
         assert gate and gate["domain"] == host
         assert gate.get("oauth_configuration", {}).get("enabled") is True, gate
+        assert gate["policies"][0]["include"] == [{"email": {"email": EMAIL}}], (
+            "the allow policy is the Home Assistant users' addresses"
+        )
+
+        print("== a new Home Assistant user joins the allow policy without a reload")
+        await add_user(hass, "second@example.com", name="second@example.com")
+
+        async def second_allowed() -> bool:
+            app = await api.get_app(gate_id)
+            return bool(app) and app["policies"][0]["include"] == [
+                {"email": {"email": EMAIL}},
+                {"email": {"email": "second@example.com"}},
+            ]
+
+        assert await _until(second_allowed, "allow policy follows the users", 60)
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
         assert _is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"

@@ -5,15 +5,15 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.auth.models import User
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.util.dt import utcnow
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.cloudflare_access_relay.const import (
-    CONF_ACCESS_GROUP_ID,
-    CONF_ALLOWED_EMAILS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
@@ -23,6 +23,8 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_GATE_APP_ID,
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
+    DOMAIN,
+    ISSUE_NO_ALLOWED_USERS,
     RECONCILE_COOLDOWN_SECONDS,
 )
 from custom_components.cloudflare_access_relay.provision import (
@@ -39,6 +41,7 @@ from .conftest import (
     Access,
     FakeCloudflare,
     FakeJwks,
+    add_user,
     make_entry,
 )
 
@@ -53,11 +56,7 @@ def _uris(app: dict[str, Any]) -> list[str]:
 async def _save_options(hass: HomeAssistant, entry: MockConfigEntry, **changes: Any) -> None:
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     assert flow["type"] is FlowResultType.FORM
-    current = {
-        CONF_GATE_ENABLED: entry.options[CONF_GATE_ENABLED],
-        CONF_ALLOWED_EMAILS: entry.options[CONF_ALLOWED_EMAILS],
-        CONF_ACCESS_GROUP_ID: entry.options.get(CONF_ACCESS_GROUP_ID, ""),
-    }
+    current = {CONF_GATE_ENABLED: entry.options[CONF_GATE_ENABLED]}
     result = await hass.config_entries.options.async_configure(
         flow["flow_id"], {**current, **changes}
     )
@@ -91,7 +90,11 @@ async def test_gate_disabled_creates_nothing(
 
 
 async def test_enabling_the_gate_creates_it_and_disabling_deletes_it(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant,
+    fake_cloudflare: FakeCloudflare,
+    jwks_server: FakeJwks,
+    alice: User,
+    bob: User,
 ) -> None:
     cf = fake_cloudflare
     entry = make_entry()
@@ -158,17 +161,10 @@ async def test_drift_is_repaired_on_reload(hass: HomeAssistant, access: Access) 
     assert puts[0][2]["policies"][0]["id"] == policy_id, "inline policy id reused"
 
 
-async def test_service_tokens_and_group_policies(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+async def test_service_token_policy(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
-    entry = make_entry(
-        **{
-            CONF_GATE_ENABLED: True,
-            CONF_ALLOWED_EMAILS: [],
-            CONF_ACCESS_GROUP_ID: "grp-1",
-            CONF_SERVICE_TOKEN_IDS: ["tok-1"],
-        }
-    )
+    entry = make_entry(**{CONF_GATE_ENABLED: True, CONF_SERVICE_TOKEN_IDS: ["tok-1"]})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     gate = fake_cloudflare.by_name(GATE)
@@ -176,18 +172,88 @@ async def test_service_tokens_and_group_policies(
         ("ha-access: allow", "allow"),
         ("ha-access: service tokens", "non_identity"),
     ]
-    assert gate["policies"][0]["include"] == [{"group": {"id": "grp-1"}}]
+    assert gate["policies"][0]["include"] == [{"email": {"email": ALICE}}]
     assert gate["policies"][1]["include"] == [{"service_token": {"token_id": "tok-1"}}]
+
+
+# --------------------------------------------------------------------------- users
+
+
+async def test_gate_needs_at_least_one_user_with_an_address(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    """A gate nobody could pass is a lock-out: it is refused, not provisioned."""
+    await add_user(hass, "plain-username")
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert fake_cloudflare.writes() == []
+
+    # the options flow refuses to enable the gate for the same reason
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {CONF_GATE_ENABLED: True}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "no_allowed_users"}
+
+
+async def test_allow_policy_follows_the_users(hass: HomeAssistant, access: Access) -> None:
+    cf = access.cloudflare
+    assert cf.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": ALICE}},
+        {"email": {"email": BOB}},
+    ]
+
+    carol = await add_user(hass, "Carol@Example.com")
+    await add_user(hass, "no-address")  # a plain username is not a policy subject
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": ALICE}},
+        {"email": {"email": BOB}},
+        {"email": {"email": "carol@example.com"}},
+    ]
+    assert len(cf.writes("PUT")) == 1, "one write for the burst of user changes"
+
+    await hass.auth.async_update_user(carol, is_active=False)
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": ALICE}},
+        {"email": {"email": BOB}},
+    ]
+    assert access.entry.data[DATA_POLICY_AUD] == access.aud, "audience survives the updates"
+
+
+async def test_last_user_leaving_keeps_the_policy_and_raises_an_issue(
+    hass: HomeAssistant, access: Access, alice: User, bob: User
+) -> None:
+    cf = access.cloudflare
+    await hass.auth.async_remove_user(alice)
+    await hass.auth.async_remove_user(bob)
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": ALICE}},
+        {"email": {"email": BOB}},
+    ], "an empty allow policy would lock everyone out: the last subjects stay"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is not None
+
+    await add_user(hass, ALICE)
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][0]["include"] == [{"email": {"email": ALICE}}]
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is None
 
 
 def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
     opts = {
         "hostname": HOSTNAME,
-        "allowed_emails": [ALICE],
         "gate_enabled": True,
         "client_redirect_uris": ["https://claude.ai/api/mcp/auth_callback", " "],
     }
-    gate = desired_gate_app(opts)
+    gate = desired_gate_app(opts, [ALICE])
     assert gate is not None
     assert gate["oauth_configuration"] == {
         "enabled": True,
@@ -199,7 +265,7 @@ def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
         },
     }
     assert [p["name"] for p in gate["policies"]] == ["ha-access: allow"]
-    gate = desired_gate_app(opts, linked_app_ids=["app-b", "app-a"])
+    gate = desired_gate_app(opts, [ALICE], linked_app_ids=["app-b", "app-a"])
     assert gate is not None
     assert gate["policies"][-1] == {
         "name": "ha-access: registered clients",
@@ -214,14 +280,12 @@ def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
     assert app_matches(existing, gate)
     existing["oauth_configuration"] = {**gate["oauth_configuration"], "enabled": False}
     assert not app_matches(existing, gate)
-    assert desired_gate_app({**opts, "gate_enabled": False}) is None
+    assert desired_gate_app({**opts, "gate_enabled": False}, [ALICE]) is None
 
 
 def test_app_matches_treats_absent_fields_as_cloudflare_defaults() -> None:
     """Cloudflare's GET omits path_cookie_attribute (and others) when they are default."""
-    desired = desired_gate_app(
-        {"hostname": HOSTNAME, "allowed_emails": [ALICE], "gate_enabled": True}
-    )
+    desired = desired_gate_app({"hostname": HOSTNAME, "gate_enabled": True}, [ALICE])
     assert desired is not None
     existing = {k: v for k, v in desired.items() if k != "path_cookie_attribute"}
     existing["policies"] = [
@@ -402,7 +466,7 @@ async def test_remove_entry_deletes_every_application(hass: HomeAssistant, acces
 
 
 async def test_remove_entry_keeps_apps_when_asked(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     entry = make_entry(**{CONF_GATE_ENABLED: True, CONF_DELETE_OBJECTS_ON_REMOVE: False})
     entry.add_to_hass(hass)
@@ -413,7 +477,7 @@ async def test_remove_entry_keeps_apps_when_asked(
 
 
 async def test_auth_failure_triggers_reauth(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     fake_cloudflare.auth_fail = True
     entry = make_entry(**{CONF_GATE_ENABLED: True})
@@ -428,7 +492,7 @@ async def test_auth_failure_triggers_reauth(
 
 
 async def test_5xx_during_setup_retries_and_writes_nothing(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     fake_cloudflare.fail_status = 503
     entry = make_entry(**{CONF_GATE_ENABLED: True})
@@ -439,7 +503,7 @@ async def test_5xx_during_setup_retries_and_writes_nothing(
 
 
 async def test_4xx_config_error(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     fake_cloudflare.fail_status = 400
     entry = make_entry(**{CONF_GATE_ENABLED: True})
