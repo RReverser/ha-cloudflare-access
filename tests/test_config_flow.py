@@ -167,8 +167,11 @@ OAUTH_TOKEN = {
 
 @pytest.fixture
 async def oauth_credentials(hass: HomeAssistant) -> None:
-    """The integration set up: it registers the project's own OAuth client."""
-    assert await async_setup_component(hass, DOMAIN, {})
+    """Application credentials loaded (the integration depends on it), nothing added.
+
+    The project's own client is offered by the flow itself, before any entry exists.
+    """
+    assert await async_setup_component(hass, "application_credentials", {})
 
 
 async def _sign_in(

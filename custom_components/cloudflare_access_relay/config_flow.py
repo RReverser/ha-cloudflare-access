@@ -30,6 +30,7 @@ from homeassistant.helpers.selector import (
 )
 import voluptuous as vol
 
+from .application_credentials import async_register_project_client
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -200,6 +201,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Sign in with Cloudflare: the consent page asks for the integration's scopes."""
+        async_register_project_client(self.hass)
         return await self.async_step_pick_implementation()
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
@@ -359,6 +361,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         """Confirm before the browser is sent to Cloudflare again."""
         if user_input is None:
             return self.async_show_form(step_id="reauth_confirm", data_schema=vol.Schema({}))
+        async_register_project_client(self.hass)
         return await self.async_step_pick_implementation()
 
 
