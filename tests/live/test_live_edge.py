@@ -33,7 +33,6 @@ import socket
 import time
 from typing import Any
 
-from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -293,13 +292,8 @@ async def _lifecycle(
         print("== config flow creates the entry; gate off: nothing at the edge changes")
         # the allow policy is derived from the Home Assistant users: one with an address
         await add_user(hass, EMAIL, name=EMAIL)
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        assert result["type"] is FlowResultType.MENU
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"next_step_id": "api_token"}
-        )
+        # CI cannot click a consent page: the token path, started by its source
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "api_token"})
         assert result["type"] is FlowResultType.FORM and result["step_id"] == "api_token"
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],

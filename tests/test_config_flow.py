@@ -28,6 +28,7 @@ from custom_components.cloudflare_access_relay.const import (
     DATA_TOKEN,
     DOMAIN,
     OAUTH_AUTHORIZE_URL,
+    OAUTH_CLIENT_ID,
     OAUTH_SCOPES,
     OAUTH_TOKEN_URL,
 )
@@ -36,7 +37,6 @@ from .conftest import ACCOUNT_ID, ALICE, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, 
 
 TOKEN_INPUT = {CONF_API_TOKEN: "cf-token", CONF_ACCOUNT_ID: ACCOUNT_ID}
 SETTINGS_INPUT = {CONF_HOSTNAME: f"https://{HOSTNAME}/"}
-OAUTH_CLIENT_ID = "cf-oauth-client"
 
 
 def test_normalise_hostname() -> None:
@@ -46,15 +46,8 @@ def test_normalise_hostname() -> None:
     assert normalise_hostname("") == ""
 
 
-async def _start(hass: HomeAssistant, next_step: str) -> dict[str, Any]:
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] is FlowResultType.MENU
-    assert result["menu_options"] == ["oauth", "api_token"]
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": next_step}
-    )
+async def _start(hass: HomeAssistant, source: str) -> dict[str, Any]:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": source})
     assert result["type"] is FlowResultType.FORM, result
     return result
 
@@ -174,9 +167,8 @@ OAUTH_TOKEN = {
 
 @pytest.fixture
 async def oauth_credentials(hass: HomeAssistant) -> None:
-    """The user's own Cloudflare OAuth client, added under Application credentials."""
-    assert await async_setup_component(hass, "application_credentials", {})
-    await async_import_client_credential(hass, DOMAIN, ClientCredential(OAUTH_CLIENT_ID, ""))
+    """The integration set up: it registers the project's own OAuth client."""
+    assert await async_setup_component(hass, DOMAIN, {})
 
 
 async def _sign_in(
@@ -218,9 +210,6 @@ async def test_sign_in_flow_creates_entry(
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": "oauth"}
-    )
     result = await _sign_in(hass, hass_client_no_auth, aioclient_mock, result)
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", (
         "a single account is picked without asking"
@@ -254,9 +243,6 @@ async def test_sign_in_flow_asks_which_account(
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": "oauth"}
-    )
     result = await _sign_in(hass, hass_client_no_auth, aioclient_mock, result)
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "account"
     result = await hass.config_entries.flow.async_configure(
@@ -270,20 +256,16 @@ async def test_sign_in_flow_asks_which_account(
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings"
 
 
-async def test_sign_in_without_credentials_aborts(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare
+async def test_own_credentials_replace_the_built_in_client(
+    hass: HomeAssistant, oauth_credentials: None, current_request_with_host: None
 ) -> None:
-    assert await async_setup_component(hass, DOMAIN, {})
+    """A client of the user's own (Application credentials) takes the project's place."""
+    await async_import_client_credential(hass, DOMAIN, ClientCredential("mine", ""))
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": "oauth"}
-    )
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "missing_credentials", (
-        "Home Assistant points at Application credentials"
-    )
+    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    assert "client_id=mine&" in result["url"]
 
 
 async def test_sign_in_reauth_flow(
