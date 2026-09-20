@@ -153,7 +153,8 @@ def desired_client_app(
     An Access for SaaS OIDC application: it is the client's registration with
     Access, with the client id and secret its console wants and Access's own
     authorization and token endpoints. Who may link the client is the gate's own
-    allow rule. The tokens it issues are accepted by the gate (`desired_gate_app`).
+    allow rule, and the client's refresh token lives as long as an Access session
+    of the gate. The tokens it issues are accepted by the gate (`desired_gate_app`).
     """
     hostname = options[CONF_HOSTNAME]
     return {
@@ -164,6 +165,9 @@ def desired_client_app(
             "auth_type": "oidc",
             "redirect_uris": sorted(u.strip() for u in redirect_uris if u.strip()),
             "grant_types": ["authorization_code", "refresh_tokens"],
+            "refresh_token_options": {
+                "lifetime": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
+            },
             "scopes": ["openid", "email", "profile"],
         },
         "policies": [
@@ -258,6 +262,7 @@ def _saas_key(config: dict[str, Any] | None) -> str:
             "auth_type": config.get("auth_type"),
             "redirect_uris": sorted(config.get("redirect_uris") or []),
             "grant_types": sorted(config.get("grant_types") or []),
+            "refresh": (config.get("refresh_token_options") or {}).get("lifetime"),
             "scopes": sorted(config.get("scopes") or []),
         }
     )

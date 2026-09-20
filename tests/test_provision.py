@@ -606,6 +606,9 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
         "https://oauth-redirect.googleusercontent.com/r/p"
     ]
     assert set(client["saas_app"]["grant_types"]) == {"authorization_code", "refresh_tokens"}
+    assert client["saas_app"]["refresh_token_options"] == {"lifetime": "720h"}, (
+        "a client's refresh token lives as long as an Access session of the gate"
+    )
     assert client["policies"][0]["include"] == [
         {"email": {"email": ALICE}},
         {"email": {"email": BOB}},
