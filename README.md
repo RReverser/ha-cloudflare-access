@@ -121,8 +121,9 @@ refresh. Two ways to obtain such a token, one mechanism behind both:
   redirect URI the console shows. The integration creates an Access for SaaS OIDC application,
   which is that client's registration with Access, shows the client id, secret, authorization
   and token URLs to enter in the console, and adds a rule to the gate that accepts the tokens
-  of that application. Removing the client removes both. Nothing in the integration knows
-  what Google or Alexa are.
+  of that application. The client's refresh token lives as long as an Access session of the
+  gate (the *Access session duration* option). Removing the client removes both. Nothing in
+  the integration knows what Google or Alexa are.
 
 At the origin, one rule turns the edge identity into a Home Assistant user: a request that
 came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
