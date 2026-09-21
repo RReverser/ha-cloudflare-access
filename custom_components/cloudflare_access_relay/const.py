@@ -62,6 +62,12 @@ ISSUE_RESTART_REQUIRED: Final = "restart_required"
 HEADER_JWT: Final = "Cf-Access-Jwt-Assertion"
 HEADER_CF_RAY: Final = "CF-Ray"
 
+# Login e-mail subentries: the address Access knows a Home Assistant user by, for users
+# whose login username is not one. One per user.
+SUBENTRY_TYPE_LOGIN_EMAIL: Final = "login_email"
+CONF_USER_ID: Final = "user_id"
+CONF_EMAIL: Final = "email"
+
 # Registered OAuth clients (config subentries): clients that cannot register themselves
 # get an Access for SaaS OIDC application each, whose tokens the gate accepts.
 SUBENTRY_TYPE_CLIENT: Final = "oauth_client"

@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntry,
     ConfigFlowResult,
+    ConfigSubentryData,
     ConfigSubentryFlow,
     OptionsFlowWithReload,
     SubentryFlowResult,
@@ -47,12 +48,14 @@ from .const import (
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
+    CONF_EMAIL,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
+    CONF_USER_ID,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
     DATA_CLIENT_SECRET,
@@ -64,10 +67,11 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     SUBENTRY_TYPE_CLIENT,
+    SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 from .options import api_for, effective_options
 from .provision import desired_client_app
-from .users import allowed_emails
+from .users import allowed_emails, login_emails, users_without_address
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -231,8 +235,11 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        """Return the subentry flows: registered OAuth clients."""
-        return {SUBENTRY_TYPE_CLIENT: ClientSubentryFlow}
+        """Return the subentry flows: login e-mails and registered OAuth clients."""
+        return {
+            SUBENTRY_TYPE_LOGIN_EMAIL: LoginEmailSubentryFlow,
+            SUBENTRY_TYPE_CLIENT: ClientSubentryFlow,
+        }
 
     # ----------------------------------------------------------------- credentials
 
@@ -356,14 +363,31 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Hostname and the advanced options; the gate starts disabled."""
+        """Hostname and the advanced options; the gate starts disabled.
+
+        Nobody can pass the gate without an e-mail address, so when no user has one the
+        step also asks which user gets one, and stores it as a login e-mail subentry.
+        """
         errors: dict[str, str] = {}
+        nobody = not allowed_emails(self.hass, {})
         if user_input is not None:
             hostname = normalise_hostname(user_input[CONF_HOSTNAME])
             if not hostname:
                 errors[CONF_HOSTNAME] = "invalid_hostname"
             options = _validate_options(user_input, errors)
             options[CONF_HOSTNAME] = hostname
+            subentries: list[ConfigSubentryData] = []
+            if nobody:
+                login = await _validate_login_email(self.hass, {}, user_input, errors)
+                if login is not None:
+                    subentries.append(
+                        ConfigSubentryData(
+                            data=login,
+                            subentry_type=SUBENTRY_TYPE_LOGIN_EMAIL,
+                            title=await _login_email_title(self.hass, login),
+                            unique_id=login[CONF_USER_ID],
+                        )
+                    )
             if not errors:
                 await self.async_set_unique_id(hostname)
                 self._abort_if_unique_id_configured()
@@ -371,6 +395,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     title=hostname,
                     data=self._credential,
                     options={CONF_GATE_ENABLED: DEFAULT_GATE_ENABLED, **options},
+                    subentries=subentries,
                 )
         defaults: dict[str, Any] = dict(user_input or {})
         schema = vol.Schema(
@@ -378,6 +403,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 vol.Required(
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
+                **(_login_email_schema(self.hass, {}, defaults) if nobody else {}),
                 **await _advanced_schema(self.hass, defaults),
             }
         )
@@ -387,7 +413,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 **FORM_PLACEHOLDERS,
-                "allowed_users": _users_placeholder(allowed_emails(self.hass)),
+                "allowed_users": _users_placeholder(allowed_emails(self.hass, {})),
             },
         )
 
@@ -420,7 +446,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             options = _validate_options(user_input, errors)
             if not errors:
                 options[CONF_HOSTNAME] = current[CONF_HOSTNAME]
-                if options[CONF_GATE_ENABLED] and not allowed_emails(self.hass):
+                if not allowed_emails(self.hass, login_emails(self.config_entry)):
                     errors["base"] = "no_allowed_users"
             if not errors:
                 return self.async_create_entry(data=options)
@@ -441,9 +467,127 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             description_placeholders={
                 **FORM_PLACEHOLDERS,
                 CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
-                "allowed_users": _users_placeholder(allowed_emails(self.hass)),
+                "allowed_users": _users_placeholder(
+                    allowed_emails(self.hass, login_emails(self.config_entry))
+                ),
             },
         )
+
+
+# ------------------------------------------------------------------ login e-mails
+
+
+def _login_email_schema(
+    hass: HomeAssistant, extra: Mapping[str, str], defaults: Mapping[str, Any]
+) -> dict[Any, Any]:
+    """Fields naming a user and the address Access knows them by."""
+    candidates = users_without_address(hass, extra)
+    if (chosen := defaults.get(CONF_USER_ID)) and all(u.id != chosen for u in candidates):
+        candidates = [*candidates, *(u for u in hass.auth._store._users.values() if u.id == chosen)]
+    users = SelectSelector(
+        SelectSelectorConfig(
+            options=[SelectOptionDict(value=u.id, label=u.name or u.id) for u in candidates],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+    user_field = (
+        vol.Required(CONF_USER_ID, default=chosen) if chosen else vol.Required(CONF_USER_ID)
+    )
+    return {
+        user_field: users,
+        vol.Required(CONF_EMAIL, default=defaults.get(CONF_EMAIL, "")): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.EMAIL)
+        ),
+    }
+
+
+async def _validate_login_email(
+    hass: HomeAssistant,
+    extra: Mapping[str, str],
+    user_input: Mapping[str, Any],
+    errors: dict[str, str],
+    *,
+    current_user: str | None = None,
+) -> dict[str, str] | None:
+    """Check the user exists and the address is one; return the subentry data."""
+    user_id = str(user_input.get(CONF_USER_ID) or "")
+    email = str(user_input.get(CONF_EMAIL) or "").strip()
+    user = await hass.auth.async_get_user(user_id) if user_id else None
+    if user is None or not user.is_active or user.system_generated:
+        errors[CONF_USER_ID] = "unknown_user"
+    elif user_id in extra and user_id != current_user:
+        errors[CONF_USER_ID] = "user_taken"
+    if "@" not in email or " " in email:
+        errors[CONF_EMAIL] = "invalid_email"
+    if errors:
+        return None
+    return {CONF_USER_ID: user_id, CONF_EMAIL: email}
+
+
+async def _login_email_title(hass: HomeAssistant, data: Mapping[str, str]) -> str:
+    user = await hass.auth.async_get_user(data[CONF_USER_ID])
+    return f"{user.name if user and user.name else data[CONF_USER_ID]}: {data[CONF_EMAIL]}"
+
+
+class LoginEmailSubentryFlow(ConfigSubentryFlow):
+    """The e-mail address a Home Assistant user is known by at Access.
+
+    For users whose login username is not their address and whose login provider stores
+    none. Saving re-provisions the allow policy through the entry's change listener.
+    """
+
+    async def _async_form(
+        self, step_id: str, defaults: Mapping[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult:
+        entry = self._get_entry()
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(_login_email_schema(self.hass, login_emails(entry), defaults)),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Give a user an address."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            entry = self._get_entry()
+            data = await _validate_login_email(self.hass, login_emails(entry), user_input, errors)
+            if data is not None:
+                return self.async_create_entry(
+                    title=await _login_email_title(self.hass, data),
+                    data=data,
+                    unique_id=data[CONF_USER_ID],
+                )
+        return await self._async_form("user", user_input or {}, errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change the address (or the user it belongs to)."""
+        errors: dict[str, str] = {}
+        entry = self._get_entry()
+        sub = self._get_reconfigure_subentry()
+        if user_input is not None:
+            data = await _validate_login_email(
+                self.hass,
+                login_emails(entry),
+                user_input,
+                errors,
+                current_user=sub.data[CONF_USER_ID],
+            )
+            if data is not None:
+                return self.async_update_and_abort(
+                    entry,
+                    sub,
+                    title=await _login_email_title(self.hass, data),
+                    data=data,
+                    unique_id=data[CONF_USER_ID],
+                )
+        return await self._async_form("reconfigure", user_input or dict(sub.data), errors)
+
+
+# ------------------------------------------------------------------ OAuth clients
 
 
 def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
@@ -481,7 +625,8 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         if errors:
             return None
         options = effective_options(entry)
-        desired = desired_client_app(options, allowed_emails(self.hass), name, uris)
+        emails = allowed_emails(self.hass, login_emails(entry))
+        desired = desired_client_app(options, emails, name, uris)
         try:
             api = await api_for(self.hass, entry)
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))

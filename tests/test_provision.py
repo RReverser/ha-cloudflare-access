@@ -76,7 +76,7 @@ async def _settle(hass: HomeAssistant, rounds: int = 1) -> None:
 
 
 async def test_gate_disabled_creates_nothing(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     """Installing changes nothing at the edge until the gate is enabled."""
     entry = make_entry()
@@ -179,27 +179,76 @@ async def test_service_token_policy(
 # --------------------------------------------------------------------------- users
 
 
-async def test_gate_needs_at_least_one_user_with_an_address(
+async def test_a_user_with_an_address_is_required(
     hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
 ) -> None:
-    """A gate nobody could pass is a lock-out: it is refused, not provisioned."""
-    await add_user(hass, "plain-username")
-    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    """Nobody could pass the gate: setup is refused until a login e-mail is added."""
+    from custom_components.cloudflare_access_relay.const import (
+        CONF_EMAIL,
+        CONF_USER_ID,
+        SUBENTRY_TYPE_LOGIN_EMAIL,
+    )
+
+    plain = await add_user(hass, "plain-username", name="Plain")
+    entry = make_entry()
     entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert fake_cloudflare.writes() == []
 
-    # the options flow refuses to enable the gate for the same reason
-    entry = make_entry()
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
+    # the login e-mail subentry can be added while the entry is in error
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_LOGIN_EMAIL), context={"source": "user"}
+    )
+    field = next(k for k in flow["data_schema"].schema if k == CONF_USER_ID)
+    assert [o["value"] for o in flow["data_schema"].schema[field].config["options"]] == [plain.id]
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {CONF_USER_ID: plain.id, CONF_EMAIL: "plain@example.com"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.emails == ["plain@example.com"]
+
+    # a user who has an address is not offered again
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_LOGIN_EMAIL), context={"source": "user"}
+    )
+    field = next(k for k in flow["data_schema"].schema if k == CONF_USER_ID)
+    assert flow["data_schema"].schema[field].config["options"] == []
+
+    # enabling the gate lists the address; changing the address follows
+    await _save_options(hass, entry, **{CONF_GATE_ENABLED: True})
+    assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": "plain@example.com"}}
+    ]
+    sub = next(iter(entry.subentries.values()))
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_LOGIN_EMAIL),
+        context={"source": "reconfigure", "subentry_id": sub.subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {CONF_USER_ID: plain.id, CONF_EMAIL: "new@example.com"}
+    )
+    assert result["type"] is FlowResultType.ABORT, result
+    await _settle(hass)
+    assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": "new@example.com"}}
+    ]
+
+    # removing the last address keeps the policy and raises the issue
+    hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
+    await _settle(hass)
+    assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": "new@example.com"}}
+    ]
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is not None
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
-        flow["flow_id"], {CONF_GATE_ENABLED: True}
+        flow["flow_id"], {CONF_GATE_ENABLED: False}
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "no_allowed_users"}
+    assert result["errors"] == {"base": "no_allowed_users"}, "gate on or off, nobody could log in"
 
 
 async def test_allow_policy_follows_the_users(hass: HomeAssistant, access: Access) -> None:

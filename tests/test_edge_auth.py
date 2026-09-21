@@ -94,7 +94,7 @@ async def test_identity_is_the_login_username_without_configuration(
             is_new=False,
         ),
     )
-    assert "carol@example.com" in allowed_emails(hass)
+    assert "carol@example.com" in allowed_emails(hass, {})
     resp = await client.get(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("carol@example.com")})}
     )
@@ -104,6 +104,41 @@ async def test_identity_is_the_login_username_without_configuration(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(extra={"email": None})})}
     )
     assert resp.status == 401 and "neither email nor common_name" in (await resp.json())["message"]
+
+
+async def test_a_login_email_names_a_user_whose_username_is_not_an_address(
+    hass: HomeAssistant, access: Access, alice: User, hass_client_no_auth: Any
+) -> None:
+    from homeassistant.config_entries import ConfigSubentry
+
+    from custom_components.cloudflare_access_relay.const import (
+        CONF_EMAIL,
+        CONF_USER_ID,
+        SUBENTRY_TYPE_LOGIN_EMAIL,
+    )
+
+    from .conftest import add_user
+
+    hass.http.register_view(WhoAmI())
+    client = await hass_client_no_auth()
+    dave = await add_user(hass, "dave", name="Dave")
+    resp = await client.get(
+        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("dave@example.com")})}
+    )
+    assert resp.status == 401, "no address yet"
+    hass.config_entries.async_add_subentry(
+        access.entry,
+        ConfigSubentry(
+            data={CONF_USER_ID: dave.id, CONF_EMAIL: "Dave@example.com"},
+            subentry_type=SUBENTRY_TYPE_LOGIN_EMAIL,
+            title="Dave",
+            unique_id=dave.id,
+        ),
+    )
+    resp = await client.get(
+        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("dave@example.com")})}
+    )
+    assert resp.status == 200 and (await resp.json())["user"] == dave.id
 
 
 async def test_an_identity_shared_by_two_users_is_refused(
@@ -157,6 +192,7 @@ async def test_setup_after_server_start_asks_for_a_restart(
     hass: HomeAssistant,
     fake_cloudflare: FakeCloudflare,
     jwks_server: FakeJwks,
+    alice: User,
     hass_client_no_auth: Any,
 ) -> None:
     assert await async_setup_component(hass, "api", {})

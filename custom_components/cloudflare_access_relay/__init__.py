@@ -44,7 +44,6 @@ from .const import (
     CLIENT_APP_NAME_FMT,
     CONF_CLIENT_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
-    CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_REDIRECT_URIS,
     DATA_BYPASS_APP_ID,
@@ -70,7 +69,7 @@ from .provision import (
     desired_client_app,
     reconcile_app,
 )
-from .users import allowed_emails
+from .users import allowed_emails, login_emails
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -213,12 +212,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
-    emails = allowed_emails(hass)
-    if not emails and (options[CONF_GATE_ENABLED] or client_subentries(entry)):
+    emails = allowed_emails(hass, login_emails(entry))
+    if not emails:
         # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
         raise ConfigEntryError(
-            "No Home Assistant user carries an e-mail address; nobody could log in, so "
-            "nothing is provisioned"
+            "No Home Assistant user carries an e-mail address, so nobody could log in. "
+            "Give one a login e-mail (Add login e-mail on the integration) and reload"
         )
     try:
         api = await api_for(hass, entry)
@@ -258,10 +257,10 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     """
 
     async def _refresh() -> None:
-        emails = allowed_emails(hass)
+        emails = allowed_emails(hass, login_emails(entry))
         if emails == data.emails and set(client_subentries(entry)) == set(data.client_apps):
             return
-        if not emails and (data.options[CONF_GATE_ENABLED] or client_subentries(entry)):
+        if not emails:
             _LOGGER.warning(
                 "No Home Assistant user carries an e-mail address any more; "
                 "the Access allow policy keeps its last subjects"
