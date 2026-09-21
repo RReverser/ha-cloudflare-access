@@ -217,7 +217,7 @@ async def test_sign_in_flow_creates_entry(
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", (
         "a single account is picked without asking"
     )
-    assert any(path == "/accounts" for _, path, _ in fake_cloudflare.requests)
+    assert any(path == "/memberships" for _, path, _ in fake_cloudflare.requests)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     entry: MockConfigEntry = result["result"]
@@ -233,7 +233,7 @@ async def test_sign_in_flow_creates_entry(
     assert fake_cloudflare.tokens_seen == {"cf-access-token"}
 
 
-async def test_sign_in_flow_asks_which_account(
+async def test_sign_in_picks_the_granted_account_among_memberships(
     hass: HomeAssistant,
     hass_client_no_auth: Any,
     aioclient_mock: AiohttpClientMocker,
@@ -242,21 +242,36 @@ async def test_sign_in_flow_asks_which_account(
     fake_cloudflare: FakeCloudflare,
     jwks_server: FakeJwks,
 ) -> None:
+    """The user belongs to two accounts; the consent covered one: no question asked."""
     fake_cloudflare.accounts["other"] = "Other account"
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     result = await _sign_in(hass, hass_client_no_auth, aioclient_mock, result)
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "account"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_ACCOUNT_ID: "other"}
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
+    probed = {path.split("/")[2] for _, path, _ in fake_cloudflare.requests if "/access/" in path}
+    assert probed == {ACCOUNT_ID, "other"}, "every membership is tried"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["result"].data[CONF_ACCOUNT_ID] == ACCOUNT_ID
+
+
+async def test_sign_in_with_no_granted_account_aborts(
+    hass: HomeAssistant,
+    hass_client_no_auth: Any,
+    aioclient_mock: AiohttpClientMocker,
+    current_request_with_host: None,
+    oauth_credentials: None,
+    fake_cloudflare: FakeCloudflare,
+    jwks_server: FakeJwks,
+) -> None:
+    fake_cloudflare.accounts = {"other": "Other account"}
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "account"
-    assert result["errors"] == {"base": "api_error"}, "the fake only knows one account"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_ACCOUNT_ID: ACCOUNT_ID}
-    )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings"
+    result = await _sign_in(hass, hass_client_no_auth, aioclient_mock, result)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_accounts"
 
 
 async def test_own_credentials_replace_the_built_in_client(

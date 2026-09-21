@@ -132,15 +132,20 @@ class CloudflareAccessApi:
         """Return the account id."""
         return self._account_id
 
-    async def list_accounts(self) -> list[dict[str, Any]]:
-        """Return the accounts the credential can see (id and name)."""
+    async def list_memberships(self) -> list[dict[str, Any]]:
+        """Return the accounts the signed-in user is a member of (id and name).
+
+        Listing accounts directly answers with nothing for an OAuth token whose scopes
+        are all Zero Trust ones; memberships are a user-level listing.
+        """
         try:
             return [
-                {"id": a.id, "name": a.name}
-                async for a in (await self._c()).accounts.list(per_page=50)
+                {"id": m.account.id, "name": m.account.name}
+                async for m in (await self._c()).memberships.list(status="accepted", per_page=50)
+                if m.account is not None and m.account.id
             ]
         except Exception as err:
-            raise _translate(err, "listing accounts") from err
+            raise _translate(err, "listing memberships") from err
 
     async def get_organization(self) -> dict[str, Any]:
         """Return the Zero Trust organization (holds auth_domain)."""
