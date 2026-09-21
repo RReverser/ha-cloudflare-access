@@ -25,8 +25,12 @@ Google Home or Alexa link, nor on a real phone.
 - Home Assistant 2026.9 or newer (tested against core 2026.9.2, Python 3.14).
 - The hostname is served through Cloudflare (Cloudflare Tunnel or proxied DNS) and belongs to a
   zone in the account.
-- A Zero Trust organization with an identity provider. Everything used is documented by
-  Cloudflare without a plan restriction; managed OAuth is marked beta by Cloudflare.
+- A Zero Trust organization. Its [login
+  methods](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/)
+  (Zero Trust → Integrations → Identity providers) decide how people prove the e-mail address
+  the gate admits; a new organization comes with Cloudflare's own login for account members,
+  and the one-time PIN needs no setup either. Everything used is documented by Cloudflare
+  without a plan restriction; managed OAuth is marked beta by Cloudflare.
 - Nothing else to prepare: the integration **signs in with Cloudflare** through the project's
   published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
   token set is stored in the config entry and used for nothing else.
