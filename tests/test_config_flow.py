@@ -77,9 +77,13 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
             return None
 
     assert await async_setup_component(hass, "webhook", {})
+    assert await async_setup_component(hass, "camera", {})
     hass.http.register_view(Audio())
-    webhook.async_register(hass, "doorbell", "Front door", "hook-1", lambda *_: None)
+    webhook.async_register(hass, "my_doorbell", "Front door", "hook-1", lambda *_: None)
     webhook.async_register(hass, "local", "LAN only", "hook-2", lambda *_: None, local_only=True)
+    webhook.async_register(hass, "mobile_app", "Mobile App: Old phone", "hook-3", lambda *_: None)
+    webhook.async_register(hass, "mobile_app", "Deleted Webhook", "hook-4", lambda *_: None)
+    hass.data["mobile_app"] = {"deleted_ids": ["hook-4"]}
 
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
@@ -87,9 +91,14 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
     config = result["data_schema"].schema[field].config
     assert config["multiple"] and config["custom_value"]
     choices = {o["value"]: o["label"] for o in config["options"]}
-    assert choices["/api/webhook/hook-1"] == "Front door (doorbell webhook)"
+    assert choices["/api/webhook/hook-1"] == "Front door (my_doorbell)", "unknown domain: as is"
     assert "/api/webhook/hook-2" not in choices, "a local-only webhook never reaches the edge"
-    assert choices["/api/audio_proxy/"] == "/api/audio_proxy/* (api:audio)"
+    assert choices["/api/webhook/hook-3"] == "Mobile App: Old phone", (
+        "integration name not repeated"
+    )
+    assert "/api/webhook/hook-4" not in choices, "a deleted registration answers 410 anyway"
+    assert choices["/api/audio_proxy/"] == "/api/audio_proxy/*", "a view from no integration"
+    assert choices["/api/camera_proxy/"] == "Camera: /api/camera_proxy/*"
     assert not any(v.startswith("/auth/") or v == "/api/websocket" for v in choices)
     assert field.default() == [], "nothing is open unless picked"
 
