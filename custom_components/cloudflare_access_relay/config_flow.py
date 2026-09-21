@@ -34,7 +34,7 @@ from homeassistant.helpers.selector import (
 import voluptuous as vol
 
 from .application_credentials import async_register_project_client
-from .bypass import bypass_candidates
+from .bypass import async_bypass_candidates
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -123,13 +123,13 @@ def _clean_list(values: list[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
 
 
-def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
+async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
     return {
         vol.Optional(
             CONF_EXTRA_BYPASS_PATHS, default=list(defaults.get(CONF_EXTRA_BYPASS_PATHS) or [])
         ): SelectSelector(
             SelectSelectorConfig(
-                options=bypass_candidates(hass),
+                options=await async_bypass_candidates(hass),
                 multiple=True,
                 custom_value=True,
                 mode=SelectSelectorMode.DROPDOWN,
@@ -378,7 +378,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 vol.Required(
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
-                **_advanced_schema(self.hass, defaults),
+                **await _advanced_schema(self.hass, defaults),
             }
         )
         return self.async_show_form(
@@ -431,7 +431,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     CONF_GATE_ENABLED,
                     default=bool(current.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED)),
                 ): BooleanSelector(),
-                **_advanced_schema(self.hass, current),
+                **await _advanced_schema(self.hass, current),
             }
         )
         return self.async_show_form(
