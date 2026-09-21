@@ -6,7 +6,7 @@
     "step": {
       "user": {
         "title": "Cloudflare Access",
-        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Continue to sign in with Cloudflare; the consent page shows the three permissions the integration uses. Set up from a desktop browser: the Android companion app cannot complete the return from the consent page."
+        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Continue to sign in with Cloudflare; the consent page shows the permissions the integration uses. Set up from a desktop browser: the Android companion app cannot complete the return from the consent page."
       },
       "pick_implementation": {
         "title": "Sign in with Cloudflare",
@@ -16,7 +16,7 @@
       },
       "account": {
         "title": "Cloudflare account",
-        "description": "The sign-in reaches several accounts. Choose the one whose zone serves the hostname.",
+        "description": "The sign-in was granted for several accounts. Choose the one whose zone serves the hostname.",
         "data": {
           "account_id": "Account"
         }
@@ -73,7 +73,7 @@
       "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
-      "no_accounts": "The sign-in reaches no Cloudflare account."
+      "no_accounts": "The sign-in reaches no Cloudflare account with a Zero Trust organization. Select the account on Cloudflare's consent page, and set up Zero Trust in it first."
     }
   },
   "options": {

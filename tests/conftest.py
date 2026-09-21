@@ -239,23 +239,37 @@ class FakeCloudflare:
             self.tokens_seen.add(auth.removeprefix("Bearer "))
         return body
 
-    async def list_accounts(self, request: web.Request) -> web.Response:
+    async def list_memberships(self, request: web.Request) -> web.Response:
         await self._record(request)
         if fail := self._fail(request.method, request.path):
             return fail
-        # paged like list_apps: the SDK asks for pages until one comes back empty
         page = int(request.query.get("page", "1"))
         per_page = int(request.query.get("per_page", "20"))
-        accounts = [{"id": a, "name": n} for a, n in self.accounts.items()]
+        rows = [
+            {"id": f"m-{a}", "status": "accepted", "account": {"id": a, "name": n}}
+            for a, n in self.accounts.items()
+        ]
         return self._ok(
-            accounts[(page - 1) * per_page : page * per_page],
+            rows[(page - 1) * per_page : page * per_page],
             result_info={
                 "page": page,
                 "per_page": per_page,
-                "total_pages": max(1, -(-len(accounts) // per_page)),
-                "count": len(accounts),
-                "total_count": len(accounts),
+                "total_pages": max(1, -(-len(rows) // per_page)),
+                "count": len(rows),
+                "total_count": len(rows),
             },
+        )
+
+    async def other_account(self, request: web.Request) -> web.Response:
+        """Any account but the one the fake serves: the credential is not granted there."""
+        await self._record(request)
+        return web.json_response(
+            {
+                "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}],
+                "result": None,
+            },
+            status=403,
         )
 
     async def organizations(self, request: web.Request) -> web.Response:
@@ -394,13 +408,14 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     fake = FakeCloudflare()
     app = web.Application()
     base = f"/accounts/{ACCOUNT_ID}/access"
-    app.router.add_get("/accounts", fake.list_accounts)
+    app.router.add_get("/memberships", fake.list_memberships)
     app.router.add_get(f"{base}/organizations", fake.organizations)
     app.router.add_get(f"{base}/apps", fake.list_apps)
     app.router.add_post(f"{base}/apps", fake.create_app)
     app.router.add_get(f"{base}/apps/{{app_id}}", fake.get_app)
     app.router.add_put(f"{base}/apps/{{app_id}}", fake.update_app)
     app.router.add_delete(f"{base}/apps/{{app_id}}", fake.delete_app)
+    app.router.add_get("/accounts/{account_id}/access/{tail:.*}", fake.other_account)
     server = TestServer(app)
     await server.start_server()
     fake.server = server

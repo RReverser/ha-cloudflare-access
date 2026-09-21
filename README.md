@@ -137,7 +137,9 @@ and keeps everything else.
 Cloudflare's OAuth lets the integration ask for exactly the permissions it uses, on the
 consent page, instead of a token you assemble by hand: `access.write` (Access: Apps and
 Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
-Read) and `offline_access` (a refresh token, so the sign-in lasts). The integration ships the
+Read), `memberships.read` (Memberships Read, to find the account you granted on the consent
+page, since the token itself does not say) and `offline_access` (a refresh token, so the
+sign-in lasts). The integration ships the
 client ID of the project's public OAuth client (PKCE, no secret), so there is nothing to
 register. The token set is refreshed before every API call; when Cloudflare stops accepting
 it, the integration asks to sign in again.
@@ -250,7 +252,7 @@ and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 - Who may log in is not a list to maintain in two places: the people who have a Home Assistant
   account are the people the gate lets in, and nobody else.
 - The Cloudflare credential is scoped to what the integration does. With the sign-in, the
-  consent page shows the three scopes; the token set lives in the config entry like any other
+  consent page shows the scopes; the token set lives in the config entry like any other
   Home Assistant OAuth integration's.
 
 ## Out of scope by design

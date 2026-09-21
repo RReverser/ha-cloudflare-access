@@ -224,31 +224,39 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_account(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pick the Cloudflare account the sign-in reaches; skipped when there is one."""
+        """Find the account the consent page granted; ask only when there are several.
+
+        The grant is per account and the token reveals nothing about it, so every account
+        the user is a member of is tried: the ones where the token can read the Access
+        applications and the Zero Trust organization are the granted ones.
+        """
         errors: dict[str, str] = {}
         if not self._accounts:
             try:
-                self._accounts = await self._api("").list_accounts()
+                memberships = await self._api("").list_memberships()
             except CloudflareAuthError:
                 return self.async_abort(reason="invalid_auth")
             except CloudflareUnavailableError:
                 return self.async_abort(reason="cannot_connect")
             except CloudflareApiError as err:
-                _LOGGER.warning("Cloudflare API error listing accounts: %s", err)
+                _LOGGER.warning("Cloudflare API error listing memberships: %s", err)
                 return self.async_abort(reason="api_error")
+            for account in memberships:
+                probe: dict[str, str] = {}
+                team_domain = await _validate_credential(self._api(account["id"]), probe)
+                if probe.get("base") == "cannot_connect":
+                    return self.async_abort(reason="cannot_connect")
+                if team_domain:
+                    self._accounts.append({**account, DATA_TEAM_DOMAIN: team_domain})
             if not self._accounts:
                 return self.async_abort(reason="no_accounts")
         if user_input is None and len(self._accounts) == 1:
             user_input = {CONF_ACCOUNT_ID: self._accounts[0]["id"]}
         if user_input is not None:
-            account_id = user_input[CONF_ACCOUNT_ID]
-            team_domain = await _validate_credential(self._api(account_id), errors)
-            if team_domain:
-                self._credential[CONF_ACCOUNT_ID] = account_id
-                self._credential[DATA_TEAM_DOMAIN] = team_domain
-                return await self.async_step_settings()
-            if len(self._accounts) == 1:
-                return self.async_abort(reason=errors["base"])
+            chosen = next(a for a in self._accounts if a["id"] == user_input[CONF_ACCOUNT_ID])
+            self._credential[CONF_ACCOUNT_ID] = chosen["id"]
+            self._credential[DATA_TEAM_DOMAIN] = chosen[DATA_TEAM_DOMAIN]
+            return await self.async_step_settings()
         options = [
             SelectOptionDict(value=a["id"], label=f"{a['name']} ({a['id']})")
             for a in self._accounts
