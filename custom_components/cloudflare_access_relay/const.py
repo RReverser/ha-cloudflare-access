@@ -84,3 +84,20 @@ BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 
 # Entry changes (client subentries) come in bursts; reconciliation runs once they settle.
 RECONCILE_COOLDOWN_SECONDS: Final = 5
+
+# Links and example URLs shown in the forms. Home Assistant forbids URLs inside the
+# translated strings, so they travel as description placeholders.
+_CF_DOCS: Final = "https://developers.cloudflare.com/cloudflare-one/"
+FORM_PLACEHOLDERS: Final[dict[str, str]] = {
+    "docs_policies": _CF_DOCS + "access-controls/policies/",
+    "docs_service_tokens": _CF_DOCS + "access-controls/service-credentials/service-tokens/",
+    "docs_session": _CF_DOCS
+    + "access-controls/access-settings/session-management/#application-session-duration",
+    "docs_managed_oauth": _CF_DOCS + "access-controls/applications/http-apps/managed-oauth/",
+    "example_mcp_redirect": "https://claude.ai/api/mcp/auth_callback",
+    "example_wildcard_redirect": "https://example.com/*",
+    "example_console_redirect": "https://oauth-redirect.googleusercontent.com/r/my-project",
+}
+DOCS_OAUTH_CLIENTS: Final = (
+    "https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/"
+)

@@ -1,6 +1,6 @@
 {
   "application_credentials": {
-    "description": "Nothing to add: the integration signs in through its own published Cloudflare OAuth client. Add a credential only to use a client of your own; it then replaces the built-in one. Create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}; enter its client ID with an empty secret. [Cloudflare OAuth clients](https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/), [project notes]({more_info_url})."
+    "description": "Nothing to add: the integration signs in through its own published Cloudflare OAuth client. Add a credential only to use a client of your own; it then replaces the built-in one. Create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}; enter its client ID with an empty secret. [Cloudflare OAuth clients]({docs_oauth_clients}), [project notes]({more_info_url})."
   },
   "config": {
     "step": {
@@ -42,10 +42,10 @@
         },
         "data_description": {
           "hostname": "The public hostname Cloudflare serves Home Assistant on, e.g. ha.example.com.",
-          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/)",
-          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: https://claude.ai/api/mcp/auth_callback, or https://example.com/* for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)",
-          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)",
-          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#application-session-duration)",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies]({docs_policies})",
+          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth]({docs_managed_oauth})",
+          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens]({docs_service_tokens})",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration]({docs_session})",
           "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       },
@@ -88,10 +88,10 @@
         },
         "data_description": {
           "gate_enabled": "On: every request to the hostname needs an Access login, except the open paths below. Off: nothing is gated and the other options wait.",
-          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/)",
-          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: https://claude.ai/api/mcp/auth_callback, or https://example.com/* for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)",
-          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)",
-          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#application-session-duration)",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies]({docs_policies})",
+          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth]({docs_managed_oauth})",
+          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens]({docs_service_tokens})",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration]({docs_session})",
           "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       }
@@ -128,7 +128,7 @@
           },
           "data_description": {
             "name": "Anything that identifies the client to you, e.g. Google Home.",
-            "redirect_uris": "The callback URL(s) the client's console shows, e.g. https://oauth-redirect.googleusercontent.com/r/my-project. Exact https:// URLs."
+            "redirect_uris": "The callback URL(s) the client's console shows, e.g. {example_console_redirect}. Exact https:// URLs."
           }
         },
         "reconfigure": {
