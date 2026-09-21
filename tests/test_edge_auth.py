@@ -54,10 +54,43 @@ async def test_access_admitted_bearer_is_authenticated_as_the_mapped_user(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("nobody@example.com")})}
     )
     assert resp.status == 401
-    assert "no Home Assistant user" in (await resp.json())["message"]
+    assert "no single Home Assistant user" in (await resp.json())["message"]
     bad = access.mint(ALICE)[:-2] + "AA"
     resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: bad})})
     assert resp.status == 401 and "did not verify" in (await resp.json())["message"]
+
+
+async def test_identity_is_found_on_any_user_field_without_configuration(
+    hass: HomeAssistant, access: Access, alice: User, hass_client_no_auth: Any
+) -> None:
+    """A service token has no e-mail: its common name matches a user's display name."""
+    hass.http.register_view(WhoAmI())
+    client = await hass_client_no_auth()
+    machine = await hass.auth.async_create_user("ci-runner.access")
+    service = access.mint(extra={"email": None, "sub": "", "common_name": "ci-runner.access"})
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: service})})
+    assert resp.status == 200 and (await resp.json())["user"] == machine.id
+
+    resp = await client.get(
+        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(ALICE.upper())})}
+    )
+    assert (await resp.json())["user"] == alice.id, "matched regardless of case"
+
+    resp = await client.get(
+        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(extra={"email": None})})}
+    )
+    assert resp.status == 401 and "neither email nor common_name" in (await resp.json())["message"]
+
+
+async def test_an_identity_shared_by_two_users_is_refused(
+    hass: HomeAssistant, access: Access, alice: User, hass_client_no_auth: Any
+) -> None:
+    """Rather than guess, the origin serves neither user."""
+    hass.http.register_view(WhoAmI())
+    client = await hass_client_no_auth()
+    await hass.auth.async_create_user(ALICE)  # display name equal to alice's login
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(ALICE)})})
+    assert resp.status == 401 and "no single Home Assistant user" in (await resp.json())["message"]
 
 
 async def test_home_assistant_tokens_and_cookie_sessions_are_untouched(

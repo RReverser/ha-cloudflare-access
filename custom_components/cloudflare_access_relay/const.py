@@ -24,18 +24,17 @@ CONF_SERVICE_TOKEN_IDS: Final = "service_token_ids"
 CONF_SESSION_DURATION: Final = "session_duration"
 CONF_CLIENT_REDIRECT_URIS: Final = "client_redirect_uris"
 CONF_EXTRA_BYPASS_PATHS: Final = "extra_bypass_paths"
-CONF_IDENTITY_CLAIM: Final = "identity_claim"
-CONF_USER_MATCH: Final = "user_match"
 CONF_DELETE_OBJECTS_ON_REMOVE: Final = "delete_objects_on_remove"
 
 DEFAULT_GATE_ENABLED: Final = False
 # Cloudflare documents the application session ceiling as "one month".
 DEFAULT_SESSION_DURATION: Final = "720h"
-DEFAULT_IDENTITY_CLAIM: Final = "email"
-DEFAULT_USER_MATCH: Final = "username"
 DEFAULT_DELETE_OBJECTS_ON_REMOVE: Final = True
 
-USER_MATCH_NAME: Final = "name"
+# Claims of the Access application token that name the person: `email` for an identity
+# provider login, `common_name` for a service token (which carries no e-mail).
+CLAIM_EMAIL: Final = "email"
+CLAIM_COMMON_NAME: Final = "common_name"
 
 # Signing in with Cloudflare: a self-managed Cloudflare OAuth client with PKCE (no
 # secret), asking for exactly what the integration does. `access.write` creates and

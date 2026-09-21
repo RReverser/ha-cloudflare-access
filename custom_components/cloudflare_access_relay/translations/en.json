@@ -1,12 +1,12 @@
 {
   "application_credentials": {
-    "description": "Nothing needs to be added here: the integration signs in through its own published Cloudflare OAuth client. Add a credential only to sign in through a client of your own instead; it then takes the built-in client's place. Create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}, and enter its client ID with an empty secret. [Details]({more_info_url})."
+    "description": "Nothing to add: the integration signs in through its own published Cloudflare OAuth client. Add a credential only to use a client of your own; it then replaces the built-in one. Create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}; enter its client ID with an empty secret. [Cloudflare OAuth clients](https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/), [project notes]({more_info_url})."
   },
   "config": {
     "step": {
       "user": {
         "title": "Cloudflare Access",
-        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Continue to sign in with Cloudflare; the consent page shows the permissions the integration uses. Set up from a desktop browser: the Android companion app cannot complete the return from the consent page."
+        "description": "Puts the whole hostname behind Cloudflare Access: only people with a Home Assistant account get in, and voice assistants or MCP clients sign in through Access. Continue to sign in with Cloudflare; the consent page lists the permissions used. Use a desktop browser: the Android companion app cannot finish the return from the consent page."
       },
       "pick_implementation": {
         "title": "Sign in with Cloudflare",
@@ -31,25 +31,22 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts disabled: nothing changes at the edge until you enable it in the options. Its allow policy lists the e-mail addresses of the Home Assistant users (currently: {allowed_users}) and follows them as users come and go.",
+        "description": "The gate starts off, so nothing changes at the edge until you switch it on in the options. Who gets in: every active Home Assistant user, by the e-mail address found on their account (login username, display name, or the field a login integration stores). Currently: {allowed_users}. A request Access lets through is served as the user who carries that address.",
         "data": {
           "hostname": "Hostname",
-          "service_token_ids": "Service token IDs allowed through the gate",
-          "session_duration": "Access session duration",
-          "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
-          "extra_bypass_paths": "Bypassed paths",
-          "identity_claim": "Identity claim",
-          "user_match": "Home Assistant user field",
+          "extra_bypass_paths": "Paths open without Access",
+          "client_redirect_uris": "Redirect URLs of self-registering clients",
+          "service_token_ids": "Service tokens allowed through",
+          "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "hostname": "The public hostname served through Cloudflare, e.g. ha.example.com.",
-          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
-          "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
-          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
-          "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
-          "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field holds the e-mail address: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers. The same field feeds the allow policy and matches an admitted identity to the user."
+          "hostname": "The public hostname Cloudflare serves Home Assistant on, e.g. ha.example.com.",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/)",
+          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: https://claude.ai/api/mcp/auth_callback, or https://example.com/* for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)",
+          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#application-session-duration)",
+          "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       },
       "reauth_confirm": {
@@ -63,8 +60,8 @@
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
-      "required": "This field is required.",
-      "invalid_redirect_uri": "Redirect URIs must start with https://."
+      "invalid_redirect_uri": "Redirect URLs must start with https://.",
+      "invalid_duration": "Enter a number of hours or minutes, e.g. 720h or 30m."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
@@ -80,31 +77,29 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Changing an option re-provisions the Access applications (reload the integration to re-provision without a change). Enabling the gate is the exposure change: the whole hostname then requires an Access session, except the bypassed paths listed here. The allow policy lists the e-mail addresses of the Home Assistant users (currently: {allowed_users}) and follows them as users come and go.",
+        "description": "Saving re-provisions the Access applications (reloading the integration does the same without a change). Who gets in: every active Home Assistant user, by the e-mail address found on their account (login username, display name, or the field a login integration stores). Currently: {allowed_users}. A request Access lets through is served as the user who carries that address.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
-          "service_token_ids": "Service token IDs allowed through the gate",
-          "session_duration": "Access session duration",
-          "client_redirect_uris": "Redirect URIs allowed for self-registering clients",
-          "extra_bypass_paths": "Bypassed paths",
-          "identity_claim": "Identity claim",
-          "user_match": "Home Assistant user field",
+          "extra_bypass_paths": "Paths open without Access",
+          "client_redirect_uris": "Redirect URLs of self-registering clients",
+          "service_token_ids": "Service tokens allowed through",
+          "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "service_token_ids": "IDs of Access service tokens (Zero Trust → Access → Service auth) that may pass the gate with CF-Access-Client-Id/Secret headers, as a Service Auth policy.",
-          "session_duration": "Lifetime of an Access session, e.g. 720h. Also the lifetime of a registered client's refresh token.",
-          "client_redirect_uris": "Clients that discover the OAuth server themselves (MCP clients such as Claude) register with Access dynamically; Access accepts their registration only if their redirect URI is listed here. https:// URLs, optionally ending in /* for all sub-paths. Clients with a console that asks for a client id and secret are registered instead under this entry's \"Add OAuth client\".",
-          "extra_bypass_paths": "Hostname-relative path prefixes that must stay reachable without Access, e.g. /api/webhook/abc for a third-party service that can hold neither cookie nor bearer. Nothing is bypassed unless listed here.",
-          "identity_claim": "Claim of the Access assertion compared with the Home Assistant user, usually email.",
-          "user_match": "Which Home Assistant user field holds the e-mail address: 'username' (built-in login), 'name' (display name), or any credential field such as 'email' for OIDC providers. The same field feeds the allow policy and matches an admitted identity to the user."
+          "gate_enabled": "On: every request to the hostname needs an Access login, except the open paths below. Off: nothing is gated and the other options wait.",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/)",
+          "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: https://claude.ai/api/mcp/auth_callback, or https://example.com/* for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)",
+          "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#application-session-duration)",
+          "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       }
     },
     "error": {
-      "no_allowed_users": "No Home Assistant user has an e-mail address in the selected user field, so the gate would let nobody in. Give a user an address first.",
-      "required": "This field is required.",
-      "invalid_redirect_uri": "Redirect URIs must start with https://."
+      "no_allowed_users": "No Home Assistant user carries an e-mail address, so the gate would let nobody in. Give a user one first: a login username, a display name, or the e-mail field of a login integration.",
+      "invalid_redirect_uri": "Redirect URLs must start with https://.",
+      "invalid_duration": "Enter a number of hours or minutes, e.g. 720h or 30m."
     }
   },
   "issues": {
@@ -114,7 +109,7 @@
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No active Home Assistant user has an e-mail address in the field the options name ({user_match}), so there is nobody to list in the gate's allow policy. The policy was left as it was. Give a user an address, or change the field in the options."
+      "description": "No active Home Assistant user carries an e-mail address (as login username, display name, or in a login integration's credential), so there is nobody to list in the gate's allow policy. The policy was left as it was. Give a user an address, then reload the integration."
     }
   },
   "config_subentries": {
@@ -126,14 +121,14 @@
       "step": {
         "user": {
           "title": "Register an OAuth client",
-          "description": "For a client whose console asks for a client id and secret (Google Home account linking, the Alexa skill, any service that cannot register itself). Access issues the credentials; the next page shows them together with the authorization and token URLs to enter in that console. Who may link the client is the gate's own allow rule.",
+          "description": "For a client whose console asks for a client ID and secret: Google Home account linking, the Alexa skill, any service that cannot register itself. Access issues the credentials; the next page shows them with the URLs to enter in that console. Who may link is the gate's own allow rule.",
           "data": {
             "name": "Name",
-            "redirect_uris": "Redirect URIs"
+            "redirect_uris": "Redirect URLs"
           },
           "data_description": {
             "name": "Anything that identifies the client to you, e.g. Google Home.",
-            "redirect_uris": "The callback URL(s) the client's console shows. Exact https:// URLs."
+            "redirect_uris": "The callback URL(s) the client's console shows, e.g. https://oauth-redirect.googleusercontent.com/r/my-project. Exact https:// URLs."
           }
         },
         "reconfigure": {
@@ -141,7 +136,7 @@
           "description": "Saving updates the registration in Access and shows the credentials again.",
           "data": {
             "name": "Name",
-            "redirect_uris": "Redirect URIs"
+            "redirect_uris": "Redirect URLs"
           }
         },
         "credentials": {
@@ -151,7 +146,7 @@
       },
       "error": {
         "required": "This field is required.",
-        "invalid_redirect_uri": "Redirect URIs must start with https://.",
+        "invalid_redirect_uri": "Redirect URLs must start with https://.",
         "invalid_auth": "Cloudflare rejected the credential.",
         "cannot_connect": "Cloudflare could not be reached.",
         "api_error": "Cloudflare returned an error; see the log."

@@ -47,7 +47,6 @@ from .const import (
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_REDIRECT_URIS,
-    CONF_USER_MATCH,
     DATA_BYPASS_APP_ID,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
@@ -213,12 +212,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
-    emails = allowed_emails(hass, options)
+    emails = allowed_emails(hass)
     if not emails and (options[CONF_GATE_ENABLED] or client_subentries(entry)):
         # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
         raise ConfigEntryError(
-            f"No Home Assistant user has an e-mail address in the field "
-            f"{options[CONF_USER_MATCH]!r}; nobody could log in, so nothing is provisioned"
+            "No Home Assistant user carries an e-mail address; nobody could log in, so "
+            "nothing is provisioned"
         )
     try:
         api = await api_for(hass, entry)
@@ -258,14 +257,13 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     """
 
     async def _refresh() -> None:
-        emails = allowed_emails(hass, data.options)
+        emails = allowed_emails(hass)
         if emails == data.emails and set(client_subentries(entry)) == set(data.client_apps):
             return
         if not emails and (data.options[CONF_GATE_ENABLED] or client_subentries(entry)):
             _LOGGER.warning(
-                "No Home Assistant user has an e-mail address in the field %r any more; "
-                "the Access allow policy keeps its last subjects",
-                data.options[CONF_USER_MATCH],
+                "No Home Assistant user carries an e-mail address any more; "
+                "the Access allow policy keeps its last subjects"
             )
             ir.async_create_issue(
                 hass,
@@ -274,7 +272,6 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 is_fixable=False,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_NO_ALLOWED_USERS,
-                translation_placeholders={CONF_USER_MATCH: data.options[CONF_USER_MATCH]},
             )
             return
         ir.async_delete_issue(hass, DOMAIN, ISSUE_NO_ALLOWED_USERS)
