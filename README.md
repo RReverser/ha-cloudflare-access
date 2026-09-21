@@ -30,9 +30,10 @@ Google Home or Alexa link, nor on a real phone.
 - Nothing else to prepare: the integration **signs in with Cloudflare** through the project's
   published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
   token set is stored in the config entry and used for nothing else.
-- Home Assistant users whose login identity is their identity-provider e-mail address (by
-  default the built-in login username; see *Options*). Those addresses are the gate's allow
-  policy, and the address of an admitted request picks the user.
+- Home Assistant users that carry their identity-provider e-mail address somewhere on the
+  account: the built-in login username, the display name, or a credential field a login
+  integration stores. Every such address is the gate's allow policy, and the address of an
+  admitted request picks the user; there is nothing to configure.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.
@@ -62,7 +63,7 @@ Two ways to obtain such a token, one mechanism behind both:
   non-browser request gets a 401 pointing at Access's discovery document at
   `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
   person through the Access login, and receives a token. Access accepts a dynamic registration
-  only for redirect URIs listed in the option *Redirect URIs allowed for self-registering
+  only for redirect URLs listed in the option *Redirect URLs of self-registering
   clients* (Claude: `https://claude.ai/api/mcp/auth_callback`).
 - **Clients with a console that asks for a client id and secret** (Google Home account
   linking, an Alexa skill): *Add OAuth client* on the integration entry, with a name and the
@@ -77,8 +78,11 @@ Two ways to obtain such a token, one mechanism behind both:
 **At the origin**, one rule turns the edge identity into a Home Assistant user: a request that
 came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
 carries a valid Access assertion (verified against the team's public keys, issuer, audience
-and expiry) is authenticated as the Home Assistant user whose configured field equals the
-identity claim. No bearer, or a Home Assistant token: Home Assistant decides as usual. The
+and expiry) is authenticated as the Home Assistant user that carries the assertion's identity
+(the `email` claim of a login, the `common_name` of a service token) as login username,
+display name or credential field, compared case-insensitively; an identity that fits several
+users is refused rather than guessed. No bearer, or a Home Assistant token: Home Assistant
+decides as usual. The
 rule runs in a middleware that has to be installed before the web server starts, so the first
 setup after installing the integration needs a restart, which a repair issue asks for; until
 then Home Assistant rejects those requests with 401. Requests on the local network never see
@@ -87,9 +91,9 @@ the rule.
 **Bypassed paths.** Callers that can hold neither a cookie nor a bearer, such as a third-party
 service posting to a webhook or a media player fetching audio by signed URL from the public
 hostname, stop working once the gate is on. If you need one, list its path prefix under
-*Bypassed paths*; the integration then maintains a second, *bypass* application with those
-paths. Nothing is bypassed by default, and nothing is detected: an attacker probing paths must
-never turn into a suggestion to open them.
+*Paths open without Access*; the integration then maintains a second, *bypass* application
+with those paths. Nothing is bypassed by default, and nothing is detected: an attacker probing
+paths must never turn into a suggestion to open them.
 
 **iOS.** The iOS companion app never sends cookies with its native requests, so with the gate
 on it can only render the WebView; sensors, location and notification actions do not reach
@@ -105,7 +109,7 @@ writer; an application edited outside the integration is repaired on the next re
 | Application | Exists | Destinations | Policies | Other |
 |---|---|---|---|---|
 | `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the listed redirect URIs |
-| `ha-access: bypass <host>` | while *Bypassed paths* is non-empty | the listed paths | `bypass` for everyone | |
+| `ha-access: bypass <host>` | while *Paths open without Access* is non-empty | the listed paths | `bypass` for everyone | |
 | `ha-access: client <host> <name>` | one per registered client | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
@@ -165,24 +169,22 @@ the consent page, as in this project's CI: start the flow with the source `api_t
    then to Home Assistant. Confirm the dashboard, camera images and notification tap-throughs
    load, and that background sensor updates keep arriving (they use the device webhook, which
    is gated, so they prove the cookie travels with native requests). Every Access session
-   expiry (the *Access session duration* option, default one month) brings the WebView back to
+   expiry (the *Session duration* option, default one month) brings the WebView back to
    the Access login page.
 5. Re-link Google Assistant, Alexa and MCP clients against Access (see *Token-bearing
    clients*). Links made against Home Assistant's own OAuth stop working at the gate.
-6. If something that neither logs in nor carries a token broke, list its path under *Bypassed
-   paths*.
+6. If something that neither logs in nor carries a token broke, list its path under *Paths open
+   without Access*.
 
 ## Options
 
 | Option | Default | Meaning |
 |---|---|---|
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
-| Service token IDs allowed through the gate | empty | Adds a Service Auth policy so callers presenting `CF-Access-Client-Id/Secret` pass the gate. Used by the live tests; an alternative for your own machine callers |
-| Access session duration | `720h` | Lifetime of an Access session, `<n>h` or `<n>m`, and of a registered client's refresh token. The dashboard offers up to one month; the API accepted `8760h` and Access honoured it (verified) |
-| Redirect URIs allowed for self-registering clients | empty | `https://` URLs, optionally ending in `/*`, that a dynamically registering client may use. Without an entry here, managed OAuth registers no client |
-| Bypassed paths | empty | Hostname-relative path prefixes reachable without Access. Nothing is bypassed unless listed |
-| Identity claim | `email` | Claim of the Access assertion compared with the Home Assistant user |
-| Home Assistant user field | `username` | Which user field holds the address: `username` (built-in login), `name` (display name), or any credential field a login integration stores, e.g. `email`. The addresses found there (active, non-system users; values without `@` are skipped) are the allow policy, and the same field, compared case-insensitively with the identity claim, picks the user for an admitted request |
+| Paths open without Access | empty | Hostname-relative path prefixes reachable without a login, e.g. `/api/webhook/abc`. Nothing is open unless listed |
+| Redirect URLs of self-registering clients | empty | `https://` URLs, optionally ending in `/*`, that a dynamically registering client (MCP) may use. Without an entry here, managed OAuth registers no client |
+| Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
+| Session duration | `720h` | Lifetime of an Access session and of a registered client's refresh token. A dropdown of the dashboard's values; any `<n>h` or `<n>m` can be typed. The API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration

@@ -52,10 +52,8 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_IDENTITY_CLAIM,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
-    CONF_USER_MATCH,
     DATA_BYPASS_APP_ID,
     DATA_GATE_APP_ID,
     DATA_POLICY_AUD,
@@ -226,8 +224,6 @@ async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any)
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
         CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
         CONF_SESSION_DURATION: current[CONF_SESSION_DURATION],
-        CONF_IDENTITY_CLAIM: current[CONF_IDENTITY_CLAIM],
-        CONF_USER_MATCH: current[CONF_USER_MATCH],
         CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
         **changes,
     }
@@ -309,10 +305,6 @@ async def _lifecycle(
                 CONF_HOSTNAME: host,
                 CONF_SERVICE_TOKEN_IDS: [token["id"]],
                 CONF_SESSION_DURATION: SESSION,
-                # a service-token JWT identifies itself by common_name (its client id);
-                # the HA user created below carries that as its display name
-                CONF_IDENTITY_CLAIM: "common_name",
-                CONF_USER_MATCH: "name",
             },
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY, result

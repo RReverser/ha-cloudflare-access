@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -46,11 +47,9 @@ from .const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_IDENTITY_CLAIM,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
-    CONF_USER_MATCH,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
     DATA_CLIENT_SECRET,
@@ -58,13 +57,11 @@ from .const import (
     DATA_TOKEN,
     DEFAULT_DELETE_OBJECTS_ON_REMOVE,
     DEFAULT_GATE_ENABLED,
-    DEFAULT_IDENTITY_CLAIM,
     DEFAULT_SESSION_DURATION,
-    DEFAULT_USER_MATCH,
     DOMAIN,
     SUBENTRY_TYPE_CLIENT,
 )
-from .options import DEFAULT_OPTIONS, api_for, effective_options
+from .options import api_for, effective_options
 from .provision import desired_client_app
 from .users import allowed_emails
 
@@ -72,6 +69,16 @@ _LOGGER = logging.getLogger(__name__)
 
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+# The durations Cloudflare's dashboard offers, from thirty minutes to its one-month ceiling;
+# any other `<n>m` or `<n>h` value can be typed.
+_SESSION_DURATION = SelectSelector(
+    SelectSelectorConfig(
+        options=["30m", "6h", "12h", "24h", "168h", "720h"],
+        custom_value=True,
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
+_DURATION_RE = re.compile(r"[1-9][0-9]*[mh]")
 
 # Started with this source (tests, automation) instead of the sign-in; also the reauth
 # path of an entry created with a token.
@@ -96,26 +103,20 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
             CONF_EXTRA_BYPASS_PATHS, default=list(defaults.get(CONF_EXTRA_BYPASS_PATHS) or [])
         ): _MULTI_TEXT,
         vol.Optional(
+            CONF_CLIENT_REDIRECT_URIS,
+            default=list(defaults.get(CONF_CLIENT_REDIRECT_URIS) or []),
+        ): _MULTI_TEXT,
+        vol.Optional(
             CONF_SERVICE_TOKEN_IDS, default=list(defaults.get(CONF_SERVICE_TOKEN_IDS) or [])
         ): _MULTI_TEXT,
         vol.Optional(
             CONF_SESSION_DURATION,
             default=defaults.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
-        ): str,
-        vol.Optional(
-            CONF_IDENTITY_CLAIM, default=defaults.get(CONF_IDENTITY_CLAIM, DEFAULT_IDENTITY_CLAIM)
-        ): str,
-        vol.Optional(
-            CONF_USER_MATCH, default=defaults.get(CONF_USER_MATCH, DEFAULT_USER_MATCH)
-        ): str,
+        ): _SESSION_DURATION,
         vol.Optional(
             CONF_DELETE_OBJECTS_ON_REMOVE,
             default=defaults.get(CONF_DELETE_OBJECTS_ON_REMOVE, DEFAULT_DELETE_OBJECTS_ON_REMOVE),
         ): BooleanSelector(),
-        vol.Optional(
-            CONF_CLIENT_REDIRECT_URIS,
-            default=list(defaults.get(CONF_CLIENT_REDIRECT_URIS) or []),
-        ): _MULTI_TEXT,
     }
 
 
@@ -127,11 +128,10 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     out[CONF_CLIENT_REDIRECT_URIS] = _clean_list(out.get(CONF_CLIENT_REDIRECT_URIS))
     if any(not u.startswith("https://") for u in out[CONF_CLIENT_REDIRECT_URIS]):
         errors[CONF_CLIENT_REDIRECT_URIS] = "invalid_redirect_uri"
-    for key in (CONF_SESSION_DURATION, CONF_IDENTITY_CLAIM, CONF_USER_MATCH):
-        if key in out:
-            out[key] = str(out[key]).strip()
-            if not out[key]:
-                errors[key] = "required"
+    if CONF_SESSION_DURATION in out:
+        out[CONF_SESSION_DURATION] = str(out[CONF_SESSION_DURATION]).strip()
+        if not _DURATION_RE.fullmatch(out[CONF_SESSION_DURATION]):
+            errors[CONF_SESSION_DURATION] = "invalid_duration"
     return out
 
 
@@ -349,9 +349,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             data_schema=schema,
             errors=errors,
             description_placeholders={
-                "allowed_users": _users_placeholder(
-                    allowed_emails(self.hass, {**DEFAULT_OPTIONS, **defaults})
-                )
+                "allowed_users": _users_placeholder(allowed_emails(self.hass))
             },
         )
 
@@ -384,9 +382,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             options = _validate_options(user_input, errors)
             if not errors:
                 options[CONF_HOSTNAME] = current[CONF_HOSTNAME]
-                if options[CONF_GATE_ENABLED] and not allowed_emails(
-                    self.hass, {**DEFAULT_OPTIONS, **options}
-                ):
+                if options[CONF_GATE_ENABLED] and not allowed_emails(self.hass):
                     errors["base"] = "no_allowed_users"
             if not errors:
                 return self.async_create_entry(data=options)
@@ -406,7 +402,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             errors=errors,
             description_placeholders={
                 CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
-                "allowed_users": _users_placeholder(allowed_emails(self.hass, current)),
+                "allowed_users": _users_placeholder(allowed_emails(self.hass)),
             },
         )
 
@@ -446,7 +442,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         if errors:
             return None
         options = effective_options(entry)
-        desired = desired_client_app(options, allowed_emails(self.hass, options), name, uris)
+        desired = desired_client_app(options, allowed_emails(self.hass), name, uris)
         try:
             api = await api_for(self.hass, entry)
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))

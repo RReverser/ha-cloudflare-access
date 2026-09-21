@@ -29,9 +29,9 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.http import KEY_AUTHENTICATED, KEY_HASS
 
 from .const import (
+    CLAIM_COMMON_NAME,
+    CLAIM_EMAIL,
     CONF_HOSTNAME,
-    CONF_IDENTITY_CLAIM,
-    CONF_USER_MATCH,
     DOMAIN,
     HEADER_CF_RAY,
     HEADER_JWT,
@@ -99,19 +99,20 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
     assertion = request.headers.get(HEADER_JWT)
     if not assertion:
         return await handler(request)
-    options = ctx.data.options
     try:
         claims = await ctx.data.verifier.verify(assertion, ctx.data.policy_aud)
     except JwtVerifyError as err:
         return _reject(request, f"the Access assertion did not verify ({err})")
-    claim_name = options[CONF_IDENTITY_CLAIM]
-    identity = claims.get(claim_name)
+    # An identity-provider login is named by its e-mail address; a service token has no
+    # address and is named by its common name.
+    identity = claims.get(CLAIM_EMAIL) or claims.get(CLAIM_COMMON_NAME)
     if not isinstance(identity, str) or not identity:
-        return _reject(request, f"the assertion carries no {claim_name} claim")
-    mode = options[CONF_USER_MATCH]
-    user = await async_find_user(ctx.hass, mode, identity)
+        return _reject(
+            request, f"the assertion carries neither {CLAIM_EMAIL} nor {CLAIM_COMMON_NAME}"
+        )
+    user = await async_find_user(ctx.hass, identity)
     if user is None:
-        return _reject(request, f"no Home Assistant user has {mode} = {identity!r}")
+        return _reject(request, f"no single Home Assistant user is {identity!r}")
     request[KEY_AUTHENTICATED] = True
     request[KEY_HASS_USER] = user
     _LOGGER.debug("Authenticated %s as %s via the Access assertion", request.path, user.name)
