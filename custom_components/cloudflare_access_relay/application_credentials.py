@@ -18,7 +18,14 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
     async_register_implementation,
 )
 
-from .const import DOMAIN, OAUTH_AUTHORIZE_URL, OAUTH_CLIENT_ID, OAUTH_SCOPES, OAUTH_TOKEN_URL
+from .const import (
+    DOCS_OAUTH_CLIENTS,
+    DOMAIN,
+    OAUTH_AUTHORIZE_URL,
+    OAUTH_CLIENT_ID,
+    OAUTH_SCOPES,
+    OAUTH_TOKEN_URL,
+)
 
 
 class CloudflareOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
@@ -69,4 +76,5 @@ async def async_get_description_placeholders(hass: HomeAssistant) -> dict[str, s
         "redirect_uri": "https://my.home-assistant.io/redirect/oauth",
         "scopes": ", ".join(OAUTH_SCOPES),
         "more_info_url": "https://github.com/RReverser/ha-cloudflare-access#sign-in",
+        "docs_oauth_clients": DOCS_OAUTH_CLIENTS,
     }

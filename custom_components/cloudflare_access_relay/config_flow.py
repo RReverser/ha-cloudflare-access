@@ -59,6 +59,7 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     DOMAIN,
+    FORM_PLACEHOLDERS,
     SUBENTRY_TYPE_CLIENT,
 )
 from .options import api_for, effective_options
@@ -349,7 +350,8 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             data_schema=schema,
             errors=errors,
             description_placeholders={
-                "allowed_users": _users_placeholder(allowed_emails(self.hass))
+                **FORM_PLACEHOLDERS,
+                "allowed_users": _users_placeholder(allowed_emails(self.hass)),
             },
         )
 
@@ -401,6 +403,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             data_schema=schema,
             errors=errors,
             description_placeholders={
+                **FORM_PLACEHOLDERS,
                 CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
                 "allowed_users": _users_placeholder(allowed_emails(self.hass)),
             },
@@ -475,7 +478,12 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 ): _MULTI_TEXT,
             }
         )
-        return self.async_show_form(step_id=step_id, data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
 
     def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
