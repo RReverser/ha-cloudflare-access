@@ -76,15 +76,11 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
         async def get(self, request: Any, filename: str) -> Any:
             return None
 
-    def view(url: str, requires_auth: bool) -> HomeAssistantView:
-        return type(
-            "V",
-            (HomeAssistantView,),
-            {"url": url, "name": url, "requires_auth": requires_auth, "get": Audio.get},
-        )()
+    def view(url: str, requires_auth: bool, module: str = __name__) -> HomeAssistantView:
+        attrs = {"url": url, "name": url, "requires_auth": requires_auth, "get": Audio.get}
+        return type("V", (HomeAssistantView,), {**attrs, "__module__": module})()
 
     assert await async_setup_component(hass, "webhook", {})
-    assert await async_setup_component(hass, "camera", {})
     hass.http.register_view(Audio())
     for url, auth in (
         ("/api/glyphs/fonts/{name}", False),  # two open siblings and nothing else: combined
@@ -93,6 +89,10 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
         ("/api/tiles/admin", True),
     ):
         hass.http.register_view(view(url, auth))
+    # a view defined by a core integration is labelled with that integration's name
+    hass.http.register_view(
+        view("/api/camera_proxy/{entity_id}", False, "homeassistant.components.camera")
+    )
     webhook.async_register(hass, "my_doorbell", "Front door", "hook-1", lambda *_: None)
     webhook.async_register(hass, "local", "LAN only", "hook-2", lambda *_: None, local_only=True)
     webhook.async_register(hass, "mobile_app", "Mobile App: Old phone", "hook-3", lambda *_: None)
