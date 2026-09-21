@@ -1,6 +1,6 @@
 {
   "application_credentials": {
-    "description": "Nothing to add: the integration signs in through its own published Cloudflare OAuth client.\n\nAdd a credential only to use a client of your own; it then replaces the built-in one. Create it under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}; enter its client ID with an empty secret.\n\n[Cloudflare OAuth clients]({docs_oauth_clients}) · [project notes]({more_info_url})"
+    "description": "Nothing to add: the integration signs in through its own published Cloudflare OAuth client.\n\nAdd a credential only to use [a client of your own]({docs_oauth_clients}); it then replaces the built-in one. Create it under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}; enter its client ID with an empty secret. The [project notes]({more_info_url}) walk through it."
   },
   "config": {
     "step": {
@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail you give them. Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail you give them, through the [login methods of your Zero Trust organization]({docs_identity_providers}). Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
         "data": {
           "hostname": "Hostname",
           "user_id": "User",
@@ -46,10 +46,10 @@
           "hostname": "The public hostname Cloudflare serves, e.g. ha.example.com.",
           "user_id": "The Home Assistant user who gets the address.",
           "email": "The address the identity provider knows this user by.",
-          "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token.\n\nPick from what this Home Assistant serves, or type one. [Bypass policies]({docs_policies})",
-          "client_redirect_uris": "Where self-registering clients (MCP) may be sent back to; nothing else can register.\n\nExample: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. [Managed OAuth]({docs_managed_oauth})\n\nA client that asks for a client ID and secret: use \"Add OAuth client\" instead.",
-          "service_token_ids": "Client IDs of Access service tokens that may pass the gate, e.g. for a script on another machine. [Service tokens]({docs_service_tokens})",
-          "session_duration": "How long a login lasts before Access asks again; also a registered client's refresh-token lifetime. [Session duration]({docs_session})",
+          "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token; each gets a [bypass policy]({docs_policies}) of its own.\n\nPick from what this Home Assistant serves, or type one.",
+          "client_redirect_uris": "Where a self-registering client (MCP) may be sent back to: Access [registers such a client]({docs_managed_oauth}) only for a listed URL.\n\nExample: {example_mcp_redirect}, or {example_wildcard_redirect} for every path.\n\nA client that asks for a client ID and secret is added under \"Add OAuth client\" instead.",
+          "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine.",
+          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again; also the lifetime of a registered client's refresh token.",
           "delete_objects_on_remove": "Off keeps the Access applications in Cloudflare after removal, e.g. to adopt them from another instance."
         }
       },
@@ -84,7 +84,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail added here. Currently: {allowed_users}.\n\nA user without an address cannot log in. Give one under \"Add login e-mail\", or [change the username]({docs_change_username}) to the address.",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail added here, through the [login methods of your Zero Trust organization]({docs_identity_providers}) (Zero Trust → Integrations → Identity providers). Currently: {allowed_users}.\n\nA user without an address cannot log in: give one under \"Add login e-mail\", or [change the username]({docs_change_username}) to the address.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "extra_bypass_paths": "Paths open without Access",
@@ -95,10 +95,10 @@
         },
         "data_description": {
           "gate_enabled": "On: every request needs an Access login, except the open paths.\nOff: nothing is gated.",
-          "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token.\n\nPick from what this Home Assistant serves, or type one. [Bypass policies]({docs_policies})",
-          "client_redirect_uris": "Where self-registering clients (MCP) may be sent back to; nothing else can register.\n\nExample: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. [Managed OAuth]({docs_managed_oauth})\n\nA client that asks for a client ID and secret: use \"Add OAuth client\" instead.",
-          "service_token_ids": "Client IDs of Access service tokens that may pass the gate, e.g. for a script on another machine. [Service tokens]({docs_service_tokens})",
-          "session_duration": "How long a login lasts before Access asks again; also a registered client's refresh-token lifetime. [Session duration]({docs_session})",
+          "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token; each gets a [bypass policy]({docs_policies}) of its own.\n\nPick from what this Home Assistant serves, or type one.",
+          "client_redirect_uris": "Where a self-registering client (MCP) may be sent back to: Access [registers such a client]({docs_managed_oauth}) only for a listed URL.\n\nExample: {example_mcp_redirect}, or {example_wildcard_redirect} for every path.\n\nA client that asks for a client ID and secret is added under \"Add OAuth client\" instead.",
+          "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine.",
+          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again; also the lifetime of a registered client's refresh token.",
           "delete_objects_on_remove": "Off keeps the Access applications in Cloudflare after removal, e.g. to adopt them from another instance."
         }
       }
@@ -163,7 +163,7 @@
       "step": {
         "user": {
           "title": "Register an OAuth client",
-          "description": "For a client whose console asks for a client ID and secret: Google Home account linking, the Alexa skill, any service that cannot register itself.\n\nAccess issues the credentials; the next page shows them with the URLs to enter in that console. Who may link is the gate's own allow rule.",
+          "description": "For a client whose console asks for a client ID and secret: Google Home account linking, the Alexa skill, any service that cannot register itself.\n\nAccess issues the credentials from [an application of its own]({docs_saas_apps}) for the client; the next page shows them with the URLs to enter in that console. Who may link is the gate's own allow rule.",
           "data": {
             "name": "Name",
             "redirect_uris": "Redirect URLs"

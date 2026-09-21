@@ -105,6 +105,8 @@ FORM_PLACEHOLDERS: Final[dict[str, str]] = {
     "example_console_redirect": "https://oauth-redirect.googleusercontent.com/r/my-project",
     "docs_change_username": "https://www.home-assistant.io/docs/configuration/user-configuration/"
     "#changing-a-username",
+    "docs_identity_providers": _CF_DOCS + "integrations/identity-providers/",
+    "docs_saas_apps": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/saas-apps/",
 }
 DOCS_OAUTH_CLIENTS: Final = (
     "https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/"
