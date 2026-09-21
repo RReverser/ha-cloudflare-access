@@ -22,9 +22,12 @@ CONF_HOSTNAME: Final = "hostname"
 CONF_GATE_ENABLED: Final = "gate_enabled"
 CONF_SERVICE_TOKEN_IDS: Final = "service_token_ids"
 CONF_SESSION_DURATION: Final = "session_duration"
+# Derived from the OAuth client subentries at provisioning time, never edited directly.
 CONF_CLIENT_REDIRECT_URIS: Final = "client_redirect_uris"
 CONF_EXTRA_BYPASS_PATHS: Final = "extra_bypass_paths"
 CONF_DELETE_OBJECTS_ON_REMOVE: Final = "delete_objects_on_remove"
+# The form groups the two ways around the login in a collapsed section; storage stays flat.
+SECTION_BYPASS: Final = "bypass"
 
 DEFAULT_GATE_ENABLED: Final = False
 # Cloudflare documents the application session ceiling as "one month".
@@ -68,11 +71,13 @@ SUBENTRY_TYPE_LOGIN_EMAIL: Final = "login_email"
 CONF_USER_ID: Final = "user_id"
 CONF_EMAIL: Final = "email"
 
-# Registered OAuth clients (config subentries): clients that cannot register themselves
-# get an Access for SaaS OIDC application each, whose tokens the gate accepts.
+# OAuth clients (config subentries): every client's redirect URLs are allowed for
+# self-registration on the gate; a client whose console asks for a client id and secret
+# gets an Access for SaaS OIDC application of its own, whose tokens the gate accepts.
 SUBENTRY_TYPE_CLIENT: Final = "oauth_client"
 CONF_CLIENT_NAME: Final = "name"
 CONF_REDIRECT_URIS: Final = "redirect_uris"
+CONF_NEEDS_CREDENTIALS: Final = "needs_credentials"
 DATA_CLIENT_APP_ID: Final = "app_id"
 DATA_CLIENT_ID: Final = "client_id"
 DATA_CLIENT_SECRET: Final = "client_secret"

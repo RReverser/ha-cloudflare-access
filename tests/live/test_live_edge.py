@@ -222,7 +222,10 @@ async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any)
     current = dict(entry.options)
     user_input = {
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
-        CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
+        "bypass": {
+            CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
+            CONF_EXTRA_BYPASS_PATHS: current.get(CONF_EXTRA_BYPASS_PATHS, []),
+        },
         CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
         **changes,
     }
@@ -302,7 +305,7 @@ async def _lifecycle(
             result["flow_id"],
             {
                 CONF_HOSTNAME: host,
-                CONF_SERVICE_TOKEN_IDS: [token["id"]],
+                "bypass": {CONF_SERVICE_TOKEN_IDS: [token["id"]]},
                 CONF_SESSION_DURATION: SESSION_FORM,
             },
         )
@@ -444,12 +447,12 @@ async def _lifecycle(
         assert await _until(client_gone, "client application deleted", 60)
 
         print("== a listed path is bypassed; clearing the list removes the bypass")
-        await _save_options(hass, entry, **{CONF_EXTRA_BYPASS_PATHS: ["/api/open"]})
+        await _save_options(hass, entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/open"]}})
         bypass_id = entry.data[DATA_BYPASS_APP_ID]
         assert bypass_id and await api.get_app(bypass_id)
         await edge.wait_gate("/api/open/echo", False)
         assert _is_access_redirect(await edge.get("/api/echo")), "everything else stays gated"
-        await _save_options(hass, entry, **{CONF_EXTRA_BYPASS_PATHS: []})
+        await _save_options(hass, entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: []}})
         assert entry.data[DATA_BYPASS_APP_ID] is None and await api.get_app(bypass_id) is None
         await edge.wait_gate("/api/open/echo", True)
 
@@ -504,7 +507,7 @@ async def _lifecycle(
         assert await _until(reusable, "cookie reuse restored")
 
         print("== dropping the service token from the options removes it from the gate policy")
-        await _save_options(hass, entry, **{CONF_SERVICE_TOKEN_IDS: []})
+        await _save_options(hass, entry, **{"bypass": {CONF_SERVICE_TOKEN_IDS: []}})
 
         async def token_gone() -> bool:
             app = await api.get_app(gate_id)

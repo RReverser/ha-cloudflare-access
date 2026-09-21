@@ -373,13 +373,15 @@ def test_nothing_is_bypassed_unless_listed() -> None:
 
 async def test_bypass_application_follows_the_option(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
-    await _save_options(hass, access.entry, **{CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/abc123"]})
+    await _save_options(
+        hass, access.entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/abc123"]}}
+    )
     bypass = cf.by_name(BYPASS)
     assert bypass is not None and _uris(bypass) == [f"{HOSTNAME}/api/webhook/abc123"]
     assert access.entry.data[DATA_BYPASS_APP_ID] == bypass["id"]
     assert [p[2]["name"] for p in cf.writes("POST")] == [GATE, BYPASS]
 
-    await _save_options(hass, access.entry, **{CONF_EXTRA_BYPASS_PATHS: []})
+    await _save_options(hass, access.entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: []}})
     assert cf.by_name(BYPASS) is None
     assert access.entry.data[DATA_BYPASS_APP_ID] is None
 
@@ -407,7 +409,7 @@ async def _register_client(
     )
     assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user"
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "redirect_uris": uris}
+        flow["flow_id"], {"name": name, "redirect_uris": uris, "needs_credentials": True}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     placeholders = dict(result["description_placeholders"])
@@ -466,6 +468,88 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     assert gate_put < delete, "the gate drops its rule before the application goes"
 
 
+async def test_self_registering_client_is_a_redirect_url_on_the_gate(
+    hass: HomeAssistant, access: Access
+) -> None:
+    """A client without a console gets no application: its URL is allowed to self-register."""
+    cf = access.cloudflare
+    dcr = lambda: cf.by_name(GATE)["oauth_configuration"]["dynamic_client_registration"]  # noqa: E731
+    assert dcr()["allowed_uris"] == []
+    flow = await hass.config_entries.subentries.async_init(
+        (access.entry.entry_id, "oauth_client"), context={"source": "user"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"],
+        {"name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await _settle(hass)
+    assert dcr()["allowed_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
+    assert [a["name"] for a in cf.apps.values()] == [GATE], "no application of its own"
+    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
+
+    # a changed URL follows; the client can also turn into a console client, and back
+    sub = next(iter(access.entry.subentries.values()))
+    assert sub.title == "Claude" and sub.data["needs_credentials"] is False
+    flow = await hass.config_entries.subentries.async_init(
+        (access.entry.entry_id, "oauth_client"),
+        context={"source": "reconfigure", "subentry_id": sub.subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"],
+        {"name": "Claude", "redirect_uris": ["https://claude.ai/*"], "needs_credentials": True},
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT, result
+    await _settle(hass)
+    app = cf.by_name(f"ha-access: client {HOSTNAME} Claude")
+    assert app is not None and dcr()["allowed_uris"] == ["https://claude.ai/*"]
+    assert cf.by_name(GATE)["policies"][-1]["include"] == [
+        {"linked_app_token": {"app_uid": app["id"]}}
+    ]
+
+    flow = await hass.config_entries.subentries.async_init(
+        (access.entry.entry_id, "oauth_client"),
+        context={"source": "reconfigure", "subentry_id": sub.subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"],
+        {"name": "Claude", "redirect_uris": ["https://claude.ai/*"], "needs_credentials": False},
+    )
+    assert result["type"] is FlowResultType.ABORT, result
+    await _settle(hass, 2)
+    assert cf.by_name(f"ha-access: client {HOSTNAME} Claude") is None, "the application goes"
+    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
+    assert "app_id" not in access.entry.subentries[sub.subentry_id].data
+
+    hass.config_entries.async_remove_subentry(access.entry, sub.subentry_id)
+    await _settle(hass)
+    assert dcr()["allowed_uris"] == []
+
+
+async def test_legacy_redirect_url_option_becomes_clients(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    entry = make_entry(
+        **{
+            CONF_GATE_ENABLED: True,
+            "client_redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        }
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert "client_redirect_uris" not in entry.options
+    subs = list(entry.subentries.values())
+    assert [(s.title, s.data["redirect_uris"], s.data["needs_credentials"]) for s in subs] == [
+        ("claude.ai", ["https://claude.ai/api/mcp/auth_callback"], False)
+    ]
+    gate = fake_cloudflare.by_name(GATE)
+    assert gate["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] == [
+        "https://claude.ai/api/mcp/auth_callback"
+    ]
+
+
 async def test_client_registration_survives_a_reload_and_a_lost_application(
     hass: HomeAssistant, access: Access
 ) -> None:
@@ -506,7 +590,9 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
 
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
-    await _save_options(hass, access.entry, **{CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/x"]})
+    await _save_options(
+        hass, access.entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/x"]}}
+    )
     await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
     assert len(cf.apps) == 3
     await hass.config_entries.async_remove(access.entry.entry_id)
