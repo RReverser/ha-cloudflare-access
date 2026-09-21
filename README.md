@@ -30,11 +30,14 @@ Google Home or Alexa link, nor on a real phone.
 - Nothing else to prepare: the integration **signs in with Cloudflare** through the project's
   published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
   token set is stored in the config entry and used for nothing else.
-- Home Assistant users whose login username is their identity-provider e-mail address
-  (Settings → People → the person → *Allow login*; Home Assistant has no separate e-mail
-  field), or whose external login provider stored that address in the credential. Those
-  addresses are the gate's allow policy, and the address of an admitted request picks the
-  user; there is nothing to configure.
+- Home Assistant users whose login username is their identity-provider e-mail address, or
+  whose external login provider stored that address in the credential. Home Assistant has no
+  e-mail field of its own: [change the
+  username](https://www.home-assistant.io/docs/configuration/user-configuration/#changing-a-username)
+  to the address, or use a [login
+  provider](https://www.home-assistant.io/docs/authentication/providers/) that stores one.
+  Those addresses are the gate's allow policy, and the address of an admitted request picks
+  the user; there is nothing to configure.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.
