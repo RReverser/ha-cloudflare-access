@@ -63,37 +63,23 @@ requests too, so its API calls and its device webhook pass the gate.
 which validates its token at the edge on every request and forwards the request to Home
 Assistant with the same signed assertion a browser session gets. Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
-Two ways to obtain such a token, one mechanism behind both:
+Every such client is added under *Add OAuth client* on the integration entry, with a name and
+the callback URL(s) the client's own side shows; the callback belongs to the client and cannot
+be derived. Two kinds, one mechanism behind both:
 
 - **Clients that discover and register themselves** (MCP clients): the gate has *managed
   OAuth* enabled, which makes Access the OAuth server for the hostname. An unauthenticated
   non-browser request gets a 401 pointing at Access's discovery document at
   `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
   person through the Access login, and receives a token. Access accepts a dynamic registration
-  only for redirect URLs listed in the option *Redirect URLs of self-registering
-  clients* (Claude: `https://claude.ai/api/mcp/auth_callback`).
+  only for a callback URL of a listed client (Claude: `https://claude.ai/api/mcp/auth_callback`).
 - **Clients with a console that asks for a client id and secret** (Google Home account
-  linking, an Alexa skill): *Add OAuth client* on the integration entry, with a name and the
-  redirect URI the console shows. The integration creates an Access for SaaS OIDC application,
-  which is that client's registration with Access, shows the client id, secret, authorization
-  and token URLs to enter in the console, and adds a rule to the gate that accepts the tokens
-  of that application. The client's refresh token lives as long as an Access session of the
-  gate. Removing the client removes both. Nothing in the integration knows what Google or
-  Alexa are; they need the same four values they need today when linked to Home Assistant
-  directly, only now those values are Access's.
-
-**At the origin**, one rule turns the edge identity into a Home Assistant user: a request that
-came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
-carries a valid Access assertion (verified against the team's public keys, issuer, audience
-and expiry) is authenticated as the Home Assistant user that carries the assertion's identity
-(the `email` claim of a login, the `common_name` of a service token) as login username or
-login e-mail, compared case-insensitively; an identity that fits several users is refused
-rather than guessed. No bearer, or a Home Assistant token: Home Assistant
-decides as usual. The
-rule runs in a middleware that has to be installed before the web server starts, so the first
-setup after installing the integration needs a restart, which a repair issue asks for; until
-then Home Assistant rejects those requests with 401. Requests on the local network never see
-the rule.
+  linking, an Alexa skill): the same entry with *The client asks for a client ID and secret*
+  switched on. The integration creates an Access for SaaS OIDC application, which is that
+  client's registration with Access, shows the client id, secret, authorization, token and
+  user-info URLs to paste into the console, and adds a rule to the gate accepting that
+  application's tokens. Google Home and Alexa need the same four values they need today when
+  linked to Home Assistant directly, only now those values are Access's.
 
 **Bypassed paths.** Callers that can hold neither a cookie nor a bearer, such as a third-party
 service posting to a webhook or a media player fetching audio by signed URL from the public
@@ -115,9 +101,9 @@ writer; an application edited outside the integration is repaired on the next re
 
 | Application | Exists | Destinations | Policies | Other |
 |---|---|---|---|---|
-| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the listed redirect URIs |
+| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the clients' callback URLs |
 | `ha-access: bypass <host>` | while *Paths open without Access* is non-empty | the listed paths | `bypass` for everyone | |
-| `ha-access: client <host> <name>` | one per registered client | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
+| `ha-access: client <host> <name>` | one per client whose console needs credentials | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
 is what makes the bypass list work; the live test asserts it on every run.
@@ -188,9 +174,8 @@ the consent page, as in this project's CI: start the flow with the source `api_t
 | Option | Default | Meaning |
 |---|---|---|
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
-| Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
-| Redirect URLs of self-registering clients | empty | `https://` URLs, optionally ending in `/*`, that a dynamically registering client (MCP) may use. Without an entry here, managed OAuth registers no client |
-| Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
+| Ways around the login → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
+| Ways around the login → Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
 | Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
@@ -198,12 +183,12 @@ Changing the options reloads the entry and re-provisions; so does reloading the 
 (Settings → Devices & services → Cloudflare Access → Reload), which is the way to repair
 applications edited outside the integration. Unchanged applications are never written.
 
-The gate cannot be enabled while no user has an address in the configured field: nobody could
-log in. If the last such user goes while the gate is on, the policy keeps its last subjects and
-a repair issue says so.
+The integration does not set up, and the options cannot be saved, while no user has an e-mail
+address: nobody could log in. If the last such user goes while the gate is on, the policy keeps
+its last subjects and a repair issue says so.
 
-Registered OAuth clients are subentries of the integration entry (*Add OAuth client*); each
-stores its application id, client id and secret, and *Reconfigure* shows the credentials
+OAuth clients are subentries of the integration entry (*Add OAuth client*); one whose console
+needs credentials stores its application id, client id and secret, and *Reconfigure* shows the credentials
 again. For Google Home account linking enter the client id, client secret, authorization URL
 and token URL shown; for an Alexa skill the same four under account linking, with credentials
 in the request body.

@@ -18,6 +18,7 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
@@ -46,12 +47,12 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_CLIENT_NAME,
-    CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EMAIL,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
+    CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
@@ -66,6 +67,7 @@ from .const import (
     DEFAULT_SESSION_DURATION,
     DOMAIN,
     FORM_PLACEHOLDERS,
+    SECTION_BYPASS,
     SUBENTRY_TYPE_CLIENT,
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
@@ -128,24 +130,8 @@ def _clean_list(values: list[str] | None) -> list[str]:
 
 
 async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
+    bypass = defaults.get(SECTION_BYPASS) or {}
     return {
-        vol.Optional(
-            CONF_EXTRA_BYPASS_PATHS, default=list(defaults.get(CONF_EXTRA_BYPASS_PATHS) or [])
-        ): SelectSelector(
-            SelectSelectorConfig(
-                options=await async_bypass_candidates(hass),
-                multiple=True,
-                custom_value=True,
-                mode=SelectSelectorMode.DROPDOWN,
-            )
-        ),
-        vol.Optional(
-            CONF_CLIENT_REDIRECT_URIS,
-            default=list(defaults.get(CONF_CLIENT_REDIRECT_URIS) or []),
-        ): _MULTI_TEXT,
-        vol.Optional(
-            CONF_SERVICE_TOKEN_IDS, default=list(defaults.get(CONF_SERVICE_TOKEN_IDS) or [])
-        ): _MULTI_TEXT,
         vol.Optional(
             CONF_SESSION_DURATION,
             default=_duration_to_form(
@@ -156,17 +142,45 @@ async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> 
             CONF_DELETE_OBJECTS_ON_REMOVE,
             default=defaults.get(CONF_DELETE_OBJECTS_ON_REMOVE, DEFAULT_DELETE_OBJECTS_ON_REMOVE),
         ): BooleanSelector(),
+        vol.Optional(SECTION_BYPASS, default={}): section(
+            vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_EXTRA_BYPASS_PATHS,
+                        default=list(
+                            bypass.get(CONF_EXTRA_BYPASS_PATHS)
+                            or defaults.get(CONF_EXTRA_BYPASS_PATHS)
+                            or []
+                        ),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=await async_bypass_candidates(hass),
+                            multiple=True,
+                            custom_value=True,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_SERVICE_TOKEN_IDS,
+                        default=list(
+                            bypass.get(CONF_SERVICE_TOKEN_IDS)
+                            or defaults.get(CONF_SERVICE_TOKEN_IDS)
+                            or []
+                        ),
+                    ): _MULTI_TEXT,
+                }
+            ),
+            {"collapsed": True},
+        ),
     }
 
 
 def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
-    """Normalise option values and record validation errors."""
+    """Normalise option values and record validation errors; the section is flattened."""
     out = dict(user_input)
+    out.update(out.pop(SECTION_BYPASS, None) or {})
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
     out[CONF_SERVICE_TOKEN_IDS] = _clean_list(out.get(CONF_SERVICE_TOKEN_IDS))
-    out[CONF_CLIENT_REDIRECT_URIS] = _clean_list(out.get(CONF_CLIENT_REDIRECT_URIS))
-    if any(not u.startswith("https://") for u in out[CONF_CLIENT_REDIRECT_URIS]):
-        errors[CONF_CLIENT_REDIRECT_URIS] = "invalid_redirect_uri"
     if CONF_SESSION_DURATION in out:
         duration = _duration_from_form(out[CONF_SESSION_DURATION])
         if duration is None:
@@ -600,21 +614,18 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
 
 
 class ClientSubentryFlow(ConfigSubentryFlow):
-    """Register an OAuth client that cannot register itself.
+    """A client that logs people in through Access and calls Home Assistant with the token.
 
-    The client's console (Google Home, the Alexa developer console, any service that
-    asks for a client id and secret) gets Access's endpoints and the credentials this
-    flow shows; nothing about the client is known to the integration beyond the name
-    and redirect URIs entered here.
+    Every client's redirect URLs are what the gate lets a self-registering client (an MCP
+    client) use. A client whose console asks for a client id and secret (Google Home,
+    the Alexa developer console) gets an Access for SaaS application as well, and this
+    flow shows the credentials and Access's endpoints to enter in that console.
     """
 
     _created: dict[str, Any]
 
-    async def _async_register(
-        self, user_input: dict[str, Any], errors: dict[str, str], app_id: str | None
-    ) -> dict[str, Any] | None:
-        entry = self._get_entry()
-        name = user_input[CONF_CLIENT_NAME].strip()
+    def _validate(self, user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
+        name = user_input.get(CONF_CLIENT_NAME, "").strip()
         uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
         if not name:
             errors[CONF_CLIENT_NAME] = "required"
@@ -622,11 +633,21 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors[CONF_REDIRECT_URIS] = "required"
         elif any(not u.startswith("https://") for u in uris):
             errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
-        if errors:
-            return None
-        options = effective_options(entry)
+        return {
+            CONF_CLIENT_NAME: name,
+            CONF_REDIRECT_URIS: uris,
+            CONF_NEEDS_CREDENTIALS: bool(user_input.get(CONF_NEEDS_CREDENTIALS)),
+        }
+
+    async def _async_register(
+        self, data: dict[str, Any], errors: dict[str, str], app_id: str | None
+    ) -> dict[str, Any] | None:
+        """Create or update the client's Access application; return the data to store."""
+        entry = self._get_entry()
         emails = allowed_emails(self.hass, login_emails(entry))
-        desired = desired_client_app(options, emails, name, uris)
+        desired = desired_client_app(
+            effective_options(entry), emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
+        )
         try:
             api = await api_for(self.hass, entry)
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
@@ -640,8 +661,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         else:
             saas = app.get("saas_app") or {}
             return {
-                CONF_CLIENT_NAME: name,
-                CONF_REDIRECT_URIS: uris,
+                **data,
                 DATA_CLIENT_APP_ID: app["id"],
                 DATA_CLIENT_ID: saas.get("client_id"),
                 DATA_CLIENT_SECRET: saas.get("client_secret"),
@@ -657,6 +677,9 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 vol.Required(
                     CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
                 ): _MULTI_TEXT,
+                vol.Required(
+                    CONF_NEEDS_CREDENTIALS, default=bool(defaults.get(CONF_NEEDS_CREDENTIALS))
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(
@@ -679,15 +702,57 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             },
         )
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Name and redirect URIs; then Access issues the credentials."""
+    def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
+        """Create or update the subentry; a lost application is replaced on reconciliation."""
+        if self.source == "reconfigure":
+            entry = self._get_entry()
+            sub = self._get_reconfigure_subentry()
+            if not data[CONF_NEEDS_CREDENTIALS]:
+                # the application, if any, is deleted by the entry's reconciliation
+                data = {
+                    k: v
+                    for k, v in data.items()
+                    if k not in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET)
+                }
+                return self.async_update_and_abort(
+                    entry, sub, title=data[CONF_CLIENT_NAME], data=data
+                )
+            return self.async_update_and_abort(
+                entry,
+                sub,
+                title=data[CONF_CLIENT_NAME],
+                data_updates={k: v for k, v in data.items() if v is not None},
+            )
+        return self.async_create_entry(title=data[CONF_CLIENT_NAME], data=data)
+
+    async def _async_handle(
+        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
+    ) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            created = await self._async_register(user_input, errors, None)
-            if created:
-                self._created = created
-                return self._credentials(created)
-        return self._form("user", user_input or {}, errors)
+            data = self._validate(user_input, errors)
+            if not errors and not data[CONF_NEEDS_CREDENTIALS]:
+                return self._store(data)
+            if not errors:
+                registered = await self._async_register(
+                    data, errors, current.get(DATA_CLIENT_APP_ID)
+                )
+                if registered is not None:
+                    self._created = registered
+                    return self._credentials(registered)
+        return self._form(step_id, user_input or current, errors)
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Name, redirect URLs and whether the client's console needs credentials."""
+        return await self._async_handle("user", user_input, {})
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change the client; a console client's application follows."""
+        return await self._async_handle(
+            "reconfigure", user_input, self._get_reconfigure_subentry().data
+        )
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
@@ -695,27 +760,4 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         """Store the registration once the credentials were shown."""
         if user_input is None:
             return self._credentials(self._created)
-        if self.source == "reconfigure":
-            return self.async_update_and_abort(
-                self._get_entry(),
-                self._get_reconfigure_subentry(),
-                title=self._created[CONF_CLIENT_NAME],
-                data_updates={k: v for k, v in self._created.items() if v is not None},
-            )
-        return self.async_create_entry(title=self._created[CONF_CLIENT_NAME], data=self._created)
-
-    async def async_step_reconfigure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Change the name or redirect URIs, and show the credentials again."""
-        errors: dict[str, str] = {}
-        sub = self._get_reconfigure_subentry()
-        if user_input is not None:
-            updated = await self._async_register(user_input, errors, sub.data[DATA_CLIENT_APP_ID])
-            if updated:
-                self._created = {
-                    **dict(sub.data),
-                    **{k: v for k, v in updated.items() if v is not None},
-                }
-                return self._credentials(self._created)
-        return self._form("reconfigure", user_input or sub.data, errors)
+        return self._store(self._created)

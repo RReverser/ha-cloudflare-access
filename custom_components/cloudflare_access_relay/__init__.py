@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlparse
 
 from homeassistant.auth import EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED
 from homeassistant.config_entries import (
@@ -43,8 +45,10 @@ from .cloudflare_api import (
 from .const import (
     CLIENT_APP_NAME_FMT,
     CONF_CLIENT_NAME,
+    CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_HOSTNAME,
+    CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     DATA_BYPASS_APP_ID,
     DATA_CLIENT_APP_ID,
@@ -103,12 +107,64 @@ type AccessConfigEntry = ConfigEntry[EntryData]
 
 
 def client_subentries(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the registered-client subentries by subentry id."""
+    """Return the OAuth client subentries by subentry id."""
     return {
         sid: sub
         for sid, sub in entry.subentries.items()
         if sub.subentry_type == SUBENTRY_TYPE_CLIENT
     }
+
+
+def credentialed_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
+    """Return the clients that hold an Access application of their own."""
+    return {
+        sid: sub
+        for sid, sub in client_subentries(entry).items()
+        if sub.data.get(CONF_NEEDS_CREDENTIALS)
+    }
+
+
+def client_redirect_uris(entry: ConfigEntry) -> list[str]:
+    """Return every client's redirect URLs: what the gate lets register itself."""
+    return sorted(
+        {uri for sub in client_subentries(entry).values() for uri in sub.data[CONF_REDIRECT_URIS]}
+    )
+
+
+def provisioning_options(entry: ConfigEntry) -> dict[str, Any]:
+    """Return the options as provisioning sees them, redirect URLs included."""
+    return {**effective_options(entry), CONF_CLIENT_REDIRECT_URIS: client_redirect_uris(entry)}
+
+
+@callback
+def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Turn the former redirect-URL option into client subentries, one per URL."""
+    if not (uris := entry.options.get(CONF_CLIENT_REDIRECT_URIS)):
+        if CONF_CLIENT_REDIRECT_URIS in entry.options:
+            options = {k: v for k, v in entry.options.items() if k != CONF_CLIENT_REDIRECT_URIS}
+            hass.config_entries.async_update_entry(entry, options=options)
+        return
+    known = set(client_redirect_uris(entry))
+    for uri in uris:
+        if uri in known:
+            continue
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=MappingProxyType(
+                    {
+                        CONF_CLIENT_NAME: urlparse(uri).hostname or uri,
+                        CONF_REDIRECT_URIS: [uri],
+                        CONF_NEEDS_CREDENTIALS: False,
+                    }
+                ),
+                subentry_type=SUBENTRY_TYPE_CLIENT,
+                title=urlparse(uri).hostname or uri,
+                unique_id=None,
+            ),
+        )
+    options = {k: v for k, v in entry.options.items() if k != CONF_CLIENT_REDIRECT_URIS}
+    hass.config_entries.async_update_entry(entry, options=options)
 
 
 async def _async_reconcile_clients(
@@ -126,7 +182,7 @@ async def _async_reconcile_clients(
     `_async_delete_stale_clients`, once the gate no longer refers to them.
     """
     apps: dict[str, str] = {}
-    for sid, sub in client_subentries(entry).items():
+    for sid, sub in credentialed_clients(entry).items():
         desired = desired_client_app(
             options, emails, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
         )
@@ -208,7 +264,8 @@ async def _async_provision_entry(
 
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
-    options = effective_options(entry)
+    _async_migrate_redirect_uris(hass, entry)
+    options = provisioning_options(entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
@@ -258,8 +315,14 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
 
     async def _refresh() -> None:
         emails = allowed_emails(hass, login_emails(entry))
-        if emails == data.emails and set(client_subentries(entry)) == set(data.client_apps):
+        options = provisioning_options(entry)
+        if (
+            emails == data.emails
+            and set(credentialed_clients(entry)) == set(data.client_apps)
+            and options[CONF_CLIENT_REDIRECT_URIS] == data.options[CONF_CLIENT_REDIRECT_URIS]
+        ):
             return
+        data.options = options
         if not emails:
             _LOGGER.warning(
                 "No Home Assistant user carries an e-mail address any more; "
@@ -339,7 +402,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             api,
             entry.data.get(DATA_GATE_APP_ID),
             entry.data.get(DATA_BYPASS_APP_ID),
-            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in client_subentries(entry).values()),
+            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in credentialed_clients(entry).values()),
         )
     except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
         _LOGGER.warning("Could not delete the Access applications; remove them by hand: %s", err)

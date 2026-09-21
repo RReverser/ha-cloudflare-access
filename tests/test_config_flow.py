@@ -104,8 +104,11 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
 
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
-    field = next(k for k in result["data_schema"].schema if k == CONF_EXTRA_BYPASS_PATHS)
-    config = result["data_schema"].schema[field].config
+    bypass = result["data_schema"].schema[
+        next(k for k in result["data_schema"].schema if k == "bypass")
+    ]
+    field = next(k for k in bypass.schema.schema if k == CONF_EXTRA_BYPASS_PATHS)
+    config = bypass.schema.schema[field].config
     assert config["multiple"] and config["custom_value"]
     choices = {o["value"]: o["label"] for o in config["options"]}
     assert choices["/api/webhook/hook-1"] == "Front door (my_doorbell)", "unknown domain: as is"
@@ -123,7 +126,10 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {**SETTINGS_INPUT, CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/hook-1", "/custom/typed"]},
+        {
+            **SETTINGS_INPUT,
+            "bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/hook-1", "/custom/typed"]},
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     assert result["result"].options[CONF_EXTRA_BYPASS_PATHS] == [
@@ -247,11 +253,11 @@ async def test_settings_validation_errors(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     reads = len(fake_cloudflare.requests)
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_HOSTNAME: "", "client_redirect_uris": ["http://x"]}
+        result["flow_id"], {CONF_HOSTNAME: "", "session_duration": {"minutes": 0}}
     )
     assert result["errors"] == {
         CONF_HOSTNAME: "invalid_hostname",
-        "client_redirect_uris": "invalid_redirect_uri",
+        "session_duration": "invalid_duration",
     }
     assert len(fake_cloudflare.requests) == reads
     assert hass.config_entries.async_entries(DOMAIN) == []
