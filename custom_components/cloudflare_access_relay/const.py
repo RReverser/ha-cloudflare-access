@@ -97,6 +97,9 @@ FORM_PLACEHOLDERS: Final[dict[str, str]] = {
     "example_mcp_redirect": "https://claude.ai/api/mcp/auth_callback",
     "example_wildcard_redirect": "https://example.com/*",
     "example_console_redirect": "https://oauth-redirect.googleusercontent.com/r/my-project",
+    "docs_change_username": "https://www.home-assistant.io/docs/configuration/user-configuration/"
+    "#changing-a-username",
+    "docs_auth_providers": "https://www.home-assistant.io/docs/authentication/providers/",
 }
 DOCS_OAUTH_CLIENTS: Final = (
     "https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/"

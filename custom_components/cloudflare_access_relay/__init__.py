@@ -55,6 +55,7 @@ from .const import (
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
     DOMAIN,
+    FORM_PLACEHOLDERS,
     ISSUE_NO_ALLOWED_USERS,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
@@ -272,6 +273,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 is_fixable=False,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_NO_ALLOWED_USERS,
+                translation_placeholders=FORM_PLACEHOLDERS,
             )
             return
         ir.async_delete_issue(hass, DOMAIN, ISSUE_NO_ALLOWED_USERS)
