@@ -1,12 +1,11 @@
 """Home Assistant users as Access identities.
 
-A user is known to Access by an e-mail address. Home Assistant keeps one in two places:
-the login username (the built-in login has no e-mail field, so the username is the
-address when the user was created with it), and the `email` a login provider fed by an
-identity provider stores in the credential. For everyone else the integration keeps
-its own: a "login e-mail" subentry per user. The same values serve both directions:
-every address found feeds the Access allow policy, and a request's Access identity
-picks the user that carries it.
+A user is known to Access by an e-mail address. Home Assistant has no e-mail field;
+the only place it keeps one is the login username, when the user was created with the
+address as username (no login provider, core or third-party, stores an e-mail on the
+credential). For everyone else the integration keeps its own: a "login e-mail"
+subentry per user. The same values serve both directions: every address found feeds
+the Access allow policy, and a request's Access identity picks the user that carries it.
 """
 
 from __future__ import annotations
@@ -22,9 +21,9 @@ from .const import CONF_EMAIL, CONF_USER_ID, SUBENTRY_TYPE_LOGIN_EMAIL
 
 _LOGGER = logging.getLogger(__name__)
 
-# The credential fields that hold a login identity: the username of any login
-# provider, and the e-mail address a provider fed by an identity provider stores.
-IDENTITY_FIELDS = ("username", "email")
+# The credential field that holds a login identity, for every login provider that
+# stores one (the built-in login, command line; OIDC providers store only a subject).
+IDENTITY_FIELD = "username"
 
 
 def _norm(value: str) -> str:
@@ -44,10 +43,9 @@ def login_emails(entry: ConfigEntry) -> dict[str, str]:
 def identity_values(user: User, extra: Mapping[str, str]) -> set[str]:
     """Return the login identities of the user, case-folded."""
     values = {
-        cred.data.get(field)
+        cred.data.get(IDENTITY_FIELD)
         for cred in user.credentials
-        for field in IDENTITY_FIELDS
-        if isinstance(cred.data.get(field), str)
+        if isinstance(cred.data.get(IDENTITY_FIELD), str)
     }
     if user.id in extra:
         values.add(extra[user.id])

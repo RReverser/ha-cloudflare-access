@@ -31,11 +31,12 @@ Google Home or Alexa link, nor on a real phone.
   published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
   token set is stored in the config entry and used for nothing else.
 - At least one Home Assistant user with an e-mail address; the integration refuses to set up
-  without one, since nobody could pass the gate. An address comes from the login username,
-  from the credential an external login provider stored, or from a **login e-mail** the
-  integration keeps itself (setup asks for the first one when no user has an address; later
-  ones are added under *Add login e-mail* on the integration, one per user). Those addresses
-  are the gate's allow policy, and the address of an admitted request picks the user.
+  without one, since nobody could pass the gate. Home Assistant has no e-mail field and no
+  login provider stores one (the OIDC integrations record only a subject id), so an address
+  is either the login username or a **login e-mail** the integration keeps itself: setup asks
+  for the first one when no user has an address, later ones are added under *Add login
+  e-mail* on the integration, one per user. Those addresses are the gate's allow policy, and
+  the address of an admitted request picks the user.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.
@@ -81,8 +82,8 @@ Two ways to obtain such a token, one mechanism behind both:
 came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
 carries a valid Access assertion (verified against the team's public keys, issuer, audience
 and expiry) is authenticated as the Home Assistant user that carries the assertion's identity
-(the `email` claim of a login, the `common_name` of a service token) as login username,
-stored e-mail or login e-mail, compared case-insensitively; an identity that fits several users is refused
+(the `email` claim of a login, the `common_name` of a service token) as login username or
+login e-mail, compared case-insensitively; an identity that fits several users is refused
 rather than guessed. No bearer, or a Home Assistant token: Home Assistant
 decides as usual. The
 rule runs in a middleware that has to be installed before the web server starts, so the first

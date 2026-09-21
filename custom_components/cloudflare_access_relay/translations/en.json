@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, from the login username, an external login, or a login e-mail you give them. Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail you give them. Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
         "data": {
           "hostname": "Hostname",
           "user_id": "User",
@@ -84,7 +84,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, from the login username, an external login, or a login e-mail added here. Currently: {allowed_users}.\n\nA user without an address cannot log in. Give one under \"Add login e-mail\", [change the username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one.",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail added here. Currently: {allowed_users}.\n\nA user without an address cannot log in. Give one under \"Add login e-mail\", or [change the username]({docs_change_username}) to the address.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "extra_bypass_paths": "Paths open without Access",
@@ -116,7 +116,7 @@
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No active user has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a user one under \"Add login e-mail\" on the integration, [change a username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one."
+      "description": "No active user has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a user one under \"Add login e-mail\" on the integration, or [change a username]({docs_change_username}) to the address."
     }
   },
   "config_subentries": {
@@ -128,7 +128,7 @@
       "step": {
         "user": {
           "title": "Login e-mail",
-          "description": "The address Access knows a Home Assistant user by, for a user whose login username is not one.\n\nIt joins the gate's allow policy, and a login with it is served as this user.",
+          "description": "The address Access knows a Home Assistant user by, for a user whose login username is not one (Home Assistant has no e-mail field).\n\nIt joins the gate's allow policy, and a login with it is served as this user.",
           "data": {
             "user_id": "User",
             "email": "Login e-mail"
