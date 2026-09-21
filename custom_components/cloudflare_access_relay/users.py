@@ -1,11 +1,11 @@
 """Home Assistant users as Access identities.
 
-The same values serve both directions: every e-mail address found on a Home Assistant
-user goes into the Access allow policy, and a request's Access identity is turned
-into the user that carries it. Where the address lives depends on how the user logs
-in: the built-in login stores it as the username, a login integration stores it in a
-credential field of its own, and the display name is a place too. All of them count,
-so there is nothing to configure.
+A user is known to Access by an e-mail address, and Home Assistant keeps one in two
+places only: the login username (the built-in login has no e-mail field, so the
+username is the address when the user was created with it), and the `email` a login
+provider that authenticates against an identity provider stores in the credential. The
+same two fields serve both directions: every address found feeds the Access allow
+policy, and a request's Access identity picks the user that carries it.
 """
 
 from __future__ import annotations
@@ -18,11 +18,19 @@ from homeassistant.core import HomeAssistant, callback
 _LOGGER = logging.getLogger(__name__)
 
 
+# The credential fields that hold a login identity: the username of any login
+# provider, and the e-mail address a provider fed by an identity provider stores.
+IDENTITY_FIELDS = ("username", "email")
+
+
 def identity_values(user: User) -> set[str]:
-    """Return every value that may identify the user, case-folded."""
-    values = {user.name} if user.name else set()
-    for cred in user.credentials:
-        values.update(v for v in cred.data.values() if isinstance(v, str))
+    """Return the login identities of the user, case-folded."""
+    values = {
+        cred.data.get(field)
+        for cred in user.credentials
+        for field in IDENTITY_FIELDS
+        if isinstance(cred.data.get(field), str)
+    }
     return {v.strip().casefold() for v in values if v and v.strip()}
 
 

@@ -30,10 +30,11 @@ Google Home or Alexa link, nor on a real phone.
 - Nothing else to prepare: the integration **signs in with Cloudflare** through the project's
   published OAuth client, asking for exactly the permissions it uses (see *Sign-in*). The
   token set is stored in the config entry and used for nothing else.
-- Home Assistant users that carry their identity-provider e-mail address somewhere on the
-  account: the built-in login username, the display name, or a credential field a login
-  integration stores. Every such address is the gate's allow policy, and the address of an
-  admitted request picks the user; there is nothing to configure.
+- Home Assistant users whose login username is their identity-provider e-mail address
+  (Settings → People → the person → *Allow login*; Home Assistant has no separate e-mail
+  field), or whose external login provider stored that address in the credential. Those
+  addresses are the gate's allow policy, and the address of an admitted request picks the
+  user; there is nothing to configure.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.
@@ -79,9 +80,9 @@ Two ways to obtain such a token, one mechanism behind both:
 came through Cloudflare for the hostname, carries a bearer Home Assistant did not accept, and
 carries a valid Access assertion (verified against the team's public keys, issuer, audience
 and expiry) is authenticated as the Home Assistant user that carries the assertion's identity
-(the `email` claim of a login, the `common_name` of a service token) as login username,
-display name or credential field, compared case-insensitively; an identity that fits several
-users is refused rather than guessed. No bearer, or a Home Assistant token: Home Assistant
+(the `email` claim of a login, the `common_name` of a service token) as login username or
+stored e-mail, compared case-insensitively; an identity that fits several users is refused
+rather than guessed. No bearer, or a Home Assistant token: Home Assistant
 decides as usual. The
 rule runs in a middleware that has to be installed before the web server starts, so the first
 setup after installing the integration needs a restart, which a repair issue asks for; until
