@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off, so nothing changes at the edge until you switch it on in the options. Who gets in: every active Home Assistant user, by the e-mail address found on their account (login username, display name, or the field a login integration stores). Currently: {allowed_users}. A request Access lets through is served as the user who carries that address.",
+        "description": "The gate starts off, so nothing changes at the edge until you switch it on in the options. Who gets in: every active Home Assistant user whose login username is an e-mail address, or whose external login stored one. Currently: {allowed_users}. A request Access lets through is served as the user with that address.",
         "data": {
           "hostname": "Hostname",
           "extra_bypass_paths": "Paths open without Access",
@@ -77,7 +77,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications (reloading the integration does the same without a change). Who gets in: every active Home Assistant user, by the e-mail address found on their account (login username, display name, or the field a login integration stores). Currently: {allowed_users}. A request Access lets through is served as the user who carries that address.",
+        "description": "Saving re-provisions the Access applications (reloading the integration does the same without a change). Who gets in: every active Home Assistant user whose login username is an e-mail address, or whose external login stored one. Currently: {allowed_users}. A request Access lets through is served as the user with that address.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "extra_bypass_paths": "Paths open without Access",
@@ -97,7 +97,7 @@
       }
     },
     "error": {
-      "no_allowed_users": "No Home Assistant user carries an e-mail address, so the gate would let nobody in. Give a user one first: a login username, a display name, or the e-mail field of a login integration.",
+      "no_allowed_users": "No Home Assistant user has an e-mail address as login username, so the gate would let nobody in. Create the users' logins with their e-mail address as the username first (Settings → People → the person → Allow login).",
       "invalid_redirect_uri": "Redirect URLs must start with https://.",
       "invalid_duration": "The session must last at least one minute."
     }
@@ -109,7 +109,7 @@
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No active Home Assistant user carries an e-mail address (as login username, display name, or in a login integration's credential), so there is nobody to list in the gate's allow policy. The policy was left as it was. Give a user an address, then reload the integration."
+      "description": "No active Home Assistant user has an e-mail address as login username (or from an external login), so there is nobody to list in the gate's allow policy. The policy was left as it was. Give a user a login whose username is their e-mail address, then reload the integration."
     }
   },
   "config_subentries": {

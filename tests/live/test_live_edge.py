@@ -375,7 +375,7 @@ async def _lifecycle(
         seen = resp.json()["headers"]
         assert seen.get("authorization") == "Bearer not-a-ha-token", "bearer passed through"
         assert seen.get("cf-access-jwt-assertion"), "assertion forwarded alongside it"
-        await add_user(hass, "ci@example.com", name=claims["common_name"])
+        await add_user(hass, claims["common_name"], name="CI runner")
         origin = await hass_client_no_auth()
         headers = {
             "Authorization": "Bearer not-a-ha-token",
