@@ -60,17 +60,26 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     ISSUE_NO_ALLOWED_USERS,
+    OPTION_APP_TAG,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
 )
 from .edge_auth import async_install_middleware
 from .jwks import JwksVerifier
-from .options import api_for, effective_options
+from .options import (
+    api_for,
+    app_tag,
+    client_redirect_uris,
+    credentialed_clients,
+    effective_options,
+    provisioning_options,
+)
 from .provision import (
     ProvisionResult,
     async_delete_apps,
     async_provision,
     desired_client_app,
+    owned,
     reconcile_app,
 )
 from .users import allowed_emails, login_emails
@@ -104,36 +113,6 @@ class EntryData:
 
 
 type AccessConfigEntry = ConfigEntry[EntryData]
-
-
-def client_subentries(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the OAuth client subentries by subentry id."""
-    return {
-        sid: sub
-        for sid, sub in entry.subentries.items()
-        if sub.subentry_type == SUBENTRY_TYPE_CLIENT
-    }
-
-
-def credentialed_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the clients that hold an Access application of their own."""
-    return {
-        sid: sub
-        for sid, sub in client_subentries(entry).items()
-        if sub.data.get(CONF_NEEDS_CREDENTIALS)
-    }
-
-
-def client_redirect_uris(entry: ConfigEntry) -> list[str]:
-    """Return every client's redirect URLs: what the gate lets register itself."""
-    return sorted(
-        {uri for sub in client_subentries(entry).values() for uri in sub.data[CONF_REDIRECT_URIS]}
-    )
-
-
-def provisioning_options(entry: ConfigEntry) -> dict[str, Any]:
-    """Return the options as provisioning sees them, redirect URLs included."""
-    return {**effective_options(entry), CONF_CLIENT_REDIRECT_URIS: client_redirect_uris(entry)}
 
 
 @callback
@@ -226,7 +205,11 @@ async def _async_delete_stale_clients(
         return
     prefix = CLIENT_APP_NAME_FMT.format(hostname=options[CONF_HOSTNAME], name="")
     for app in await api.list_apps():
-        if app.get("name", "").startswith(prefix) and app["id"] not in current.values():
+        if (
+            owned(app, options[OPTION_APP_TAG])
+            and app.get("name", "").startswith(prefix)
+            and app["id"] not in current.values()
+        ):
             _LOGGER.info("Deleting the orphaned client application %s", app["name"])
             await api.delete_app(app["id"])
 
@@ -278,6 +261,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         )
     try:
         api = await api_for(hass, entry)
+        await api.ensure_tag(options[OPTION_APP_TAG])
         client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
@@ -400,6 +384,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         api = await api_for(hass, entry)
         await async_delete_apps(
             api,
+            app_tag(entry),
             entry.data.get(DATA_GATE_APP_ID),
             entry.data.get(DATA_BYPASS_APP_ID),
             *(sub.data.get(DATA_CLIENT_APP_ID) for sub in credentialed_clients(entry).values()),

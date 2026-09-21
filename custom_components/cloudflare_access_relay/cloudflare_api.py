@@ -224,6 +224,23 @@ class CloudflareAccessApi:
         except Exception as err:
             raise _translate(err, f"deleting Access application {app_id}") from err
 
+    async def ensure_tag(self, name: str) -> None:
+        """Create the Access tag if it does not exist yet."""
+        try:
+            await (await self._c()).zero_trust.access.tags.get(name, account_id=self._account_id)
+            return
+        except NotFoundError:
+            pass
+        except Exception as err:
+            raise _translate(err, f"reading Access tag {name}") from err
+        _LOGGER.debug("Creating Access tag %s", name)
+        try:
+            await (await self._c()).zero_trust.access.tags.create(
+                account_id=self._account_id, name=name
+            )
+        except Exception as err:
+            raise _translate(err, f"creating Access tag {name}") from err
+
     async def list_service_tokens(self) -> list[dict[str, Any]]:
         """Return the account's Access service tokens (without secrets)."""
         tokens: list[dict[str, Any]] = []

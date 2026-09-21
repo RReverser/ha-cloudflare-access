@@ -25,6 +25,7 @@ from .const import (
     GATE_LINKED_POLICY_NAME,
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
+    OPTION_APP_TAG,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +41,15 @@ def normalise_path(path: str) -> str:
 
 def _clean(values: Sequence[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
+
+
+def _tags(options: dict[str, Any]) -> list[str]:
+    return [options[OPTION_APP_TAG]] if options.get(OPTION_APP_TAG) else []
+
+
+def owned(app: dict[str, Any], tag: str) -> bool:
+    """Return whether the application carries this entry's tag."""
+    return tag in (app.get("tags") or [])
 
 
 def include_rules(emails: Sequence[str]) -> list[dict[str, Any]]:
@@ -96,6 +106,7 @@ def desired_gate_app(
     return {
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
+        "tags": _tags(options),
         "domain": hostname,
         "destinations": [{"type": "public", "uri": hostname}],
         "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
@@ -135,6 +146,7 @@ def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "type": "self_hosted",
         "name": BYPASS_APP_NAME_FMT.format(hostname=hostname),
+        "tags": _tags(options),
         "domain": destinations[0]["uri"],
         "destinations": destinations,
         "app_launcher_visible": False,
@@ -164,6 +176,7 @@ def desired_client_app(
     return {
         "type": "saas",
         "name": CLIENT_APP_NAME_FMT.format(hostname=hostname, name=name),
+        "tags": _tags(options),
         "app_launcher_visible": False,
         "saas_app": {
             "auth_type": "oidc",
@@ -253,6 +266,8 @@ def app_matches(existing: dict[str, Any], desired: dict[str, Any]) -> bool:
     for key in _COMPARED_FIELDS:
         if key in desired and existing.get(key, _CF_DEFAULTS.get(key)) != desired[key]:
             return False
+    if sorted(existing.get("tags") or []) != sorted(desired.get("tags") or []):
+        return False
     if "destinations" in desired:
         have = {(d.get("type"), d.get("uri")) for d in existing.get("destinations") or []}
         want = {(d.get("type"), d.get("uri")) for d in desired["destinations"]}
@@ -283,12 +298,30 @@ class ProvisionResult:
     writes: list[str] = field(default_factory=list)
 
 
-async def find_by_name(api: CloudflareAccessApi, name: str) -> dict[str, Any] | None:
-    """Return the application with that exact name, if any."""
+def _tag_of(desired: dict[str, Any]) -> str:
+    tags = desired.get("tags") or []
+    return str(tags[0]) if tags else ""
+
+
+async def find_owned(api: CloudflareAccessApi, name: str, tag: str) -> dict[str, Any] | None:
+    """Return this entry's application with that exact name, if any."""
     for app in await api.list_apps():
-        if app.get("name") == name:
+        if app.get("name") == name and owned(app, tag):
             return app
     return None
+
+
+async def _get_owned(api: CloudflareAccessApi, app_id: str, tag: str) -> dict[str, Any] | None:
+    """Return the application with that id if it is this entry's; a foreign one is left alone."""
+    app = await api.get_app(app_id)
+    if app is not None and not owned(app, tag):
+        _LOGGER.warning(
+            "Access application %s (%s) does not carry this entry's tag; leaving it alone",
+            app_id,
+            app.get("name"),
+        )
+        return None
+    return app
 
 
 async def reconcile_app(
@@ -298,11 +331,12 @@ async def reconcile_app(
     writes: list[str],
 ) -> dict[str, Any]:
     """Create, update or leave alone one application; return it as Cloudflare has it."""
+    tag = _tag_of(desired)
     existing: dict[str, Any] | None = None
     if known_id:
-        existing = await api.get_app(known_id)
+        existing = await _get_owned(api, known_id, tag)
     if existing is None:
-        existing = await find_by_name(api, desired["name"])
+        existing = await find_owned(api, desired["name"], tag)
     if existing is None:
         _LOGGER.info("Creating Access application %s", desired["name"])
         created = await api.create_app(desired)
@@ -327,12 +361,12 @@ async def reconcile_app(
 
 
 async def retire_app(
-    api: CloudflareAccessApi, known_id: str | None, name: str, writes: list[str]
+    api: CloudflareAccessApi, known_id: str | None, name: str, tag: str, writes: list[str]
 ) -> None:
     """Delete an application the options no longer call for, if it exists."""
-    app = (await api.get_app(known_id)) if known_id else None
+    app = (await _get_owned(api, known_id, tag)) if known_id else None
     if app is None:
-        app = await find_by_name(api, name)
+        app = await find_owned(api, name, tag)
     if app is not None:
         _LOGGER.info("Deleting Access application %s", name)
         await api.delete_app(app["id"])
@@ -358,12 +392,15 @@ async def async_provision(
     if not team_domain:
         team_domain = await api.get_team_domain()
     hostname = options[CONF_HOSTNAME]
+    tag = str(options.get(OPTION_APP_TAG) or "")
 
     bypass_id: str | None = None
     if (bypass := desired_bypass_app(options)) is not None:
         bypass_id = (await reconcile_app(api, bypass_app_id, bypass, writes))["id"]
     else:
-        await retire_app(api, bypass_app_id, BYPASS_APP_NAME_FMT.format(hostname=hostname), writes)
+        await retire_app(
+            api, bypass_app_id, BYPASS_APP_NAME_FMT.format(hostname=hostname), tag, writes
+        )
 
     gate_id: str | None = None
     aud: str | None = None
@@ -377,7 +414,7 @@ async def async_provision(
         if not isinstance(aud, str) or not aud:
             raise RuntimeError("Cloudflare did not return an audience tag for the gate app")
     else:
-        await retire_app(api, gate_app_id, GATE_APP_NAME_FMT.format(hostname=hostname), writes)
+        await retire_app(api, gate_app_id, GATE_APP_NAME_FMT.format(hostname=hostname), tag, writes)
 
     return ProvisionResult(
         team_domain=team_domain,
@@ -388,8 +425,8 @@ async def async_provision(
     )
 
 
-async def async_delete_apps(api: CloudflareAccessApi, *app_ids: str | None) -> None:
-    """Delete the given applications (gate first so nothing stays gated)."""
+async def async_delete_apps(api: CloudflareAccessApi, tag: str, *app_ids: str | None) -> None:
+    """Delete the given applications of this entry (gate first so nothing stays gated)."""
     for app_id in app_ids:
-        if app_id and await api.get_app(app_id) is not None:
+        if app_id and await _get_owned(api, app_id, tag) is not None:
             await api.delete_app(app_id)

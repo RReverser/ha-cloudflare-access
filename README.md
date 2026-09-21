@@ -95,9 +95,13 @@ the WebView's cookies on native requests.
 
 ### What the integration creates in Cloudflare
 
-Applications are named with the prefix `ha-access:` and looked up by name if the stored ids
-are lost. They are the only objects the integration writes, and it is meant to be their only
-writer; an application edited outside the integration is repaired on the next reload.
+Applications are named with the prefix `ha-access:` and carry an Access tag naming the config
+entry (`ha-access-<entry id>`), created on first use. The integration updates or deletes only
+applications with its own entry's tag: a stored id that turns out to point at an untagged
+application, or a same-named application without the tag, is left alone and a new one is
+created. Lost ids are recovered by name and tag. The applications are the only objects the
+integration writes, and it is meant to be their only writer; an application edited outside the
+integration is repaired on the next reload.
 
 | Application | Exists | Destinations | Policies | Other |
 |---|---|---|---|---|

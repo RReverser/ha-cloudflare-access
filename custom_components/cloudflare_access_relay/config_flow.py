@@ -67,11 +67,12 @@ from .const import (
     DEFAULT_SESSION_DURATION,
     DOMAIN,
     FORM_PLACEHOLDERS,
+    OPTION_APP_TAG,
     SECTION_BYPASS,
     SUBENTRY_TYPE_CLIENT,
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
-from .options import api_for, effective_options
+from .options import api_for, effective_options, provisioning_options
 from .provision import desired_client_app
 from .users import allowed_emails, login_emails, users_without_address
 
@@ -645,11 +646,13 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         """Create or update the client's Access application; return the data to store."""
         entry = self._get_entry()
         emails = allowed_emails(self.hass, login_emails(entry))
+        options = provisioning_options(entry)
         desired = desired_client_app(
-            effective_options(entry), emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
+            options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
         )
         try:
             api = await api_for(self.hass, entry)
+            await api.ensure_tag(options[OPTION_APP_TAG])
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
         except CloudflareAuthError:
             errors["base"] = "invalid_auth"
