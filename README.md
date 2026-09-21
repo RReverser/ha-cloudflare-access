@@ -118,8 +118,12 @@ and keeps everything else.
 
 1. HACS → Integrations → three dots → *Custom repositories* → add this repository as an
    *Integration*, then install **Cloudflare Access**. Restart Home Assistant.
-2. Settings → Devices & services → *Add integration* → **Cloudflare Access**. The browser is
-   sent to Cloudflare's consent page, which shows the three permissions; allow.
+2. Settings → Devices & services → *Add integration* → **Cloudflare Access**, **from a
+   desktop browser**. The browser is sent to Cloudflare's consent page, which shows the three
+   permissions; allow, and the popup closes. (From the Android companion app the consent works
+   but the return trip does not: the app claims every `my.home-assistant.io` link, loads the
+   OAuth callback inside its own web view in place of the frontend, and the setup dialog is
+   lost. This is how the app handles the callback of any OAuth integration.)
 3. Back in Home Assistant, the account is picked if the sign-in reaches one, asked for
    otherwise. Then the hostname (pre-filled from the external URL) and the advanced options.
    The form shows which users' addresses the gate would let in.
