@@ -14,9 +14,10 @@ The integration provisions the Access applications through the Cloudflare API, i
 from its options; it never needs a change to the companion apps, to Home Assistant core, or to
 any login integration.
 
-Status: implementation complete with an automated test suite, and the Cloudflare behaviour it
-depends on verified on a real account against Access applications created from the
-integration's own code (see *Verified Cloudflare behaviour*). Not yet validated with a real
+Status: implementation complete with an automated test suite; the Cloudflare behaviour it
+depends on is verified on a real account against Access applications created from the
+integration's own code (see *Verified Cloudflare behaviour*), and the sign-in has been taken
+through Cloudflare's consent page with the published client. Not yet validated with a real
 Google Home or Alexa link, nor on a real phone.
 
 ## Requirements

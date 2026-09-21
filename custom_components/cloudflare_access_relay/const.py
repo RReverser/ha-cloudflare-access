@@ -45,7 +45,7 @@ OAUTH_AUTHORIZE_URL: Final = "https://dash.cloudflare.com/oauth2/auth"
 OAUTH_TOKEN_URL: Final = "https://dash.cloudflare.com/oauth2/token"
 OAUTH_SCOPES: Final[tuple[str, ...]] = ("access.write", "access-acct.read", "offline_access")
 # The project's public OAuth client (PKCE, no secret), maintained by scripts/oauth_client.py.
-# Credentials added under Settings → Application credentials are offered next to it.
+# A credential added under Settings → Application credentials takes its place.
 OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
 # Repair issues

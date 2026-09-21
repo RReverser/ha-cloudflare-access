@@ -1,12 +1,12 @@
 {
   "application_credentials": {
-    "description": "The integration signs in with the project's own published Cloudflare OAuth client; nothing needs to be added here. To sign in through a client of your own instead, create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}, and enter its client ID here with an empty secret; it then takes the project's client's place. [Details]({more_info_url})."
+    "description": "Nothing needs to be added here: the integration signs in through its own published Cloudflare OAuth client. Add a credential only to sign in through a client of your own instead; it then takes the built-in client's place. Create it in the Cloudflare dashboard under Manage Account → OAuth clients with redirect URL `{redirect_uri}`, grant types authorization code and refresh token, token endpoint authentication none (PKCE) and the scopes {scopes}, and enter its client ID with an empty secret. [Details]({more_info_url})."
   },
   "config": {
     "step": {
       "user": {
         "title": "Cloudflare Access",
-        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Continue to sign in with Cloudflare; the consent page shows the three permissions the integration uses."
+        "description": "The integration creates and maintains an Access application that gates the whole hostname, lets in the people who have a Home Assistant account, and serves as the OAuth server for token-bearing clients. Continue to sign in with Cloudflare; the consent page shows the three permissions the integration uses. Set up from a desktop browser: the Android companion app cannot complete the return from the consent page."
       },
       "pick_implementation": {
         "title": "Sign in with Cloudflare",
