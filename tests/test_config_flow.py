@@ -18,10 +18,15 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
-from custom_components.cloudflare_access_relay.config_flow import normalise_hostname
+from custom_components.cloudflare_access_relay.config_flow import (
+    _duration_from_form,
+    _duration_to_form,
+    normalise_hostname,
+)
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
+    CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     DATA_TEAM_DOMAIN,
@@ -44,6 +49,59 @@ def test_normalise_hostname() -> None:
     assert normalise_hostname("https://ha.example.com:8123/lovelace") == "ha.example.com"
     assert normalise_hostname(" ha.example.com/ ") == "ha.example.com"
     assert normalise_hostname("") == ""
+
+
+def test_duration_round_trip() -> None:
+    assert _duration_to_form("720h") == {"days": 30, "hours": 0, "minutes": 0}
+    assert _duration_to_form("90m") == {"days": 0, "hours": 1, "minutes": 30}
+    assert _duration_from_form({"days": 1, "hours": 12}) == "36h"
+    assert _duration_from_form({"hours": 1, "minutes": 30}) == "90m"
+    assert _duration_from_form({"minutes": 0}) is None, "Access needs at least a minute"
+    assert _duration_from_form("8760h") == "8760h", "automation input keeps the API form"
+    assert _duration_from_form("1d") is None
+
+
+async def test_open_paths_are_offered_from_what_home_assistant_serves(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    """Registered webhooks and unauthenticated /api/ resources become choices, not defaults."""
+    from homeassistant.components import webhook
+    from homeassistant.helpers.http import HomeAssistantView
+
+    class Audio(HomeAssistantView):
+        url = "/api/audio_proxy/{filename}"
+        name = "api:audio"
+        requires_auth = False
+
+        async def get(self, request: Any, filename: str) -> Any:
+            return None
+
+    assert await async_setup_component(hass, "webhook", {})
+    hass.http.register_view(Audio())
+    webhook.async_register(hass, "doorbell", "Front door", "hook-1", lambda *_: None)
+    webhook.async_register(hass, "local", "LAN only", "hook-2", lambda *_: None, local_only=True)
+
+    result = await _start(hass, "api_token")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
+    field = next(k for k in result["data_schema"].schema if k == CONF_EXTRA_BYPASS_PATHS)
+    config = result["data_schema"].schema[field].config
+    assert config["multiple"] and config["custom_value"]
+    choices = {o["value"]: o["label"] for o in config["options"]}
+    assert choices["/api/webhook/hook-1"] == "Front door (doorbell webhook)"
+    assert "/api/webhook/hook-2" not in choices, "a local-only webhook never reaches the edge"
+    assert choices["/api/audio_proxy/"] == "/api/audio_proxy/* (api:audio)"
+    assert not any(v.startswith("/auth/") or v == "/api/websocket" for v in choices)
+    assert field.default() == [], "nothing is open unless picked"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {**SETTINGS_INPUT, CONF_EXTRA_BYPASS_PATHS: ["/api/webhook/hook-1", "/custom/typed"]},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["result"].options[CONF_EXTRA_BYPASS_PATHS] == [
+        "/api/webhook/hook-1",
+        "/custom/typed",
+    ]
 
 
 async def _start(hass: HomeAssistant, source: str) -> dict[str, Any]:

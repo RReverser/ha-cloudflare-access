@@ -42,10 +42,10 @@
         },
         "data_description": {
           "hostname": "The public hostname Cloudflare serves Home Assistant on, e.g. ha.example.com.",
-          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies]({docs_policies})",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. The list offers the webhooks and public resources this Home Assistant serves; pick one or type a prefix such as /api/webhook/abc. Nothing is open unless listed. [Bypass policies]({docs_policies})",
           "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth]({docs_managed_oauth})",
           "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens]({docs_service_tokens})",
-          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration]({docs_session})",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Cloudflare's dashboard stops at one month, the API accepted a year. [Session duration]({docs_session})",
           "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       },
@@ -61,7 +61,7 @@
       "api_error": "Cloudflare returned an error; see the log.",
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
       "invalid_redirect_uri": "Redirect URLs must start with https://.",
-      "invalid_duration": "Enter a number of hours or minutes, e.g. 720h or 30m."
+      "invalid_duration": "The session must last at least one minute."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
@@ -88,10 +88,10 @@
         },
         "data_description": {
           "gate_enabled": "On: every request to the hostname needs an Access login, except the open paths below. Off: nothing is gated and the other options wait.",
-          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. Example: /api/webhook/abc for a webhook a third-party service posts to. Nothing is open unless listed. [Bypass policies]({docs_policies})",
+          "extra_bypass_paths": "Path prefixes anyone can reach without logging in, for callers that can hold neither a cookie nor a token. The list offers the webhooks and public resources this Home Assistant serves; pick one or type a prefix such as /api/webhook/abc. Nothing is open unless listed. [Bypass policies]({docs_policies})",
           "client_redirect_uris": "Clients that find the OAuth server on their own (MCP clients such as Claude) may register only with a redirect URL listed here. Example: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. A client that asks you for a client ID and secret is added under \"Add OAuth client\" instead. [Managed OAuth]({docs_managed_oauth})",
           "service_token_ids": "Client IDs of Access service tokens whose CF-Access-Client-Id and CF-Access-Client-Secret headers pass the gate. Example: a script on another machine that calls the API. [Service tokens]({docs_service_tokens})",
-          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Pick a value or type your own, e.g. 48h or 90m. [Session duration]({docs_session})",
+          "session_duration": "How long a login lasts before Access asks again; also the lifetime of a registered client's refresh token. Cloudflare's dashboard stops at one month, the API accepted a year. [Session duration]({docs_session})",
           "delete_objects_on_remove": "Off keeps the gate and the registered clients in Cloudflare after the integration is removed, e.g. to adopt them from another Home Assistant instance."
         }
       }
@@ -99,7 +99,7 @@
     "error": {
       "no_allowed_users": "No Home Assistant user carries an e-mail address, so the gate would let nobody in. Give a user one first: a login username, a display name, or the e-mail field of a login integration.",
       "invalid_redirect_uri": "Redirect URLs must start with https://.",
-      "invalid_duration": "Enter a number of hours or minutes, e.g. 720h or 30m."
+      "invalid_duration": "The session must last at least one minute."
     }
   },
   "issues": {

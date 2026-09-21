@@ -16,11 +16,13 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
     SubentryFlowResult,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    DurationSelector,
+    DurationSelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -32,6 +34,7 @@ from homeassistant.helpers.selector import (
 import voluptuous as vol
 
 from .application_credentials import async_register_project_client
+from .bypass import bypass_candidates
 from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
@@ -70,16 +73,38 @@ _LOGGER = logging.getLogger(__name__)
 
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
-# The durations Cloudflare's dashboard offers, from thirty minutes to its one-month ceiling;
-# any other `<n>m` or `<n>h` value can be typed.
-_SESSION_DURATION = SelectSelector(
-    SelectSelectorConfig(
-        options=["30m", "6h", "12h", "24h", "168h", "720h"],
-        custom_value=True,
-        mode=SelectSelectorMode.DROPDOWN,
+# Access takes `<n>h` or `<n>m`; the form shows days, hours and minutes.
+_SESSION_DURATION = DurationSelector(DurationSelectorConfig(enable_day=True, enable_second=False))
+_DURATION_RE = re.compile(r"([1-9][0-9]*)([mh])")
+
+
+def _duration_to_form(value: Any) -> dict[str, int]:
+    """Turn a stored `<n>h`/`<n>m` into the duration selector's value."""
+    if isinstance(value, dict):
+        return value  # re-shown after a validation error
+    match = _DURATION_RE.fullmatch(str(value or "").strip())
+    minutes = int(match[1]) * (60 if match[2] == "h" else 1) if match else 0
+    days, rest = divmod(minutes, 24 * 60)
+    hours, minutes = divmod(rest, 60)
+    return {"days": days, "hours": hours, "minutes": minutes}
+
+
+def _duration_from_form(value: Any) -> str | None:
+    """Turn the selector's value (or a `<n>h`/`<n>m` string) into what Access takes."""
+    if isinstance(value, str):
+        return value.strip() if _DURATION_RE.fullmatch(value.strip()) else None
+    if not isinstance(value, dict):
+        return None
+    minutes = round(
+        value.get("days", 0) * 24 * 60
+        + value.get("hours", 0) * 60
+        + value.get("minutes", 0)
+        + value.get("seconds", 0) / 60
     )
-)
-_DURATION_RE = re.compile(r"[1-9][0-9]*[mh]")
+    if minutes < 1:
+        return None
+    return f"{minutes // 60}h" if minutes % 60 == 0 else f"{minutes}m"
+
 
 # Started with this source (tests, automation) instead of the sign-in; also the reauth
 # path of an entry created with a token.
@@ -98,11 +123,18 @@ def _clean_list(values: list[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
 
 
-def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
+def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
     return {
         vol.Optional(
             CONF_EXTRA_BYPASS_PATHS, default=list(defaults.get(CONF_EXTRA_BYPASS_PATHS) or [])
-        ): _MULTI_TEXT,
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=bypass_candidates(hass),
+                multiple=True,
+                custom_value=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
         vol.Optional(
             CONF_CLIENT_REDIRECT_URIS,
             default=list(defaults.get(CONF_CLIENT_REDIRECT_URIS) or []),
@@ -112,7 +144,9 @@ def _advanced_schema(defaults: Mapping[str, Any]) -> dict[Any, Any]:
         ): _MULTI_TEXT,
         vol.Optional(
             CONF_SESSION_DURATION,
-            default=defaults.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
+            default=_duration_to_form(
+                defaults.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
+            ),
         ): _SESSION_DURATION,
         vol.Optional(
             CONF_DELETE_OBJECTS_ON_REMOVE,
@@ -130,9 +164,11 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     if any(not u.startswith("https://") for u in out[CONF_CLIENT_REDIRECT_URIS]):
         errors[CONF_CLIENT_REDIRECT_URIS] = "invalid_redirect_uri"
     if CONF_SESSION_DURATION in out:
-        out[CONF_SESSION_DURATION] = str(out[CONF_SESSION_DURATION]).strip()
-        if not _DURATION_RE.fullmatch(out[CONF_SESSION_DURATION]):
+        duration = _duration_from_form(out[CONF_SESSION_DURATION])
+        if duration is None:
             errors[CONF_SESSION_DURATION] = "invalid_duration"
+        else:
+            out[CONF_SESSION_DURATION] = duration
     return out
 
 
@@ -342,7 +378,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 vol.Required(
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
-                **_advanced_schema(defaults),
+                **_advanced_schema(self.hass, defaults),
             }
         )
         return self.async_show_form(
@@ -395,7 +431,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     CONF_GATE_ENABLED,
                     default=bool(current.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED)),
                 ): BooleanSelector(),
-                **_advanced_schema(current),
+                **_advanced_schema(self.hass, current),
             }
         )
         return self.async_show_form(

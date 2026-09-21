@@ -181,10 +181,10 @@ the consent page, as in this project's CI: start the flow with the source `api_t
 | Option | Default | Meaning |
 |---|---|---|
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
-| Paths open without Access | empty | Hostname-relative path prefixes reachable without a login, e.g. `/api/webhook/abc`. Nothing is open unless listed |
+| Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
 | Redirect URLs of self-registering clients | empty | `https://` URLs, optionally ending in `/*`, that a dynamically registering client (MCP) may use. Without an entry here, managed OAuth registers no client |
 | Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
-| Session duration | `720h` | Lifetime of an Access session and of a registered client's refresh token. A dropdown of the dashboard's values; any `<n>h` or `<n>m` can be typed. The API accepted `8760h` and Access honoured it (verified) |
+| Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration

@@ -72,7 +72,7 @@ pytestmark = pytest.mark.skipif(
 
 # the allow policy needs a subject; the test logs in with its service token instead
 EMAIL = "nobody@example.com"
-SESSION = "1h"
+SESSION_FORM = {"hours": 1}  # what Access stores as "1h"
 # this run's service token, Worker and applications carry the run id (tests/live/cleanup.py)
 RUN = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
 WORKER_NAME, TOKEN_NAME, _ = run_names(RUN)
@@ -223,7 +223,6 @@ async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any)
     user_input = {
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
         CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
-        CONF_SESSION_DURATION: current[CONF_SESSION_DURATION],
         CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
         **changes,
     }
@@ -304,7 +303,7 @@ async def _lifecycle(
             {
                 CONF_HOSTNAME: host,
                 CONF_SERVICE_TOKEN_IDS: [token["id"]],
-                CONF_SESSION_DURATION: SESSION,
+                CONF_SESSION_DURATION: SESSION_FORM,
             },
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
