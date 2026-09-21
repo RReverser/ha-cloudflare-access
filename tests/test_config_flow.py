@@ -76,9 +76,23 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
         async def get(self, request: Any, filename: str) -> Any:
             return None
 
+    def view(url: str, requires_auth: bool) -> HomeAssistantView:
+        return type(
+            "V",
+            (HomeAssistantView,),
+            {"url": url, "name": url, "requires_auth": requires_auth, "get": Audio.get},
+        )()
+
     assert await async_setup_component(hass, "webhook", {})
     assert await async_setup_component(hass, "camera", {})
     hass.http.register_view(Audio())
+    for url, auth in (
+        ("/api/glyphs/fonts/{name}", False),  # two open siblings and nothing else: combined
+        ("/api/glyphs/sprites/{name}", False),
+        ("/api/tiles/raster/{z}", False),  # a sibling that needs a login: kept apart
+        ("/api/tiles/admin", True),
+    ):
+        hass.http.register_view(view(url, auth))
     webhook.async_register(hass, "my_doorbell", "Front door", "hook-1", lambda *_: None)
     webhook.async_register(hass, "local", "LAN only", "hook-2", lambda *_: None, local_only=True)
     webhook.async_register(hass, "mobile_app", "Mobile App: Old phone", "hook-3", lambda *_: None)
@@ -99,6 +113,8 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
     assert "/api/webhook/hook-4" not in choices, "a deleted registration answers 410 anyway"
     assert choices["/api/audio_proxy/"] == "/api/audio_proxy/*", "a view from no integration"
     assert choices["/api/camera_proxy/"] == "Camera: /api/camera_proxy/*"
+    assert "/api/glyphs/" in choices and not any(v.startswith("/api/glyphs/f") for v in choices)
+    assert "/api/tiles/raster/" in choices and "/api/tiles/" not in choices
     assert not any(v.startswith("/auth/") or v == "/api/websocket" for v in choices)
     assert field.default() == [], "nothing is open unless picked"
 
