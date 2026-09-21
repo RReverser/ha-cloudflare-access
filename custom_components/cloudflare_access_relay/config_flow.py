@@ -532,8 +532,8 @@ async def _login_email_title(hass: HomeAssistant, data: Mapping[str, str]) -> st
 class LoginEmailSubentryFlow(ConfigSubentryFlow):
     """The e-mail address a Home Assistant user is known by at Access.
 
-    For users whose login username is not their address and whose login provider stores
-    none. Saving re-provisions the allow policy through the entry's change listener.
+    For users whose login username is not their address (Home Assistant has no e-mail
+    field). Saving re-provisions the allow policy through the entry's change listener.
     """
 
     async def _async_form(

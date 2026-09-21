@@ -81,24 +81,20 @@ async def test_identity_is_the_login_username_without_configuration(
     )
     assert (await resp.json())["user"] == alice.id, "matched regardless of case"
 
-    # an external login provider stores the identity provider's e-mail in the credential
+    # a credential that carries no username (an OIDC subject) names nobody
     from homeassistant.auth.models import Credentials
 
     carol = await hass.auth.async_create_user("Carol")
     await hass.auth.async_link_user(
         carol,
         Credentials(
-            auth_provider_type="oidc",
+            auth_provider_type="auth_oidc",
             auth_provider_id=None,
-            data={"sub": "idp-42", "email": "carol@example.com"},
+            data={"sub": "idp-42"},
             is_new=False,
         ),
     )
-    assert "carol@example.com" in allowed_emails(hass, {})
-    resp = await client.get(
-        "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("carol@example.com")})}
-    )
-    assert (await resp.json())["user"] == carol.id
+    assert "carol" not in " ".join(allowed_emails(hass, {}))
 
     resp = await client.get(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(extra={"email": None})})}
