@@ -468,6 +468,43 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     assert gate_put < delete, "the gate drops its rule before the application goes"
 
 
+async def test_only_applications_tagged_for_this_entry_are_touched(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    """Same name, or even the stored id, without this entry's tag: somebody else's."""
+    cf = fake_cloudflare
+    foreign = {
+        "id": "foreign",
+        "type": "self_hosted",
+        "name": GATE,
+        "domain": HOSTNAME,
+        "aud": "x",
+        "policies": [{"name": "theirs", "decision": "allow", "include": [{"everyone": {}}]}],
+    }
+    cf.apps["foreign"] = dict(foreign)
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    tag = f"ha-access-{entry.entry_id.lower()}"
+    assert tag in cf.tags, "the entry's tag is created on first use"
+    assert cf.apps["foreign"] == foreign, "the foreign application was not updated"
+    ours = [a for a in cf.apps.values() if a["name"] == GATE and a["id"] != "foreign"]
+    assert len(ours) == 1 and ours[0]["tags"] == [tag]
+    assert entry.data[DATA_GATE_APP_ID] == ours[0]["id"]
+
+    # a stored id that points at a foreign application (a restored backup, say)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, DATA_GATE_APP_ID: "foreign"})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert cf.apps["foreign"] == foreign
+    assert entry.data[DATA_GATE_APP_ID] == ours[0]["id"], "found again by name and tag"
+
+    # removal deletes ours and leaves theirs
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert list(cf.apps) == ["foreign"]
+
+
 async def test_self_registering_client_is_a_redirect_url_on_the_gate(
     hass: HomeAssistant, access: Access
 ) -> None:

@@ -185,6 +185,7 @@ class FakeCloudflare:
     """Records every request; behaves like the Access applications API."""
 
     apps: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tags: set[str] = field(default_factory=set)
     secrets: dict[str, str] = field(default_factory=dict)
     requests: list[tuple[str, str, dict[str, Any] | None]] = field(default_factory=list)
     auth_fail: bool = False
@@ -197,10 +198,13 @@ class FakeCloudflare:
     server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
+        """Application writes; the entry's tag (created once, never an edge change) is not one."""
         return [
             r
             for r in self.requests
-            if r[0] in ("POST", "PUT", "DELETE") and (method is None or r[0] == method)
+            if r[0] in ("POST", "PUT", "DELETE")
+            and (method is None or r[0] == method)
+            and "/access/tags" not in r[1]
         ]
 
     def by_name(self, name: str) -> dict[str, Any] | None:
@@ -335,11 +339,51 @@ class FakeCloudflare:
             app["saas_app"] = saas
         return app
 
+    def _unknown_tags(self, body: dict[str, Any]) -> web.Response | None:
+        if unknown := set(body.get("tags") or []) - self.tags:
+            return web.json_response(
+                {
+                    "success": False,
+                    "errors": [{"code": 12132, "message": f"unknown tag {sorted(unknown)}"}],
+                    "result": None,
+                },
+                status=400,
+            )
+        return None
+
+    async def list_tags(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        return self._ok([{"name": t} for t in sorted(self.tags)])
+
+    async def get_tag(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        name = request.match_info["tag_name"]
+        if name not in self.tags:
+            return web.json_response(
+                {
+                    "success": False,
+                    "errors": [{"code": 12130, "message": "not found"}],
+                    "result": None,
+                },
+                status=404,
+            )
+        return self._ok({"name": name})
+
+    async def create_tag(self, request: web.Request) -> web.Response:
+        body = await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        assert body is not None
+        self.tags.add(body["name"])
+        return self._ok({"name": body["name"]}, status=201)
+
     async def create_app(self, request: web.Request) -> web.Response:
         body = await self._record(request)
         if fail := self._fail(request.method, request.path):
             return fail
         assert body is not None
+        if bad := self._unknown_tags(body):
+            return bad
         app_id = str(uuid.uuid4())
         self.apps[app_id] = self._stored(body, app_id, None)
         created = self.apps[app_id]
@@ -382,6 +426,8 @@ class FakeCloudflare:
                 status=404,
             )
         assert body is not None
+        if bad := self._unknown_tags(body):
+            return bad
         self.apps[app_id] = self._stored(body, app_id, self.apps[app_id])
         return self._ok(self.apps[app_id])
 
@@ -410,6 +456,9 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     base = f"/accounts/{ACCOUNT_ID}/access"
     app.router.add_get("/memberships", fake.list_memberships)
     app.router.add_get(f"{base}/organizations", fake.organizations)
+    app.router.add_get(f"{base}/tags", fake.list_tags)
+    app.router.add_post(f"{base}/tags", fake.create_tag)
+    app.router.add_get(f"{base}/tags/{{tag_name}}", fake.get_tag)
     app.router.add_get(f"{base}/apps", fake.list_apps)
     app.router.add_post(f"{base}/apps", fake.create_app)
     app.router.add_get(f"{base}/apps/{{app_id}}", fake.get_app)

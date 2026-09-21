@@ -82,8 +82,15 @@ DATA_CLIENT_APP_ID: Final = "app_id"
 DATA_CLIENT_ID: Final = "client_id"
 DATA_CLIENT_SECRET: Final = "client_secret"
 
-# Access application names: the integration owns every application with this prefix
-# for its hostname, and looks them up by name when the stored ids are lost.
+# Every application the integration creates carries an Access tag naming the config
+# entry (derived from its id at provisioning time, `OPTION_APP_TAG`). Only applications
+# with this entry's tag are ever updated or deleted; a stored id or a matching name
+# without the tag is somebody else's.
+APP_TAG_FMT: Final = "ha-access-{entry_id}"
+OPTION_APP_TAG: Final = "app_tag"
+
+# Access application names: readable in the dashboard, and the way an application is
+# found again when the stored ids are lost (together with the tag).
 APP_NAME_PREFIX: Final = "ha-access:"
 GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
 BYPASS_APP_NAME_FMT: Final = APP_NAME_PREFIX + " bypass {hostname}"
