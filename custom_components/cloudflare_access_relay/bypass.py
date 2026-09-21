@@ -4,7 +4,9 @@ Nothing is opened by itself: the options form offers these as choices, and only 
 the person picks (or types) is bypassed. Two sources: the webhooks integrations have
 registered, each with its concrete path, and the resource routes Home Assistant serves
 under /api/ to anyone who knows the URL (camera and image proxies, text-to-speech
-audio, map tiles), as path prefixes. Each is labelled with the integration it belongs to.
+audio, map tiles), as path prefixes. Sibling prefixes are combined into their parent when
+nothing else lives under it (all four map-tile routes become one entry). Each is
+labelled with the integration it belongs to.
 """
 
 from __future__ import annotations
@@ -46,6 +48,23 @@ def _domain_of(view: HomeAssistantView) -> str | None:
     return None
 
 
+def _widen(prefix: str, domain: str | None, routes: list[tuple[str, bool, str | None]]) -> str:
+    """Climb to the parent directory while everything under it is open and the same source.
+
+    Sibling routes then become one entry; a parent that also serves something that needs
+    a login, or another integration, stops the climb. /api/ itself is never offered.
+    """
+    while True:
+        parent = prefix[: prefix.rstrip("/").rfind("/") + 1]
+        if parent in (API_PREFIX, prefix):
+            return prefix
+        under = [r for r in routes if r[0].startswith(parent)]
+        paths = {r[0] for r in under}
+        if len(paths) < 2 or any(r[1] or r[2] != domain for r in under):
+            return prefix
+        prefix = parent
+
+
 async def async_bypass_candidates(hass: HomeAssistant) -> list[SelectOptionDict]:
     """Return the paths worth offering, webhooks first, then resource prefixes."""
     # The mobile app keeps the ids of deleted registrations to answer them 410 Gone.
@@ -56,19 +75,32 @@ async def async_bypass_candidates(hass: HomeAssistant) -> list[SelectOptionDict]
         for webhook_id, data in handlers.items()
         if webhook_id not in dead and not data.local_only  # local-only never reaches the edge
     ]
-    prefixes: dict[str, str | None] = {}
+    routes: list[tuple[str, bool, str | None]] = []  # path, needs a login, integration
     for resource in hass.http.app.router.resources():
         info = resource.get_info()
         path = info.get("formatter") or info.get("path") or ""
-        if not path.startswith(API_PREFIX) or "{" not in path:
+        if not path.startswith(API_PREFIX):
+            continue
+        for route in resource:
+            if route.method == "OPTIONS":
+                continue  # the CORS preflight that aiohttp adds next to every view
+            view = _view_of(route.handler)
+            # a route without a recognisable view is treated as one that needs a login
+            routes.append(
+                (
+                    path,
+                    view is None or view.requires_auth,
+                    None if view is None else _domain_of(view),
+                )
+            )
+    prefixes: dict[str, str | None] = {}
+    for path, needs_login, domain in routes:
+        if needs_login or "{" not in path:
             continue
         prefix = path[: path.index("{")]
         if prefix == webhook.async_generate_path(""):
             continue  # webhooks are offered one by one
-        for route in resource:
-            view = _view_of(route.handler)
-            if view is not None and not view.requires_auth:
-                prefixes.setdefault(prefix, _domain_of(view))
+        prefixes.setdefault(_widen(prefix, domain, routes), domain)
     domains = {d.domain for _, d in hooks} | {d for d in prefixes.values() if d}
     integrations = await async_get_integrations(hass, domains)
     names = {
