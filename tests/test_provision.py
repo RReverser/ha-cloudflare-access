@@ -339,7 +339,7 @@ async def test_session_duration_change_updates_gate_only(
     hass: HomeAssistant, access: Access
 ) -> None:
     cf = access.cloudflare
-    await _save_options(hass, access.entry, **{CONF_SESSION_DURATION: "24h"})
+    await _save_options(hass, access.entry, **{CONF_SESSION_DURATION: {"hours": 24}})
     puts = cf.writes("PUT")
     assert [p[2]["name"] for p in puts] == [GATE]
     assert puts[0][2]["session_duration"] == "24h"
