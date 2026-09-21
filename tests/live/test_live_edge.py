@@ -482,6 +482,7 @@ async def _lifecycle(
             "same_site_cookie_attribute",
             "app_launcher_visible",
             "oauth_configuration",
+            "tags",  # a dashboard edit keeps the tag; an API PUT without it would strip it
         )
         drift = {k: gate[k] for k in keep if k in gate}
         drift["policies"] = [
