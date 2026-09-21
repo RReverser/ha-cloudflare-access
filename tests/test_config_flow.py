@@ -26,9 +26,11 @@ from custom_components.cloudflare_access_relay.config_flow import (
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
+    CONF_EMAIL,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
+    CONF_USER_ID,
     DATA_TEAM_DOMAIN,
     DATA_TOKEN,
     DOMAIN,
@@ -36,6 +38,7 @@ from custom_components.cloudflare_access_relay.const import (
     OAUTH_CLIENT_ID,
     OAUTH_SCOPES,
     OAUTH_TOKEN_URL,
+    SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 
 from .conftest import ACCOUNT_ID, ALICE, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwks, make_entry
@@ -129,6 +132,39 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
     ]
 
 
+async def test_setup_asks_for_a_login_email_when_no_user_has_an_address(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    """Nobody could pass the gate otherwise, so the first address is part of setup."""
+    from .conftest import add_user
+
+    plain = await add_user(hass, "plain-username", name="Plain")
+    result = await _start(hass, "api_token")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
+    keys = {str(k) for k in result["data_schema"].schema}
+    assert {CONF_USER_ID, CONF_EMAIL} <= keys
+    assert result["description_placeholders"]["allowed_users"] == "(none)"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "not-an-address"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["errors"] == {
+        CONF_EMAIL: "invalid_email"
+    }
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "Plain@Example.com "},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    entry = result["result"]
+    sub = next(iter(entry.subentries.values()))
+    assert sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+    assert sub.data == {CONF_USER_ID: plain.id, CONF_EMAIL: "Plain@Example.com"}
+    assert sub.title == "Plain: Plain@Example.com" and sub.unique_id == plain.id
+    await hass.async_block_till_done()
+    assert entry.runtime_data.emails == ["plain@example.com"]
+
+
 async def _start(hass: HomeAssistant, source: str) -> dict[str, Any]:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": source})
     assert result["type"] is FlowResultType.FORM, result
@@ -205,7 +241,7 @@ async def test_token_flow_cannot_connect(
 
 
 async def test_settings_validation_errors(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, alice: User
 ) -> None:
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
@@ -222,7 +258,7 @@ async def test_settings_validation_errors(
 
 
 async def test_token_reauth_flow(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
 ) -> None:
     entry = make_entry()
     entry.add_to_hass(hass)
@@ -286,6 +322,7 @@ async def _sign_in(
 
 async def test_sign_in_flow_creates_entry(
     hass: HomeAssistant,
+    alice: User,
     hass_client_no_auth: Any,
     aioclient_mock: AiohttpClientMocker,
     current_request_with_host: None,
@@ -318,6 +355,7 @@ async def test_sign_in_flow_creates_entry(
 
 async def test_sign_in_picks_the_granted_account_among_memberships(
     hass: HomeAssistant,
+    alice: User,
     hass_client_no_auth: Any,
     aioclient_mock: AiohttpClientMocker,
     current_request_with_host: None,
@@ -371,6 +409,7 @@ async def test_own_credentials_replace_the_built_in_client(
 
 async def test_sign_in_reauth_flow(
     hass: HomeAssistant,
+    alice: User,
     hass_client_no_auth: Any,
     aioclient_mock: AiohttpClientMocker,
     current_request_with_host: None,
@@ -408,6 +447,7 @@ async def test_sign_in_reauth_flow(
 
 async def test_refused_refresh_triggers_reauth(
     hass: HomeAssistant,
+    alice: User,
     aioclient_mock: AiohttpClientMocker,
     oauth_credentials: None,
     fake_cloudflare: FakeCloudflare,

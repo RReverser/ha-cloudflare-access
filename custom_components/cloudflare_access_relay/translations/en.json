@@ -31,9 +31,11 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user whose login username is an e-mail address, or whose external login stored one. Currently: {allowed_users}.\n\nHome Assistant has no e-mail field of its own: [change the username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one.",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, from the login username, an external login, or a login e-mail you give them. Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
         "data": {
           "hostname": "Hostname",
+          "user_id": "User",
+          "email": "Login e-mail",
           "extra_bypass_paths": "Paths open without Access",
           "client_redirect_uris": "Redirect URLs of self-registering clients",
           "service_token_ids": "Service tokens allowed through",
@@ -42,6 +44,8 @@
         },
         "data_description": {
           "hostname": "The public hostname Cloudflare serves, e.g. ha.example.com.",
+          "user_id": "The Home Assistant user who gets the address.",
+          "email": "The address the identity provider knows this user by.",
           "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token.\n\nPick from what this Home Assistant serves, or type one. [Bypass policies]({docs_policies})",
           "client_redirect_uris": "Where self-registering clients (MCP) may be sent back to; nothing else can register.\n\nExample: {example_mcp_redirect}, or {example_wildcard_redirect} for every path. [Managed OAuth]({docs_managed_oauth})\n\nA client that asks for a client ID and secret: use \"Add OAuth client\" instead.",
           "service_token_ids": "Client IDs of Access service tokens that may pass the gate, e.g. for a script on another machine. [Service tokens]({docs_service_tokens})",
@@ -61,7 +65,10 @@
       "api_error": "Cloudflare returned an error; see the log.",
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
       "invalid_redirect_uri": "Redirect URLs must start with https://.",
-      "invalid_duration": "The session must last at least one minute."
+      "invalid_duration": "The session must last at least one minute.",
+      "invalid_email": "Enter an e-mail address.",
+      "unknown_user": "Choose a user.",
+      "user_taken": "This user already has a login e-mail."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
@@ -77,7 +84,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user whose login username is an e-mail address, or whose external login stored one. Currently: {allowed_users}.\n\nHome Assistant has no e-mail field of its own: [change the username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one.",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, from the login username, an external login, or a login e-mail added here. Currently: {allowed_users}.\n\nA user without an address cannot log in. Give one under \"Add login e-mail\", [change the username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "extra_bypass_paths": "Paths open without Access",
@@ -97,7 +104,7 @@
       }
     },
     "error": {
-      "no_allowed_users": "No user has an e-mail address as login username, so the gate would let nobody in. See above for how to give one.",
+      "no_allowed_users": "No user has an e-mail address, so nobody could log in. Add a login e-mail first.",
       "invalid_redirect_uri": "Redirect URLs must start with https://.",
       "invalid_duration": "The session must last at least one minute."
     }
@@ -109,10 +116,45 @@
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No active user has an e-mail address as login username or from an external login, so there is nobody to list in the gate's allow policy; it was left as it was.\n\n[Change a username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one, then reload the integration."
+      "description": "No active user has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a user one under \"Add login e-mail\" on the integration, [change a username]({docs_change_username}) to the address, or use a [login provider]({docs_auth_providers}) that stores one."
     }
   },
   "config_subentries": {
+    "login_email": {
+      "entry_type": "Login e-mail",
+      "initiate_flow": {
+        "user": "Add login e-mail"
+      },
+      "step": {
+        "user": {
+          "title": "Login e-mail",
+          "description": "The address Access knows a Home Assistant user by, for a user whose login username is not one.\n\nIt joins the gate's allow policy, and a login with it is served as this user.",
+          "data": {
+            "user_id": "User",
+            "email": "Login e-mail"
+          },
+          "data_description": {
+            "user_id": "The Home Assistant user who gets the address.",
+            "email": "The address the identity provider knows this user by."
+          }
+        },
+        "reconfigure": {
+          "title": "Change the login e-mail",
+          "data": {
+            "user_id": "User",
+            "email": "Login e-mail"
+          }
+        }
+      },
+      "error": {
+        "invalid_email": "Enter an e-mail address.",
+        "unknown_user": "Choose a user.",
+        "user_taken": "This user already has a login e-mail."
+      },
+      "abort": {
+        "reconfigure_successful": "The login e-mail was updated."
+      }
+    },
     "oauth_client": {
       "entry_type": "OAuth client",
       "initiate_flow": {

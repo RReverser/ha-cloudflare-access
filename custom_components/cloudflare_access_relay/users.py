@@ -1,29 +1,47 @@
 """Home Assistant users as Access identities.
 
-A user is known to Access by an e-mail address, and Home Assistant keeps one in two
-places only: the login username (the built-in login has no e-mail field, so the
-username is the address when the user was created with it), and the `email` a login
-provider that authenticates against an identity provider stores in the credential. The
-same two fields serve both directions: every address found feeds the Access allow
-policy, and a request's Access identity picks the user that carries it.
+A user is known to Access by an e-mail address. Home Assistant keeps one in two places:
+the login username (the built-in login has no e-mail field, so the username is the
+address when the user was created with it), and the `email` a login provider fed by an
+identity provider stores in the credential. For everyone else the integration keeps
+its own: a "login e-mail" subentry per user. The same values serve both directions:
+every address found feeds the Access allow policy, and a request's Access identity
+picks the user that carries it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 
 from homeassistant.auth.models import User
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
-_LOGGER = logging.getLogger(__name__)
+from .const import CONF_EMAIL, CONF_USER_ID, SUBENTRY_TYPE_LOGIN_EMAIL
 
+_LOGGER = logging.getLogger(__name__)
 
 # The credential fields that hold a login identity: the username of any login
 # provider, and the e-mail address a provider fed by an identity provider stores.
 IDENTITY_FIELDS = ("username", "email")
 
 
-def identity_values(user: User) -> set[str]:
+def _norm(value: str) -> str:
+    return value.strip().casefold()
+
+
+@callback
+def login_emails(entry: ConfigEntry) -> dict[str, str]:
+    """Return the addresses the entry's login e-mail subentries give users, by user id."""
+    return {
+        sub.data[CONF_USER_ID]: _norm(sub.data[CONF_EMAIL])
+        for sub in entry.subentries.values()
+        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+    }
+
+
+def identity_values(user: User, extra: Mapping[str, str]) -> set[str]:
     """Return the login identities of the user, case-folded."""
     values = {
         cred.data.get(field)
@@ -31,7 +49,9 @@ def identity_values(user: User) -> set[str]:
         for field in IDENTITY_FIELDS
         if isinstance(cred.data.get(field), str)
     }
-    return {v.strip().casefold() for v in values if v and v.strip()}
+    if user.id in extra:
+        values.add(extra[user.id])
+    return {_norm(v) for v in values if v and v.strip()}
 
 
 def _allowed(user: User) -> bool:
@@ -39,7 +59,7 @@ def _allowed(user: User) -> bool:
 
 
 @callback
-def allowed_emails(hass: HomeAssistant) -> list[str]:
+def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
     """Return the e-mail addresses of the users who may log in, sorted.
 
     A value that is not an e-mail address (a plain username) cannot be an Access
@@ -49,21 +69,34 @@ def allowed_emails(hass: HomeAssistant) -> list[str]:
         value
         for user in hass.auth._store._users.values()
         if _allowed(user)
-        for value in identity_values(user)
+        for value in identity_values(user, extra)
         if "@" in value
     }
     return sorted(found)
 
 
-async def async_find_user(hass: HomeAssistant, identity: str) -> User | None:
+@callback
+def users_without_address(hass: HomeAssistant, extra: Mapping[str, str]) -> list[User]:
+    """Return the users who may log in but carry no e-mail address, by name."""
+    users = [
+        user
+        for user in hass.auth._store._users.values()
+        if _allowed(user) and not any("@" in v for v in identity_values(user, extra))
+    ]
+    return sorted(users, key=lambda u: (u.name or "").casefold())
+
+
+async def async_find_user(
+    hass: HomeAssistant, extra: Mapping[str, str], identity: str
+) -> User | None:
     """Return the one user the identity belongs to; none when there is no match or several."""
-    wanted = identity.strip().casefold()
+    wanted = _norm(identity)
     if not wanted:
         return None
     matches = [
         user
         for user in await hass.auth.async_get_users()
-        if _allowed(user) and wanted in identity_values(user)
+        if _allowed(user) and wanted in identity_values(user, extra)
     ]
     if len(matches) > 1:
         _LOGGER.warning(

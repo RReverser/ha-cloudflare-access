@@ -38,7 +38,7 @@ from .const import (
     ISSUE_RESTART_REQUIRED,
 )
 from .jwks import JwtVerifyError
-from .users import async_find_user
+from .users import async_find_user, login_emails
 
 if TYPE_CHECKING:
     from . import EntryData
@@ -110,7 +110,7 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
         return _reject(
             request, f"the assertion carries neither {CLAIM_EMAIL} nor {CLAIM_COMMON_NAME}"
         )
-    user = await async_find_user(ctx.hass, identity)
+    user = await async_find_user(ctx.hass, login_emails(ctx.data.entry), identity)
     if user is None:
         return _reject(request, f"no single Home Assistant user is {identity!r}")
     request[KEY_AUTHENTICATED] = True
