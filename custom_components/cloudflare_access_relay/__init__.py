@@ -270,6 +270,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     except CloudflareUnavailableError as err:
         raise ConfigEntryNotReady(str(err)) from err
     except CloudflareApiError as err:
+        if any(e.get("code") == 11010 for e in err.errors):
+            raise ConfigEntryError(
+                "An Access application for this hostname already exists but does not carry "
+                f"this entry's tag ({options[OPTION_APP_TAG]}), so it is not touched; delete "
+                f"it or give it the tag in the Cloudflare dashboard, then reload: {err}"
+            ) from err
         raise ConfigEntryError(f"Cloudflare rejected the configuration: {err}") from err
 
     data = EntryData(
