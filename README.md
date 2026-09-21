@@ -287,6 +287,11 @@ logo (`logo.png`), redirect URL, grant types, PKCE, scopes, the client URL's DNS
 record, and the promotion to public visibility, which Cloudflare makes permanent. Its client
 ID is `OAUTH_CLIENT_ID` in `const.py`.
 
+The integration's icon in Home Assistant is the same drawing, shipped in the integration's
+`brand/` directory (Home Assistant 2026.3 and newer serve it from there; older versions show
+no icon). It is deliberately not Cloudflare's logo: this is a third-party project, and the
+brand mark belongs to Cloudflare.
+
 ## Design notes
 
 - The Access API field `self_hosted_domains` is deprecated (support ended 21 Nov 2025); the
