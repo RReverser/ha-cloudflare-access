@@ -485,7 +485,7 @@ async def test_only_applications_tagged_for_this_entry_are_touched(
     entry = make_entry(**{CONF_GATE_ENABLED: True})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    tag = f"ha-access-{entry.entry_id.lower()}"
+    tag = f"hass-{entry.entry_id.lower()}"
     assert tag in cf.tags, "the entry's tag is created on first use"
     assert cf.apps["foreign"] == foreign, "the foreign application was not updated"
     ours = [a for a in cf.apps.values() if a["name"] == GATE and a["id"] != "foreign"]

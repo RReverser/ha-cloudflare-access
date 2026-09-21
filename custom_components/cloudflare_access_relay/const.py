@@ -85,8 +85,9 @@ DATA_CLIENT_SECRET: Final = "client_secret"
 # Every application the integration creates carries an Access tag naming the config
 # entry (derived from its id at provisioning time, `OPTION_APP_TAG`). Only applications
 # with this entry's tag are ever updated or deleted; a stored id or a matching name
-# without the tag is somebody else's.
-APP_TAG_FMT: Final = "ha-access-{entry_id}"
+# without the tag is somebody else's. Cloudflare caps a tag name at 35 characters; the
+# entry id is 26.
+APP_TAG_FMT: Final = "hass-{entry_id}"
 OPTION_APP_TAG: Final = "app_tag"
 
 # Access application names: readable in the dashboard, and the way an application is
