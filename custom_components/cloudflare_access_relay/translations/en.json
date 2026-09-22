@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail you give them, through the [login methods of your Zero Trust organization]({docs_identity_providers}). Currently: {allowed_users}.\n\nNobody can log in without an address, so at least one user needs one; the fields below appear while none has.",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in, through the [login methods of your Zero Trust organization]({docs_identity_providers}):{allowed_users}{no_address_note}",
         "data": {
           "hostname": "Hostname",
           "user_id": "User",
@@ -48,14 +48,14 @@
         },
         "sections": {
           "bypass": {
-            "name": "Ways around the login",
-            "description": "For callers that cannot log in. Nothing is open unless listed here.",
+            "name": "Bypass policies",
+            "description": "Access lets a request through without a login where a [bypass policy]({docs_policies}) says so. That is for callers that can neither hold the login cookie nor carry a token: a third-party service posting to a webhook, a media player fetching a file by URL. Each open path becomes a bypass policy on an application of its own; an Access service token passes the gate through a Service Auth policy instead. Nothing is open unless listed here.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token; each gets a [bypass policy]({docs_policies}) of its own.\n\nPick from what this Home Assistant serves, or type one.",
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in. Pick from what this Home Assistant serves, or type one.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine."
             }
           }
@@ -91,7 +91,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every active user with an e-mail address, either as login username or as a login e-mail added here, through the [login methods of your Zero Trust organization]({docs_identity_providers}) (Zero Trust → Integrations → Identity providers). Currently: {allowed_users}.\n\nA user without an address cannot log in: give one under \"Add login e-mail\", or [change the username]({docs_change_username}) to the address.",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in, through the [login methods of your Zero Trust organization]({docs_identity_providers}):{allowed_users}{no_address_note}",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "session_duration": "Session duration",
@@ -104,14 +104,14 @@
         },
         "sections": {
           "bypass": {
-            "name": "Ways around the login",
-            "description": "For callers that cannot log in. Nothing is open unless listed here.",
+            "name": "Bypass policies",
+            "description": "Access lets a request through without a login where a [bypass policy]({docs_policies}) says so. That is for callers that can neither hold the login cookie nor carry a token: a third-party service posting to a webhook, a media player fetching a file by URL. Each open path becomes a bypass policy on an application of its own; an Access service token passes the gate through a Service Auth policy instead. Nothing is open unless listed here.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes reachable without a login, for callers that hold neither cookie nor token; each gets a [bypass policy]({docs_policies}) of its own.\n\nPick from what this Home Assistant serves, or type one.",
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in. Pick from what this Home Assistant serves, or type one.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine."
             }
           }
