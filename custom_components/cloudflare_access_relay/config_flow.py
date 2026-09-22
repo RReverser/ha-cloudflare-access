@@ -278,7 +278,7 @@ def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[s
         return {"no_address_note": ""}
     names = ", ".join(u.name or u.id for u in missing)
     verb = "has" if len(missing) == 1 else "have"
-    return {"no_address_note": f" {names} {verb} none and cannot log in until one is entered."}
+    return {"no_address_note": f" {names} {verb} none yet."}
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):

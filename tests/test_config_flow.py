@@ -155,9 +155,7 @@ async def test_setup_asks_for_the_people_addresses(
     assert fields["Eve"].config["read_only"] is True
     assert next(k for k in people.schema.schema if k == "Eve").default() == "eve@example.com"
     assert "read_only" not in fields["Plain"].config
-    assert result["description_placeholders"]["no_address_note"] == (
-        " Plain has none and cannot log in until one is entered."
-    )
+    assert result["description_placeholders"]["no_address_note"] == (" Plain has none yet.")
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SETTINGS_INPUT, "people": {"Plain": "not-an-address"}}
