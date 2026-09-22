@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in, through the [login methods of your Zero Trust organization]({docs_identity_providers}):{allowed_users}{no_address_note}",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every user with an e-mail address, as listed on the integration page, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
         "data": {
           "hostname": "Hostname",
           "user_id": "User",
@@ -91,7 +91,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in, through the [login methods of your Zero Trust organization]({docs_identity_providers}):{allowed_users}{no_address_note}",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every user with an e-mail address, as listed on the integration page, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "session_duration": "Session duration",
@@ -135,14 +135,14 @@
   },
   "config_subentries": {
     "login_email": {
-      "entry_type": "Login e-mail",
+      "entry_type": "User",
       "initiate_flow": {
         "user": "Add login e-mail"
       },
       "step": {
         "user": {
           "title": "Login e-mail",
-          "description": "The e-mail address Access knows a Home Assistant user by.\n\nFor a user whose login username is not an address; Home Assistant has no e-mail field. It joins the allow policy, and a login with it is served as this user.",
+          "description": "The e-mail address Access knows a Home Assistant user by.\n\nFor a user whose login username is not an address; Home Assistant has no e-mail field. The user's row on the integration page is filled in.",
           "data": {
             "user_id": "User",
             "email": "Login e-mail"
@@ -153,10 +153,13 @@
           }
         },
         "reconfigure": {
-          "title": "Change the login e-mail",
+          "title": "Login e-mail of {user}",
+          "description": "The e-mail address Access knows **{user}** by.\n\n{source_note}",
           "data": {
-            "user_id": "User",
             "email": "Login e-mail"
+          },
+          "data_description": {
+            "email": "Leave empty to remove it."
           }
         }
       },
@@ -166,7 +169,8 @@
         "user_taken": "This user already has a login e-mail."
       },
       "abort": {
-        "reconfigure_successful": "The login e-mail was updated."
+        "reconfigure_successful": "The login e-mail was updated.",
+        "updated": "The user's login e-mail was set."
       }
     },
     "oauth_client": {

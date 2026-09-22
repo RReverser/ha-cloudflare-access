@@ -37,10 +37,11 @@ Google Home or Alexa link, nor on a real phone.
 - At least one Home Assistant user with an e-mail address; the integration refuses to set up
   without one, since nobody could pass the gate. Home Assistant has no e-mail field and no
   login provider stores one (the OIDC integrations record only a subject id), so an address
-  is either the login username or a **login e-mail** the integration keeps itself: setup asks
-  for the first one when no user has an address, later ones are added under *Add login
-  e-mail* on the integration, one per user. Those addresses are the gate's allow policy, and
-  the address of an admitted request picks the user.
+  is either the login username or a **login e-mail** the integration keeps itself. Every user
+  has a row on the integration page showing the address Access sees; *Reconfigure* on a row
+  sets or changes the login e-mail, and setup asks for the first one when no user has an
+  address. Those addresses are the gate's allow policy, and the address of an admitted request
+  picks the user.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
   the edge.

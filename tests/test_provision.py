@@ -64,6 +64,12 @@ async def _save_options(hass: HomeAssistant, entry: MockConfigEntry, **changes: 
     await hass.async_block_till_done()
 
 
+def _client_sub(entry: MockConfigEntry) -> Any:
+    """The one OAuth client subentry (user rows are subentries too)."""
+    (sub,) = [s for s in entry.subentries.values() if s.subentry_type == "oauth_client"]
+    return sub
+
+
 async def _settle(hass: HomeAssistant, rounds: int = 1) -> None:
     """Let the debounced reconciliation run."""
     async_fire_time_changed(
@@ -195,8 +201,11 @@ async def test_a_user_with_an_address_is_required(
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert fake_cloudflare.writes() == []
+    # every user has a row on the integration page, even while the entry is in error
+    (row,) = entry.subentries.values()
+    assert row.title == "Plain: no address, cannot log in" and row.data[CONF_EMAIL] is None
 
-    # the login e-mail subentry can be added while the entry is in error
+    # "Add login e-mail" fills the row in
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_LOGIN_EMAIL), context={"source": "user"}
     )
@@ -205,7 +214,8 @@ async def test_a_user_with_an_address_is_required(
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"], {CONF_USER_ID: plain.id, CONF_EMAIL: "plain@example.com"}
     )
-    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "updated", result
+    assert row.title == "Plain: plain@example.com"
     assert await hass.config_entries.async_reload(entry.entry_id)
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.emails == ["plain@example.com"]
@@ -222,13 +232,13 @@ async def test_a_user_with_an_address_is_required(
     assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
         {"email": {"email": "plain@example.com"}}
     ]
-    sub = next(iter(entry.subentries.values()))
+    sub = row
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_LOGIN_EMAIL),
         context={"source": "reconfigure", "subentry_id": sub.subentry_id},
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {CONF_USER_ID: plain.id, CONF_EMAIL: "new@example.com"}
+        flow["flow_id"], {CONF_EMAIL: "new@example.com"}
     )
     assert result["type"] is FlowResultType.ABORT, result
     await _settle(hass)
@@ -236,9 +246,12 @@ async def test_a_user_with_an_address_is_required(
         {"email": {"email": "new@example.com"}}
     ]
 
-    # removing the last address keeps the policy and raises the issue
+    # deleting the row clears the address: the row comes back empty, the policy keeps
+    # its last subjects and the issue is raised
     hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
     await _settle(hass)
+    (row,) = entry.subentries.values()
+    assert row.title == "Plain: no address, cannot log in"
     assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
         {"email": {"email": "new@example.com"}}
     ]
@@ -447,7 +460,7 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     assert shown["authorization_url"] == (
         f"https://{TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/{shown['client_id']}/authorization"
     )
-    sub = next(iter(access.entry.subentries.values()))
+    sub = _client_sub(access.entry)
     assert (
         sub.data["app_id"] == client["id"] and sub.data["client_secret"] == shown["client_secret"]
     )
@@ -526,7 +539,7 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
 
     # a changed URL follows; the client can also turn into a console client, and back
-    sub = next(iter(access.entry.subentries.values()))
+    sub = _client_sub(access.entry)
     assert sub.title == "Claude" and sub.data["needs_credentials"] is False
     flow = await hass.config_entries.subentries.async_init(
         (access.entry.entry_id, "oauth_client"),
@@ -577,7 +590,7 @@ async def test_legacy_redirect_url_option_becomes_clients(
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     assert "client_redirect_uris" not in entry.options
-    subs = list(entry.subentries.values())
+    subs = [s for s in entry.subentries.values() if s.subentry_type == "oauth_client"]
     assert [(s.title, s.data["redirect_uris"], s.data["needs_credentials"]) for s in subs] == [
         ("claude.ai", ["https://claude.ai/api/mcp/auth_callback"], False)
     ]
@@ -601,7 +614,9 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
     assert await hass.config_entries.async_reload(access.entry.entry_id)
     await hass.async_block_till_done()
     assert len(cf.writes()) == writes, "a reload writes nothing"
-    assert access.entry.runtime_data.client_apps == {next(iter(access.entry.subentries)): client_id}
+    assert access.entry.runtime_data.client_apps == {
+        _client_sub(access.entry).subentry_id: client_id
+    }
 
     # the application was deleted in the dashboard: recreated, with new credentials
     del cf.apps[client_id]
@@ -609,7 +624,7 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
     await hass.async_block_till_done()
     recreated = cf.by_name(f"ha-access: client {HOSTNAME} Alexa")
     assert recreated is not None and recreated["id"] != client_id
-    sub = next(iter(access.entry.subentries.values()))
+    sub = _client_sub(access.entry)
     assert sub.data["app_id"] == recreated["id"]
     assert sub.data["client_secret"] == cf.secrets[recreated["id"]] != shown["client_secret"]
     gate = cf.by_name(GATE)

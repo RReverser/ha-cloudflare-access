@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntry,
     ConfigFlowResult,
+    ConfigSubentry,
     ConfigSubentryData,
     ConfigSubentryFlow,
     OptionsFlowWithReload,
@@ -74,7 +75,14 @@ from .const import (
 )
 from .options import api_for, effective_options, provisioning_options
 from .provision import desired_client_app
-from .users import allowed_emails, login_emails, user_rows, users_without_address
+from .users import (
+    allowed_emails,
+    identity_values,
+    login_emails,
+    row_title,
+    user_rows,
+    users_without_address,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -219,25 +227,18 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
 
 
 def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
-    """One line per user: the address and where it comes from, or that they cannot log in."""
-    lines = []
-    missing = False
-    for user, address, source in user_rows(hass, extra):
-        name = user.name or user.id
-        if source == "username":
-            lines.append(f"\n- **{name}**: {address} (login username)")
-        elif source == "login_email":
-            lines.append(f"\n- **{name}**: {address} (login e-mail, kept on the integration page)")
-        else:
-            missing = True
-            lines.append(f"\n- **{name}**: no address, cannot log in")
-    note = ""
-    if missing:
-        note = (
-            '\n\nGive a user an address under "Add login e-mail" on the integration page, '
-            f"or [change the username]({FORM_PLACEHOLDERS['docs_change_username']}) to it."
+    """Return a note naming the users who cannot log in, only when there are any."""
+    missing = [user for user, _address, source in user_rows(hass, extra) if not source]
+    if not missing:
+        return {"no_address_note": ""}
+    names = ", ".join(f"**{u.name or u.id}**" for u in missing)
+    return {
+        "no_address_note": (
+            f"\n\n{names}: no e-mail address, cannot log in. Reconfigure the user on the "
+            "integration page to add one, or [change the username]"
+            f"({FORM_PLACEHOLDERS['docs_change_username']}) to it."
         )
-    return {"allowed_users": "".join(lines) or "\n- (no users)", "no_address_note": note}
+    }
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
@@ -555,16 +556,20 @@ async def _validate_login_email(
     return {CONF_USER_ID: user_id, CONF_EMAIL: email}
 
 
-async def _login_email_title(hass: HomeAssistant, data: Mapping[str, str]) -> str:
+async def _login_email_title(hass: HomeAssistant, data: Mapping[str, Any]) -> str:
     user = await hass.auth.async_get_user(data[CONF_USER_ID])
-    return f"{user.name if user and user.name else data[CONF_USER_ID]}: {data[CONF_EMAIL]}"
+    if user is None:
+        return f"{data[CONF_USER_ID]}: {data.get(CONF_EMAIL) or ''}"
+    usernames = sorted(v for v in identity_values(user, {}) if "@" in v)
+    return row_title(user, usernames[0] if usernames else data.get(CONF_EMAIL))
 
 
 class LoginEmailSubentryFlow(ConfigSubentryFlow):
-    """The e-mail address a Home Assistant user is known by at Access.
+    """A user's row on the integration page: the e-mail address Access knows them by.
 
-    For users whose login username is not their address (Home Assistant has no e-mail
-    field). Saving re-provisions the allow policy through the entry's change listener.
+    One row per user is kept by the integration. Reconfigure sets or changes the login
+    e-mail; "Add login e-mail" fills in the row of a user who has no address yet.
+    Saving re-provisions the allow policy through the entry's change listener.
     """
 
     async def _async_form(
@@ -578,44 +583,84 @@ class LoginEmailSubentryFlow(ConfigSubentryFlow):
             description_placeholders=FORM_PLACEHOLDERS,
         )
 
+    def _row_of(self, user_id: str) -> ConfigSubentry | None:
+        for sub in self._get_entry().subentries.values():
+            if (
+                sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+                and sub.data.get(CONF_USER_ID) == user_id
+            ):
+                return sub
+        return None
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Give a user an address."""
+        """Give a user who has none an address; the user's row is filled in."""
         errors: dict[str, str] = {}
         if user_input is not None:
             entry = self._get_entry()
             data = await _validate_login_email(self.hass, login_emails(entry), user_input, errors)
             if data is not None:
-                return self.async_create_entry(
-                    title=await _login_email_title(self.hass, data),
-                    data=data,
-                    unique_id=data[CONF_USER_ID],
-                )
+                title = await _login_email_title(self.hass, data)
+                if (row := self._row_of(data[CONF_USER_ID])) is not None:
+                    self.hass.config_entries.async_update_subentry(
+                        entry, row, title=title, data=data
+                    )
+                    return self.async_abort(reason="updated")
+                return self.async_create_entry(title=title, data=data, unique_id=data[CONF_USER_ID])
         return await self._async_form("user", user_input or {}, errors)
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Change the address (or the user it belongs to)."""
+        """Set, change or clear the user's login e-mail."""
         errors: dict[str, str] = {}
         entry = self._get_entry()
         sub = self._get_reconfigure_subentry()
+        user = await self.hass.auth.async_get_user(sub.data[CONF_USER_ID])
+        has_username_address = bool(user) and any(
+            "@" in v
+            for v in identity_values(user, {})  # type: ignore[arg-type]
+        )
         if user_input is not None:
-            data = await _validate_login_email(
-                self.hass,
-                login_emails(entry),
-                user_input,
-                errors,
-                current_user=sub.data[CONF_USER_ID],
-            )
+            email = str(user_input.get(CONF_EMAIL) or "").strip()
+            if not email and has_username_address:
+                data: dict[str, Any] | None = {
+                    CONF_USER_ID: sub.data[CONF_USER_ID],
+                    CONF_EMAIL: None,
+                }
+            else:
+                data = await _validate_login_email(
+                    self.hass,
+                    login_emails(entry),
+                    {CONF_USER_ID: sub.data[CONF_USER_ID], CONF_EMAIL: email},
+                    errors,
+                    current_user=sub.data[CONF_USER_ID],
+                )
             if data is not None:
                 return self.async_update_and_abort(
-                    entry,
-                    sub,
-                    title=await _login_email_title(self.hass, data),
-                    data=data,
-                    unique_id=data[CONF_USER_ID],
+                    entry, sub, title=await _login_email_title(self.hass, data), data=data
                 )
-        return await self._async_form("reconfigure", user_input or dict(sub.data), errors)
+        name = user.name if user and user.name else sub.data[CONF_USER_ID]
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_EMAIL, default=sub.data.get(CONF_EMAIL) or ""): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.EMAIL)
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                **FORM_PLACEHOLDERS,
+                "user": name,
+                "source_note": (
+                    "The login username is already an address; a login e-mail here is a second one."
+                    if has_username_address
+                    else "The login username is not an address, so this is the one Access sees."
+                ),
+            },
+        )
 
 
 # ------------------------------------------------------------------ OAuth clients

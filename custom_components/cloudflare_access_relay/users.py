@@ -36,8 +36,14 @@ def login_emails(entry: ConfigEntry) -> dict[str, str]:
     return {
         sub.data[CONF_USER_ID]: _norm(sub.data[CONF_EMAIL])
         for sub in entry.subentries.values()
-        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL and sub.data.get(CONF_EMAIL)
     }
+
+
+def row_title(user: User, address: str | None) -> str:
+    """Return the title of a user's row on the integration page."""
+    name = user.name or user.id
+    return f"{name}: {address}" if address else f"{name}: no address, cannot log in"
 
 
 def identity_values(user: User, extra: Mapping[str, str]) -> set[str]:
