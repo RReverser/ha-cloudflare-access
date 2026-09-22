@@ -218,8 +218,20 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
     return None
 
 
-def _users_placeholder(emails: list[str]) -> str:
-    return ", ".join(emails) if emails else "(none)"
+def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
+    """Who gets in, as a bullet list, and a note about users who cannot, only when there are any."""
+    emails = allowed_emails(hass, extra)
+    users = "".join(f"\n- {e}" for e in emails) if emails else "\n- (nobody yet)"
+    without = users_without_address(hass, extra)
+    note = ""
+    if without:
+        names = ", ".join(f"**{u.name or u.id}**" for u in without)
+        note = (
+            f"\n\nWithout an address, {names} cannot log in: add one under "
+            f'"Add login e-mail", or [change the username]'
+            f"({FORM_PLACEHOLDERS['docs_change_username']}) to the address."
+        )
+    return {"allowed_users": users, "no_address_note": note}
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
@@ -428,7 +440,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 **FORM_PLACEHOLDERS,
-                "allowed_users": _users_placeholder(allowed_emails(self.hass, {})),
+                **_users_placeholders(self.hass, {}),
             },
         )
 
@@ -482,9 +494,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             description_placeholders={
                 **FORM_PLACEHOLDERS,
                 CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
-                "allowed_users": _users_placeholder(
-                    allowed_emails(self.hass, login_emails(self.config_entry))
-                ),
+                **_users_placeholders(self.hass, login_emails(self.config_entry)),
             },
         )
 
