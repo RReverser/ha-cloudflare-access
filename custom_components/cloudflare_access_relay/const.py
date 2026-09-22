@@ -58,6 +58,8 @@ OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
 # Repair issues
 ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
+# One fixable issue per person without an e-mail address; the fix asks for one.
+ISSUE_USER_NO_ADDRESS: Final = "user_no_address"
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.

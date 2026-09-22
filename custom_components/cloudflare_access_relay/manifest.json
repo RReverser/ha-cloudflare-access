@@ -7,7 +7,9 @@
   "config_flow": true,
   "dependencies": [
     "http",
-    "application_credentials"
+    "application_credentials",
+    "person",
+    "repairs"
   ],
   "documentation": "https://github.com/RReverser/ha-cloudflare-access",
   "integration_type": "service",
