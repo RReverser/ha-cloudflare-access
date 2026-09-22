@@ -6,7 +6,7 @@
     "step": {
       "user": {
         "title": "Cloudflare Access",
-        "description": "Cloudflare Access will protect the whole hostname. People with a Home Assistant account log in through Access, and voice assistants or MCP clients get their tokens from Access too.\n\nOn the next page you sign in with Cloudflare. The consent page lists the permissions the integration uses.\n\nPlease use a desktop browser: the Android companion app cannot complete the return from the consent page."
+        "description": "Cloudflare Access will protect the whole hostname.\n\nPeople with a Home Assistant account log in through Access, and voice assistants or MCP clients get their tokens from Access too.\n\nOn the next page you sign in with Cloudflare. The consent page lists the permissions the integration uses.\n\nPlease use a desktop browser: the Android companion app cannot complete the return from the consent page."
       },
       "pick_implementation": {
         "title": "Sign in with Cloudflare",
@@ -16,14 +16,14 @@
       },
       "account": {
         "title": "Cloudflare account",
-        "description": "The sign-in covers several accounts. Choose the one whose zone serves the hostname.",
+        "description": "The sign-in covers several accounts.\n\nChoose the one whose zone serves the hostname.",
         "data": {
           "account_id": "Account"
         }
       },
       "api_token": {
         "title": "Cloudflare API token",
-        "description": "An account-level token with the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'. The token is stored in the config entry.",
+        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'.",
         "data": {
           "api_token": "API token",
           "account_id": "Account ID"
@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off. Nothing changes at the edge until you enable it in the options.",
+        "description": "The gate starts off.\n\nNothing changes at the edge until you enable it in the options.",
         "data": {
           "hostname": "Hostname",
           "session_duration": "Session duration",
@@ -45,17 +45,17 @@
         "sections": {
           "people": {
             "name": "People",
-            "description": "Access lets in every person who has an e-mail address below. If a person's login username is an e-mail address, it is used as is. For anyone else, type an address here; without one, the person cannot log in.{no_address_note}"
+            "description": "Access lets in every person who has an e-mail address below.\n\nIf a person's login username is an e-mail address, it is used as is. For anyone else, type an address here; without one, the person cannot log in.{no_address_note}"
           },
           "bypass": {
             "name": "Bypass policies",
-            "description": "Bypass policies let some requests through without a login. They are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
+            "description": "Bypass policies let some requests through without a login.\n\nThey are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in. Each one becomes an [Access bypass policy]({docs_policies}).\n\nThe list offers what this Home Assistant serves; you can also type any prefix.",
+              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nUse these for your own scripts on other machines."
             }
           }
@@ -63,7 +63,7 @@
       },
       "reauth_confirm": {
         "title": "Sign in with Cloudflare again",
-        "description": "Cloudflare no longer accepts the sign-in. On the next page you sign in again."
+        "description": "Cloudflare no longer accepts the sign-in.\n\nOn the next page you sign in again."
       }
     },
     "error": {
@@ -83,38 +83,38 @@
       "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
-      "no_accounts": "The sign-in reaches no Cloudflare account with a Zero Trust organization. Select the account on Cloudflare's consent page, and set up Zero Trust in it first."
+      "no_accounts": "The sign-in reaches no Cloudflare account with a Zero Trust organization.\n\nSelect the account on Cloudflare's consent page, and set up Zero Trust in it first."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications. Reloading the integration does the same without a change.",
+        "description": "Saving re-provisions the Access applications.\n\nReloading the integration does the same without a change.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "gate_enabled": "On: every request needs a login through the [login methods of your Zero Trust organization]({docs_identity_providers}), except the open paths.\nOff: nothing is gated.",
+          "gate_enabled": "Requires a login for every request to the hostname.\n\nThe login goes through the [login methods of your Zero Trust organization]({docs_identity_providers}); the bypass policies below stay open. Off: nothing is gated.",
           "session_duration": "How long an [Access session]({docs_session}) lasts before the person has to log in again.\n\nThe same time applies to a registered client's refresh token.",
           "delete_objects_on_remove": "When the integration is removed, its Access applications are removed too.\n\nTurn this off to keep them in Cloudflare, for example so another instance can adopt them."
         },
         "sections": {
           "people": {
             "name": "People",
-            "description": "Access lets in every person who has an e-mail address below. If a person's login username is an e-mail address, it is used as is. For anyone else, type an address here; without one, the person cannot log in.{no_address_note}"
+            "description": "Access lets in every person who has an e-mail address below.\n\nIf a person's login username is an e-mail address, it is used as is. For anyone else, type an address here; without one, the person cannot log in.{no_address_note}"
           },
           "bypass": {
             "name": "Bypass policies",
-            "description": "Bypass policies let some requests through without a login. They are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
+            "description": "Bypass policies let some requests through without a login.\n\nThey are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in. Each one becomes an [Access bypass policy]({docs_policies}).\n\nThe list offers what this Home Assistant serves; you can also type any prefix.",
+              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nUse these for your own scripts on other machines."
             }
           }
@@ -130,11 +130,11 @@
   "issues": {
     "restart_required": {
       "title": "Restart Home Assistant to accept clients authenticated by Cloudflare Access",
-      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed. Until Home Assistant restarts, it rejects requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access let through."
+      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed.\n\nUntil Home Assistant restarts, it rejects requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access let through."
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No person has an e-mail address any more, so there is nobody to put in the gate's allow policy. The policy keeps its last entries.\n\nEnter an address under the integration's options, People, or [change a username]({docs_change_username}) to the address."
+      "description": "No person has an e-mail address any more, so there is nobody to put in the gate's allow policy.\n\nThe policy keeps its last entries. Enter an address under the integration's options, People, or [change a username]({docs_change_username}) to the address."
     }
   },
   "config_subentries": {
@@ -146,35 +146,35 @@
       "step": {
         "user": {
           "title": "OAuth client",
-          "description": "A client that logs people in through Access and then calls Home Assistant with the token: an MCP client such as Claude, Google Home account linking, or the Alexa skill.\n\nEnter the callback URL that the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks for a client ID and secret, you get them on the next page from [an Access application created for it]({docs_saas_apps}).",
+          "description": "A client that logs people in through Access and then calls Home Assistant with the token.\n\nFor example an MCP client such as Claude, Google Home account linking, or the Alexa skill. Enter the callback URL that the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks for a client ID and secret, you get them on the next page from [an Access application created for it]({docs_saas_apps}).",
           "data": {
             "name": "Name",
             "redirect_uris": "Redirect URLs",
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "name": "A name that identifies the client to you, e.g. Claude or Google Home.",
-            "redirect_uris": "The URL the client returns to after the login, e.g. {example_mcp_redirect} or {example_console_redirect}. {example_wildcard_redirect} covers every path.",
-            "needs_credentials": "Turn on for a console that asks for a client ID and secret (Google Home, Alexa). Leave off for a client that registers itself (MCP)."
+            "name": "A name that identifies the client to you.\n\nFor example Claude or Google Home.",
+            "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
+            "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },
         "reconfigure": {
           "title": "Change the OAuth client",
-          "description": "Saving updates the client. For a console client, its application and credentials are updated too.",
+          "description": "Saving updates the client.\n\nFor a console client, its application and credentials are updated too.",
           "data": {
             "name": "Name",
             "redirect_uris": "Redirect URLs",
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "name": "A name that identifies the client to you, e.g. Claude or Google Home.",
-            "redirect_uris": "The URL the client returns to after the login, e.g. {example_mcp_redirect} or {example_console_redirect}. {example_wildcard_redirect} covers every path.",
-            "needs_credentials": "Turn on for a console that asks for a client ID and secret (Google Home, Alexa). Leave off for a client that registers itself (MCP)."
+            "name": "A name that identifies the client to you.\n\nFor example Claude or Google Home.",
+            "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
+            "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },
         "credentials": {
           "title": "Credentials for {name}",
-          "description": "Enter these in the client's console. The secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+          "description": "Enter these in the client's console.\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
         }
       },
       "error": {
