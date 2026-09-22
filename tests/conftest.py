@@ -528,11 +528,17 @@ async def access(
     return Access(entry, fake_cloudflare, jwks_server, Minter(rsa_keys, aud))
 
 
-async def add_user(hass: HomeAssistant, username: str, *, name: str | None = None) -> User:
+async def add_user(
+    hass: HomeAssistant, username: str, *, name: str | None = None, person: bool = True
+) -> User:
     """Create an HA user whose built-in credential username is `username`.
 
-    Through the auth manager, as the UI does, so the user events fire.
+    Through the auth manager, as the UI does, so the user events fire. A person is
+    linked to the user unless `person` is False (an add-on's API user, say).
     """
+    from homeassistant.components.person import async_create_person
+    from homeassistant.setup import async_setup_component
+
     user = await hass.auth.async_create_user(name or username.split("@")[0])
     cred = Credentials(
         auth_provider_type="homeassistant",
@@ -541,6 +547,9 @@ async def add_user(hass: HomeAssistant, username: str, *, name: str | None = Non
         is_new=False,
     )
     await hass.auth.async_link_user(user, cred)
+    if person:
+        assert await async_setup_component(hass, "person", {})
+        await async_create_person(hass, user.name or username, user_id=user.id)
     return user
 
 

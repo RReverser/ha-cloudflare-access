@@ -131,47 +131,32 @@
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
       "description": "No active user has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a user one under \"Add login e-mail\" on the integration, or [change a username]({docs_change_username}) to the address."
+    },
+    "user_no_address": {
+      "title": "{user} cannot log in through Cloudflare Access",
+      "description": "**{user}** has no e-mail address, and Access admits people by address.\n\nFix this by entering the address their [login method]({docs_identity_providers}) knows them by, or [change their username]({docs_change_username}) to it.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Login e-mail for {user}",
+            "description": "The e-mail address Access knows **{user}** by.",
+            "data": {
+              "email": "Login e-mail"
+            }
+          }
+        },
+        "error": {
+          "invalid_email": "Enter an e-mail address."
+        },
+        "abort": {
+          "gone": "The integration entry or the user no longer exists."
+        }
+      }
     }
   },
   "config_subentries": {
     "login_email": {
-      "entry_type": "User",
-      "initiate_flow": {
-        "user": "Add login e-mail"
-      },
-      "step": {
-        "user": {
-          "title": "Login e-mail",
-          "description": "The e-mail address Access knows a Home Assistant user by.\n\nFor a user whose login username is not an address; Home Assistant has no e-mail field. The user's row on the integration page is filled in.",
-          "data": {
-            "user_id": "User",
-            "email": "Login e-mail"
-          },
-          "data_description": {
-            "user_id": "The Home Assistant user who gets the address.",
-            "email": "The address the identity provider knows this user by."
-          }
-        },
-        "reconfigure": {
-          "title": "Login e-mail of {user}",
-          "description": "The e-mail address Access knows **{user}** by.\n\n{source_note}",
-          "data": {
-            "email": "Login e-mail"
-          },
-          "data_description": {
-            "email": "Leave empty to remove it."
-          }
-        }
-      },
-      "error": {
-        "invalid_email": "Enter an e-mail address.",
-        "unknown_user": "Choose a user.",
-        "user_taken": "This user already has a login e-mail."
-      },
-      "abort": {
-        "reconfigure_successful": "The login e-mail was updated.",
-        "updated": "The user's login e-mail was set."
-      }
+      "entry_type": "Login e-mail"
     },
     "oauth_client": {
       "entry_type": "OAuth client",

@@ -80,35 +80,39 @@ def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
 
 
 @callback
-def user_rows(hass: HomeAssistant, extra: Mapping[str, str]) -> list[tuple[User, str | None, str]]:
-    """Return every user who may log in with their address and its source, by name.
+def person_users(hass: HomeAssistant) -> list[User]:
+    """Return the users a person is linked to: the people who log in, by name.
 
-    The source is "username" for an address that is the login username, "login_email"
-    for one the integration keeps, and "" when the user has no address at all.
+    Users without a person (an add-on's API user, say) are not people and get no row.
     """
-    rows: list[tuple[User, str | None, str]] = []
-    for user in hass.auth._store._users.values():
-        if not _allowed(user):
-            continue
-        usernames = sorted(v for v in identity_values(user, {}) if "@" in v)
-        if usernames:
-            rows.append((user, usernames[0], "username"))
-        elif user.id in extra:
-            rows.append((user, extra[user.id], "login_email"))
-        else:
-            rows.append((user, None, ""))
-    return sorted(rows, key=lambda r: (r[0].name or "").casefold())
+    collections = hass.data.get("person") or ()
+    ids = {
+        item.get("user_id")
+        for coll in collections[:2]
+        for item in coll.async_items()
+        if item.get("user_id")
+    }
+    users = [u for u in hass.auth._store._users.values() if _allowed(u) and u.id in ids]
+    return sorted(users, key=lambda u: (u.name or "").casefold())
+
+
+def username_address(user: User) -> str | None:
+    """Return the user's login username when it is an e-mail address."""
+    return next((v for v in sorted(identity_values(user, {})) if "@" in v), None)
+
+
+@callback
+def login_rows(hass: HomeAssistant, extra: Mapping[str, str]) -> list[tuple[User, str | None]]:
+    """Return the people whose username is not an address, with their login e-mail if any."""
+    return [
+        (user, extra.get(user.id)) for user in person_users(hass) if username_address(user) is None
+    ]
 
 
 @callback
 def users_without_address(hass: HomeAssistant, extra: Mapping[str, str]) -> list[User]:
-    """Return the users who may log in but carry no e-mail address, by name."""
-    users = [
-        user
-        for user in hass.auth._store._users.values()
-        if _allowed(user) and not any("@" in v for v in identity_values(user, extra))
-    ]
-    return sorted(users, key=lambda u: (u.name or "").casefold())
+    """Return the people who carry no e-mail address at all, by name."""
+    return [user for user, address in login_rows(hass, extra) if not address]
 
 
 async def async_find_user(
