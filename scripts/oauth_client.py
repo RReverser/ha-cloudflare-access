@@ -238,6 +238,17 @@ def cmd_publish(api: Api, args: argparse.Namespace) -> None:
     print(f"client_id {client['client_id']} is now {client['visibility']}")
 
 
+def cmd_scopes(api: Api, args: argparse.Namespace) -> None:
+    """Print the OAuth scope catalogue (id, name) for the Access and membership scopes."""
+    for scope in api.list_all("/oauth/scopes"):
+        if re.search(r"access|membership", f"{scope['id']} {scope['name']}", re.IGNORECASE):
+            print(f"{scope['id']}: {scope['name']} [{scope.get('category')}]")
+    missing = [
+        s for s in CLIENT_SCOPES if not any(s == x["id"] for x in api.list_all("/oauth/scopes"))
+    ]
+    print(f"client scopes: {CLIENT_SCOPES}; unknown: {missing}")
+
+
 def cmd_show(api: Api, args: argparse.Namespace) -> None:
     """Print the client registration."""
     client = find_client(api)
@@ -264,7 +275,7 @@ def main(argv: list[str] | None = None) -> None:
     """Run one command."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "command", choices=["setup", "grant", "create", "verify", "publish", "show"]
+        "command", choices=["setup", "grant", "create", "verify", "publish", "show", "scopes"]
     )
     parser.add_argument("--client-uri", default=DEFAULT_CLIENT_URI)
     parser.add_argument("--logo-uri", default=DEFAULT_LOGO_URI)
@@ -280,6 +291,7 @@ def main(argv: list[str] | None = None) -> None:
         "verify": cmd_verify,
         "publish": cmd_publish,
         "show": cmd_show,
+        "scopes": cmd_scopes,
     }
     steps = ["grant", "create", "verify"] if args.command == "setup" else [args.command]
     for step in steps:

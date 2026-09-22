@@ -11,7 +11,7 @@ on:
       command:
         description: Command
         type: choice
-        options: [setup, grant, create, verify, publish, show]
+        options: [setup, grant, create, verify, publish, show, scopes]
         default: show
       confirm:
         description: Type "publish" to confirm making the client public
