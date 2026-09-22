@@ -17,7 +17,6 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
-    CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     DATA_BYPASS_APP_ID,
     DATA_GATE_APP_ID,
@@ -167,19 +166,110 @@ async def test_drift_is_repaired_on_reload(hass: HomeAssistant, access: Access) 
     assert puts[0][2]["policies"][0]["id"] == policy_id, "inline policy id reused"
 
 
-async def test_service_token_policy(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+async def test_a_script_client_gets_a_service_token_the_gate_accepts(
+    hass: HomeAssistant, access: Access
 ) -> None:
-    entry = make_entry(**{CONF_GATE_ENABLED: True, CONF_SERVICE_TOKEN_IDS: ["tok-1"]})
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    gate = fake_cloudflare.by_name(GATE)
+    """A script client is a service token named like the applications; the gate names it."""
+    cf = access.cloudflare
+    shown = await _register_script(hass, access.entry, "Backup job")
+    (token,) = cf.service_tokens.values()
+    assert token["name"] == f"ha-access: client {HOSTNAME} Backup job"
+    assert shown["client_id"] == token["client_id"] and len(shown["client_secret"]) == 32
+    assert shown["expires_at"] == "2027-09-22", "the date the script stops working"
+    sub = _client_sub(access.entry)
+    assert sub.title == "Backup job" and sub.data["kind"] == "script"
+    assert (
+        sub.data["token_id"] == token["id"] and sub.data["client_secret"] == shown["client_secret"]
+    )
+    await _settle(hass)
+    gate = cf.by_name(GATE)
     assert [(p["name"], p["decision"]) for p in gate["policies"]] == [
         ("ha-access: allow", "allow"),
         ("ha-access: service tokens", "non_identity"),
     ]
-    assert gate["policies"][0]["include"] == [{"email": {"email": ALICE}}]
-    assert gate["policies"][1]["include"] == [{"service_token": {"token_id": "tok-1"}}]
+    assert gate["policies"][1]["include"] == [{"service_token": {"token_id": token["id"]}}]
+
+    # reconfiguring renames the token, extends its validity and shows the credentials again
+    flow = await hass.config_entries.subentries.async_init(
+        (access.entry.entry_id, "oauth_client"),
+        context={"source": "reconfigure", "subentry_id": sub.subentry_id},
+    )
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "reconfigure_script"
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"name": "Nightly backup"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials"
+    assert result["description_placeholders"]["client_secret"] == shown["client_secret"]
+    assert result["description_placeholders"]["expires_at"] == "2028-09-22"
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT, result
+    assert token["name"] == f"ha-access: client {HOSTNAME} Nightly backup"
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][1]["include"] == [
+        {"service_token": {"token_id": token["id"]}}
+    ], "the same token, so the gate is not rewritten"
+
+    # removing the client removes its rule from the gate and then deletes the token
+    hass.config_entries.async_remove_subentry(access.entry, sub.subentry_id)
+    await _settle(hass)
+    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
+    assert cf.service_tokens == {}
+
+
+async def test_a_lost_service_token_is_replaced_and_an_orphan_deleted(
+    hass: HomeAssistant, access: Access
+) -> None:
+    cf = access.cloudflare
+    await _register_script(hass, access.entry, "Probe")
+    await _settle(hass)
+    sub = _client_sub(access.entry)
+    old_id = sub.data["token_id"]
+    # deleted in the dashboard: replaced at the next reload, with new credentials
+    cf.service_tokens.clear()
+    cf.service_tokens["orphan"] = {
+        "id": "orphan",
+        "name": f"ha-access: client {HOSTNAME} Removed while HA was down",
+        "client_id": "x.access",
+        "expires_at": "2027-01-01T00:00:00Z",
+    }
+    cf.service_tokens["theirs"] = {"id": "theirs", "name": "unrelated", "client_id": "y.access"}
+    assert await hass.config_entries.async_reload(access.entry.entry_id)
+    await hass.async_block_till_done()
+    sub = _client_sub(access.entry)
+    assert sub.data["token_id"] != old_id and sub.data["token_id"] in cf.service_tokens
+    assert set(cf.service_tokens) == {sub.data["token_id"], "theirs"}, (
+        "the orphan of a client removed while Home Assistant was down goes; foreign tokens stay"
+    )
+    assert cf.by_name(GATE)["policies"][1]["include"] == [
+        {"service_token": {"token_id": sub.data["token_id"]}}
+    ]
+
+    # removing the entry deletes the token with the applications
+    await hass.config_entries.async_remove(access.entry.entry_id)
+    await hass.async_block_till_done()
+    assert set(cf.service_tokens) == {"theirs"} and cf.apps == {}
+
+
+async def test_legacy_service_token_option_becomes_script_clients(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    cf = fake_cloudflare
+    cf.service_tokens["tok-1"] = {
+        "id": "tok-1",
+        "name": "Garage script",
+        "client_id": "abc.access",
+        "expires_at": "2027-03-01T00:00:00Z",
+    }
+    entry = make_entry(**{CONF_GATE_ENABLED: True, "service_token_ids": ["tok-1", "gone"]})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert "service_token_ids" not in entry.options
+    sub = _client_sub(entry)
+    assert sub.title == "Garage script" and sub.data["kind"] == "script"
+    assert sub.data["token_id"] == "tok-1" and sub.data["client_secret"] is None
+    assert cf.by_name(GATE)["policies"][1]["include"] == [{"service_token": {"token_id": "tok-1"}}]
+    assert "tok-1" in cf.service_tokens, "a token the integration did not create is kept"
 
 
 # --------------------------------------------------------------------------- users
@@ -410,9 +500,33 @@ async def _register_client(
     )
     assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user"
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "redirect_uris": uris, "needs_credentials": True}
+        flow["flow_id"], {"name": name, "kind": "login"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"redirect_uris": uris, "needs_credentials": True}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+    placeholders = dict(result["description_placeholders"])
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    return placeholders
+
+
+async def _register_script(
+    hass: HomeAssistant, entry: MockConfigEntry, name: str
+) -> dict[str, Any]:
+    """Drive the subentry flow for a script client; return the credentials page's placeholders."""
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "oauth_client"), context={"source": "user"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"name": name, "kind": "script"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials", (
+        result
+    )
     placeholders = dict(result["description_placeholders"])
     result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
@@ -517,8 +631,11 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
         (access.entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"],
-        {"name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
+        flow["flow_id"], {"name": "Claude", "kind": "login"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await _settle(hass)
@@ -579,9 +696,10 @@ async def test_legacy_redirect_url_option_becomes_clients(
     assert await hass.config_entries.async_setup(entry.entry_id)
     assert "client_redirect_uris" not in entry.options
     subs = [s for s in entry.subentries.values() if s.subentry_type == "oauth_client"]
-    assert [(s.title, s.data["redirect_uris"], s.data["needs_credentials"]) for s in subs] == [
-        ("claude.ai", ["https://claude.ai/api/mcp/auth_callback"], False)
-    ]
+    assert [
+        (s.title, s.data["kind"], s.data["redirect_uris"], s.data["needs_credentials"])
+        for s in subs
+    ] == [("claude.ai", "login", ["https://claude.ai/api/mcp/auth_callback"], False)]
     gate = fake_cloudflare.by_name(GATE)
     assert gate["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] == [
         "https://claude.ai/api/mcp/auth_callback"

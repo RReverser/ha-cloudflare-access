@@ -52,7 +52,6 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     DATA_BYPASS_APP_ID,
     DATA_GATE_APP_ID,
@@ -75,7 +74,7 @@ EMAIL = "nobody@example.com"
 SESSION_FORM = {"hours": 1}  # what Access stores as "1h"
 # this run's service token, Worker and applications carry the run id (tests/live/cleanup.py)
 RUN = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
-WORKER_NAME, TOKEN_NAME, _ = run_names(RUN)
+WORKER_NAME, _, _ = run_names(RUN)
 WORKER_SOURCE = Path(__file__).with_name("worker") / "worker.js"
 EDGE_TIMEOUT = 120
 
@@ -176,12 +175,6 @@ async def _login_until_forwarded(edge: Edge, headers: dict[str, str]) -> tuple[s
     return token, attempts
 
 
-async def _service_token(api: CloudflareAccessApi) -> dict[str, Any]:
-    """Create this run's token."""
-    created_tok: dict[str, Any] = await api.create_service_token(TOKEN_NAME, "24h")
-    return created_tok
-
-
 @contextlib.asynccontextmanager
 async def _ephemeral_host(api: CloudflareAccessApi, http: httpx.AsyncClient) -> AsyncIterator[str]:
     """Deploy this run's echo Worker on workers.dev; yield its hostname; delete it after.
@@ -222,10 +215,7 @@ async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any)
     current = dict(entry.options)
     user_input = {
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
-        "bypass": {
-            CONF_SERVICE_TOKEN_IDS: current[CONF_SERVICE_TOKEN_IDS],
-            CONF_EXTRA_BYPASS_PATHS: current.get(CONF_EXTRA_BYPASS_PATHS, []),
-        },
+        "bypass": {CONF_EXTRA_BYPASS_PATHS: current.get(CONF_EXTRA_BYPASS_PATHS, [])},
         CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
         **changes,
     }
@@ -254,9 +244,8 @@ async def test_live_lifecycle(
         httpx.AsyncClient(follow_redirects=False, timeout=30) as http,
         _ephemeral_host(api, http) as host,
     ):
-        token = await _service_token(api)
         try:
-            await _lifecycle(hass, hass_client_no_auth, api, token, Edge(http, host))
+            await _lifecycle(hass, hass_client_no_auth, api, Edge(http, host))
         finally:
             await _remove_entry(hass)
 
@@ -273,17 +262,30 @@ async def _remove_entry(hass: HomeAssistant) -> None:
             await hass.async_block_till_done()
 
 
+async def _register_script(hass: HomeAssistant, entry: ConfigEntry, name: str) -> dict[str, Any]:
+    """Add a script client through the subentry flow; return the credentials page's values."""
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "oauth_client"), context={"source": "user"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"name": name, "kind": "script"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials", (
+        result
+    )
+    shown = dict(result["description_placeholders"])
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    return shown
+
+
 async def _lifecycle(
     hass: HomeAssistant,
     hass_client_no_auth: Any,
     api: CloudflareAccessApi,
-    token: dict[str, Any],
     edge: Edge,
 ) -> None:
-    service_headers = {
-        "CF-Access-Client-Id": token["client_id"],
-        "CF-Access-Client-Secret": token["client_secret"],
-    }
     http, host = edge.http, edge.host
     assert await async_setup_component(hass, "api", {})
     if True:
@@ -303,16 +305,22 @@ async def _lifecycle(
         assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {
-                CONF_HOSTNAME: host,
-                "bypass": {CONF_SERVICE_TOKEN_IDS: [token["id"]]},
-                CONF_SESSION_DURATION: SESSION_FORM,
-            },
+            {CONF_HOSTNAME: host, CONF_SESSION_DURATION: SESSION_FORM},
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
         entry: ConfigEntry = result["result"]
         await hass.async_block_till_done()
         assert entry.state is ConfigEntryState.LOADED, entry.reason
+
+        print("== a script client is a service token, created by the integration")
+        shown = await _register_script(hass, entry, "CI runner")
+        service_headers = {
+            "CF-Access-Client-Id": shown["client_id"],
+            "CF-Access-Client-Secret": shown["client_secret"],
+        }
+        (script,) = [sub for sub in entry.subentries.values() if sub.data.get("kind") == "script"]
+        token_id = script.data["token_id"]
+        assert (await api.get_service_token(token_id) or {}).get("client_id") == shown["client_id"]
         assert entry.options[CONF_GATE_ENABLED] is False
         team = entry.data[DATA_TEAM_DOMAIN]
         assert team.endswith(".cloudflareaccess.com")
@@ -513,14 +521,18 @@ async def _lifecycle(
 
         assert await _until(reusable, "cookie reuse restored")
 
-        print("== dropping the service token from the options removes it from the gate policy")
-        await _save_options(hass, entry, **{"bypass": {CONF_SERVICE_TOKEN_IDS: []}})
+        print("== removing the script client drops its rule from the gate and deletes its token")
+        hass.config_entries.async_remove_subentry(entry, script.subentry_id)
 
         async def token_gone() -> bool:
             app = await api.get_app(gate_id)
-            return bool(app) and [p["decision"] for p in app["policies"]] == ["allow"]
+            return (
+                bool(app)
+                and [p["decision"] for p in app["policies"]] == ["allow"]
+                and await api.get_service_token(token_id) is None
+            )
 
-        assert await _until(token_gone, "policy without service token", 60)
+        assert await _until(token_gone, "policy and token gone", 60)
 
         print("== removal deletes the application")
         await hass.config_entries.async_remove(entry.entry_id)

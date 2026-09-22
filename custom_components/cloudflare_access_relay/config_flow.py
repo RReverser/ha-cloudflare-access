@@ -40,12 +40,14 @@ from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
     CloudflareAuthError,
-    CloudflareError,
     CloudflareUnavailableError,
 )
 from .const import (
+    CLIENT_KIND_LOGIN,
+    CLIENT_KIND_SCRIPT,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
+    CONF_CLIENT_KIND,
     CONF_CLIENT_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
@@ -54,13 +56,14 @@ from .const import (
     CONF_LOGIN_EMAILS,
     CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
-    CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
     DATA_CLIENT_SECRET,
     DATA_TEAM_DOMAIN,
     DATA_TOKEN,
+    DATA_TOKEN_EXPIRES_AT,
+    DATA_TOKEN_ID,
     DEFAULT_DELETE_OBJECTS_ON_REMOVE,
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
@@ -69,6 +72,7 @@ from .const import (
     OPTION_APP_TAG,
     SECTION_BYPASS,
     SECTION_PEOPLE,
+    SERVICE_TOKEN_NAME_FMT,
     SUBENTRY_TYPE_CLIENT,
 )
 from .options import api_for, effective_options, provisioning_options
@@ -84,6 +88,13 @@ from .users import (
 _LOGGER = logging.getLogger(__name__)
 
 _MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
+_CLIENT_KIND = SelectSelector(
+    SelectSelectorConfig(
+        options=[CLIENT_KIND_LOGIN, CLIENT_KIND_SCRIPT],
+        mode=SelectSelectorMode.LIST,
+        translation_key="client_kind",
+    )
+)
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 # Access takes `<n>h` or `<n>m`; the form shows days, hours and minutes.
 _SESSION_DURATION = DurationSelector(DurationSelectorConfig(enable_day=True, enable_second=False))
@@ -180,30 +191,8 @@ def _parse_people(
     return emails
 
 
-async def _service_token_choices(
-    api: CloudflareAccessApi, chosen: list[str]
-) -> list[SelectOptionDict]:
-    """List the account's service tokens by name; a chosen one that no longer exists keeps its id."""
-    tokens: list[dict[str, Any]] = []
-    try:
-        tokens = await api.list_service_tokens()
-    except CloudflareError as err:
-        _LOGGER.warning("Service tokens could not be listed, only the chosen ones show: %s", err)
-    choices = {str(t["id"]): str(t.get("name") or t["id"]) for t in tokens if t.get("id")}
-    for token_id in chosen:
-        choices.setdefault(token_id, token_id)
-    return [
-        {"value": v, "label": label} for v, label in sorted(choices.items(), key=lambda i: i[1])
-    ]
-
-
-async def _advanced_schema(
-    hass: HomeAssistant, defaults: Mapping[str, Any], api: CloudflareAccessApi
-) -> dict[Any, Any]:
+async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
     bypass = defaults.get(SECTION_BYPASS) or {}
-    token_ids = list(
-        bypass.get(CONF_SERVICE_TOKEN_IDS) or defaults.get(CONF_SERVICE_TOKEN_IDS) or []
-    )
     return {
         vol.Optional(
             CONF_SESSION_DURATION,
@@ -233,14 +222,6 @@ async def _advanced_schema(
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
-                    vol.Optional(CONF_SERVICE_TOKEN_IDS, default=token_ids): SelectSelector(
-                        SelectSelectorConfig(
-                            options=await _service_token_choices(api, token_ids),
-                            multiple=True,
-                            custom_value=True,
-                            mode=SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
                 }
             ),
             {"collapsed": True},
@@ -254,7 +235,6 @@ def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dic
     out.update(out.pop(SECTION_BYPASS, None) or {})
     out.pop(SECTION_PEOPLE, None)
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
-    out[CONF_SERVICE_TOKEN_IDS] = _clean_list(out.get(CONF_SERVICE_TOKEN_IDS))
     if CONF_SESSION_DURATION in out:
         duration = _duration_from_form(out[CONF_SESSION_DURATION])
         if duration is None:
@@ -491,9 +471,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
                 **people,
-                **await _advanced_schema(
-                    self.hass, defaults, self._api(self._credential[CONF_ACCOUNT_ID])
-                ),
+                **await _advanced_schema(self.hass, defaults),
             }
         )
         return self.async_show_form(
@@ -551,9 +529,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     default=bool(current.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED)),
                 ): BooleanSelector(),
                 **people,
-                **await _advanced_schema(
-                    self.hass, current, await api_for(self.hass, self.config_entry)
-                ),
+                **await _advanced_schema(self.hass, current),
             }
         )
         return self.async_show_form(
@@ -581,35 +557,163 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
 
 
 class ClientSubentryFlow(ConfigSubentryFlow):
-    """A client that logs people in through Access and calls Home Assistant with the token.
+    """A client: something that calls Home Assistant through the gate.
 
-    Every client's redirect URLs are what the gate lets a self-registering client (an MCP
-    client) use. A client whose console asks for a client id and secret (Google Home,
-    the Alexa developer console) gets an Access for SaaS application as well, and this
-    flow shows the credentials and Access's endpoints to enter in that console.
+    A login client logs people in through Access and calls Home Assistant with the
+    token; its redirect URLs are what the gate lets a self-registering client (an MCP
+    client) use, and one whose console asks for a client id and secret (Google Home,
+    the Alexa developer console) gets an Access for SaaS application as well. A script
+    client is a machine with nobody behind it: it gets an Access service token, and
+    sends its Client ID and secret as request headers. Either way the credentials are
+    shown once here and again on reconfiguration.
     """
 
-    _created: dict[str, Any]
+    _data: dict[str, Any]
 
-    def _validate(self, user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
-        name = user_input.get(CONF_CLIENT_NAME, "").strip()
+    # ------------------------------------------------------------------- steps
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Name and kind; the next step depends on the kind."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                self._data = {
+                    CONF_CLIENT_NAME: name,
+                    CONF_CLIENT_KIND: user_input[CONF_CLIENT_KIND],
+                }
+                if self._data[CONF_CLIENT_KIND] == CLIENT_KIND_SCRIPT:
+                    return await self._async_create_token(errors)
+                return await self.async_step_login()
+        defaults = user_input or {}
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
+                    vol.Required(
+                        CONF_CLIENT_KIND, default=defaults.get(CONF_CLIENT_KIND, CLIENT_KIND_LOGIN)
+                    ): _CLIENT_KIND,
+                }
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def async_step_login(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Ask for a login client's redirect URLs and whether its console needs credentials."""
+        return await self._async_handle_login("login", user_input, self._data)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change the client; the form depends on its kind."""
+        current = self._get_reconfigure_subentry().data
+        if current.get(CONF_CLIENT_KIND) == CLIENT_KIND_SCRIPT:
+            return await self.async_step_reconfigure_script()
+        return await self._async_handle_login("reconfigure", user_input, current)
+
+    async def async_step_reconfigure_script(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Rename a script client; its token is renamed and its validity extended."""
+        current = self._get_reconfigure_subentry().data
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                self._data = {**current, CONF_CLIENT_NAME: name}
+                return await self._async_renew_token(errors)
+        defaults = user_input or current
+        return self.async_show_form(
+            step_id="reconfigure_script",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str}
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def async_step_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store a login client once its credentials were shown."""
+        if user_input is None:
+            return self._login_credentials(self._data)
+        return self._store(self._data)
+
+    async def async_step_script_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store a script client once its credentials were shown."""
+        if user_input is None:
+            return self._script_credentials(self._data)
+        return self._store(self._data)
+
+    # ------------------------------------------------------------ login clients
+
+    def _validate_login(self, user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
         uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
-        if not name:
-            errors[CONF_CLIENT_NAME] = "required"
         if not uris:
             errors[CONF_REDIRECT_URIS] = "required"
         elif any(not u.startswith("https://") for u in uris):
             errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
         return {
-            CONF_CLIENT_NAME: name,
             CONF_REDIRECT_URIS: uris,
             CONF_NEEDS_CREDENTIALS: bool(user_input.get(CONF_NEEDS_CREDENTIALS)),
         }
 
+    async def _async_handle_login(
+        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {
+                **current,
+                CONF_CLIENT_KIND: CLIENT_KIND_LOGIN,
+                **self._validate_login(user_input, errors),
+            }
+            if step_id == "reconfigure":
+                name = user_input.get(CONF_CLIENT_NAME, "").strip()
+                if not name:
+                    errors[CONF_CLIENT_NAME] = "required"
+                data[CONF_CLIENT_NAME] = name
+            if not errors and not data[CONF_NEEDS_CREDENTIALS]:
+                return self._store(data)
+            if not errors:
+                registered = await self._async_register(
+                    data, errors, current.get(DATA_CLIENT_APP_ID)
+                )
+                if registered is not None:
+                    self._data = registered
+                    return self._login_credentials(registered)
+        defaults = user_input or current
+        fields: dict[Any, Any] = {}
+        if step_id == "reconfigure":
+            fields[vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, ""))] = str
+        fields[
+            vol.Required(CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or []))
+        ] = _MULTI_TEXT
+        fields[
+            vol.Required(CONF_NEEDS_CREDENTIALS, default=bool(defaults.get(CONF_NEEDS_CREDENTIALS)))
+        ] = BooleanSelector()
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(fields),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
     async def _async_register(
         self, data: dict[str, Any], errors: dict[str, str], app_id: str | None
     ) -> dict[str, Any] | None:
-        """Create or update the client's Access application; return the data to store."""
+        """Create or update the login client's Access application; return the data to store."""
         entry = self._get_entry()
         emails = allowed_emails(self.hass, login_emails(entry))
         options = provisioning_options(entry)
@@ -637,28 +741,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             }
         return None
 
-    def _form(
-        self, step_id: str, defaults: Mapping[str, Any], errors: dict[str, str]
-    ) -> SubentryFlowResult:
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
-                vol.Required(
-                    CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
-                ): _MULTI_TEXT,
-                vol.Required(
-                    CONF_NEEDS_CREDENTIALS, default=bool(defaults.get(CONF_NEEDS_CREDENTIALS))
-                ): BooleanSelector(),
-            }
-        )
-        return self.async_show_form(
-            step_id=step_id,
-            data_schema=schema,
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
-
-    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+    def _login_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
         return self.async_show_form(
             step_id="credentials",
@@ -671,12 +754,119 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             },
         )
 
+    # ----------------------------------------------------------- script clients
+
+    async def _async_create_token(self, errors: dict[str, str]) -> SubentryFlowResult:
+        """Create the script client's service token and show its credentials."""
+        entry = self._get_entry()
+        options = provisioning_options(entry)
+        name = SERVICE_TOKEN_NAME_FMT.format(
+            hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]
+        )
+        try:
+            api = await api_for(self.hass, entry)
+            token = await api.create_service_token(name)
+        except CloudflareAuthError as err:
+            _LOGGER.warning("The credential cannot manage service tokens: %s", err)
+            errors["base"] = "missing_service_tokens_edit"
+            entry.async_start_reauth(self.hass)
+        except CloudflareUnavailableError:
+            errors["base"] = "cannot_connect"
+        except CloudflareApiError as err:
+            _LOGGER.warning("Cloudflare refused to create the service token: %s", err)
+            errors["base"] = "api_error"
+        else:
+            self._data.update(
+                {
+                    DATA_TOKEN_ID: token["id"],
+                    DATA_CLIENT_ID: token.get("client_id"),
+                    DATA_CLIENT_SECRET: token.get("client_secret"),
+                    DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
+                }
+            )
+            return self._script_credentials(self._data)
+        return self._user_form_again(errors)
+
+    def _user_form_again(self, errors: dict[str, str]) -> SubentryFlowResult:
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CLIENT_NAME, default=self._data[CONF_CLIENT_NAME]): str,
+                    vol.Required(
+                        CONF_CLIENT_KIND, default=self._data[CONF_CLIENT_KIND]
+                    ): _CLIENT_KIND,
+                }
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def _async_renew_token(self, errors: dict[str, str]) -> SubentryFlowResult:
+        """Rename the token and extend its validity, then show the credentials again."""
+        entry = self._get_entry()
+        options = provisioning_options(entry)
+        token_id = self._data.get(DATA_TOKEN_ID)
+        name = SERVICE_TOKEN_NAME_FMT.format(
+            hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]
+        )
+        try:
+            api = await api_for(self.hass, entry)
+            if token_id and await api.get_service_token(token_id) is not None:
+                await api.rename_service_token(token_id, name)
+                token = await api.refresh_service_token(token_id)
+                self._data[DATA_TOKEN_EXPIRES_AT] = token.get("expires_at")
+            else:
+                token = await api.create_service_token(name)
+                self._data.update(
+                    {
+                        DATA_TOKEN_ID: token["id"],
+                        DATA_CLIENT_ID: token.get("client_id"),
+                        DATA_CLIENT_SECRET: token.get("client_secret"),
+                        DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
+                    }
+                )
+        except CloudflareAuthError as err:
+            _LOGGER.warning("The credential cannot manage service tokens: %s", err)
+            errors["base"] = "missing_service_tokens_edit"
+            entry.async_start_reauth(self.hass)
+        except CloudflareUnavailableError:
+            errors["base"] = "cannot_connect"
+        except CloudflareApiError as err:
+            _LOGGER.warning("Cloudflare refused to update the service token: %s", err)
+            errors["base"] = "api_error"
+        else:
+            return self._script_credentials(self._data)
+        return self.async_show_form(
+            step_id="reconfigure_script",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CLIENT_NAME, default=self._data[CONF_CLIENT_NAME]): str}
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    def _script_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+        return self.async_show_form(
+            step_id="script_credentials",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                **FORM_PLACEHOLDERS,
+                CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
+                DATA_CLIENT_ID: data.get(DATA_CLIENT_ID) or "",
+                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unknown)",
+                DATA_TOKEN_EXPIRES_AT: _date_only(data.get(DATA_TOKEN_EXPIRES_AT)),
+            },
+        )
+
+    # ------------------------------------------------------------------ storage
+
     def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
-        """Create or update the subentry; a lost application is replaced on reconciliation."""
+        """Create or update the subentry; a lost application or token is replaced on reconciliation."""
         if self.source == "reconfigure":
             entry = self._get_entry()
             sub = self._get_reconfigure_subentry()
-            if not data[CONF_NEEDS_CREDENTIALS]:
+            if data[CONF_CLIENT_KIND] == CLIENT_KIND_LOGIN and not data[CONF_NEEDS_CREDENTIALS]:
                 # the application, if any, is deleted by the entry's reconciliation
                 data = {
                     k: v
@@ -694,39 +884,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             )
         return self.async_create_entry(title=data[CONF_CLIENT_NAME], data=data)
 
-    async def _async_handle(
-        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
-    ) -> SubentryFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = self._validate(user_input, errors)
-            if not errors and not data[CONF_NEEDS_CREDENTIALS]:
-                return self._store(data)
-            if not errors:
-                registered = await self._async_register(
-                    data, errors, current.get(DATA_CLIENT_APP_ID)
-                )
-                if registered is not None:
-                    self._created = registered
-                    return self._credentials(registered)
-        return self._form(step_id, user_input or current, errors)
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Name, redirect URLs and whether the client's console needs credentials."""
-        return await self._async_handle("user", user_input, {})
-
-    async def async_step_reconfigure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Change the client; a console client's application follows."""
-        return await self._async_handle(
-            "reconfigure", user_input, self._get_reconfigure_subentry().data
-        )
-
-    async def async_step_credentials(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Store the registration once the credentials were shown."""
-        if user_input is None:
-            return self._credentials(self._created)
-        return self._store(self._created)
+def _date_only(value: Any) -> str:
+    """Return the date part of an ISO timestamp, for the credentials page."""
+    return str(value or "")[:10]

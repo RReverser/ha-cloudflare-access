@@ -20,10 +20,12 @@ DATA_BYPASS_APP_ID: Final = "bypass_app_id"
 # Options
 CONF_HOSTNAME: Final = "hostname"
 CONF_GATE_ENABLED: Final = "gate_enabled"
-CONF_SERVICE_TOKEN_IDS: Final = "service_token_ids"
 CONF_SESSION_DURATION: Final = "session_duration"
-# Derived from the OAuth client subentries at provisioning time, never edited directly.
+# Derived from the client subentries at provisioning time, never edited directly: the
+# login clients' redirect URLs, and the script clients' service token ids (which an
+# earlier version kept as an option).
 CONF_CLIENT_REDIRECT_URIS: Final = "client_redirect_uris"
+CONF_SERVICE_TOKEN_IDS: Final = "service_token_ids"
 CONF_EXTRA_BYPASS_PATHS: Final = "extra_bypass_paths"
 CONF_DELETE_OBJECTS_ON_REMOVE: Final = "delete_objects_on_remove"
 # The form groups the two ways around the login in a collapsed section; storage stays flat.
@@ -75,16 +77,24 @@ SUBENTRY_TYPE_LOGIN_EMAIL: Final = "login_email"
 CONF_USER_ID: Final = "user_id"
 CONF_EMAIL: Final = "email"
 
-# OAuth clients (config subentries): every client's redirect URLs are allowed for
-# self-registration on the gate; a client whose console asks for a client id and secret
-# gets an Access for SaaS OIDC application of its own, whose tokens the gate accepts.
+# Clients (config subentries) are of two kinds. A login client logs people in through
+# Access: every such client's redirect URLs are allowed for self-registration on the
+# gate, and one whose console asks for a client id and secret gets an Access for SaaS
+# OIDC application of its own, whose tokens the gate accepts. A script client is a
+# machine with nobody behind it: it gets an Access service token, whose Client ID and
+# secret it sends as request headers, and the gate's Service Auth policy names it.
 SUBENTRY_TYPE_CLIENT: Final = "oauth_client"
 CONF_CLIENT_NAME: Final = "name"
+CONF_CLIENT_KIND: Final = "kind"
+CLIENT_KIND_LOGIN: Final = "login"
+CLIENT_KIND_SCRIPT: Final = "script"
 CONF_REDIRECT_URIS: Final = "redirect_uris"
 CONF_NEEDS_CREDENTIALS: Final = "needs_credentials"
 DATA_CLIENT_APP_ID: Final = "app_id"
 DATA_CLIENT_ID: Final = "client_id"
 DATA_CLIENT_SECRET: Final = "client_secret"
+DATA_TOKEN_ID: Final = "token_id"
+DATA_TOKEN_EXPIRES_AT: Final = "expires_at"
 
 # Every application the integration creates carries an Access tag naming the config
 # entry (derived from its id at provisioning time, `OPTION_APP_TAG`). Only applications
@@ -100,6 +110,9 @@ APP_NAME_PREFIX: Final = "ha-access:"
 GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
 BYPASS_APP_NAME_FMT: Final = APP_NAME_PREFIX + " bypass {hostname}"
 CLIENT_APP_NAME_FMT: Final = APP_NAME_PREFIX + " client {hostname} {name}"
+# A script client's service token is named the same way; the name is how a token of a
+# removed client is found again (tokens carry no tags).
+SERVICE_TOKEN_NAME_FMT: Final = CLIENT_APP_NAME_FMT
 GATE_POLICY_NAME: Final = APP_NAME_PREFIX + " allow"
 GATE_SERVICE_POLICY_NAME: Final = APP_NAME_PREFIX + " service tokens"
 GATE_LINKED_POLICY_NAME: Final = APP_NAME_PREFIX + " registered clients"

@@ -195,7 +195,8 @@ class FakeCloudflare:
     fail_status: int | None = None
     fail_predicate: Callable[[str, str], bool] | None = None
     team_domain: str = TEAM_DOMAIN
-    service_tokens: list[dict[str, Any]] = field(default_factory=list)
+    # service tokens by id, without their secrets (which are returned once, at creation)
+    service_tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
     server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
@@ -352,12 +353,87 @@ class FakeCloudflare:
             )
         return None
 
+    def _token_not_found(self) -> web.Response:
+        return web.json_response(
+            {"success": False, "errors": [{"code": 12130, "message": "not found"}], "result": None},
+            status=404,
+        )
+
     async def list_service_tokens(self, request: web.Request) -> web.Response:
         await self._record(request)
         if fail := self._fail(request.method, request.path):
             return fail
         page = int(request.query.get("page", "1"))
-        return self._ok(self.service_tokens if page == 1 else [])
+        return self._ok(list(self.service_tokens.values()) if page == 1 else [])
+
+    async def create_service_token(self, request: web.Request) -> web.Response:
+        body = await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        assert body is not None
+        token_id = str(uuid.uuid4())
+        self.service_tokens[token_id] = {
+            "id": token_id,
+            "name": body["name"],
+            "client_id": f"{uuid.uuid4().hex}.access",
+            "duration": body.get("duration", "8760h"),
+            "expires_at": "2027-09-22T00:00:00Z",
+            "created_at": "2026-09-22T00:00:00Z",
+        }
+        secret = uuid.uuid4().hex
+        return self._ok({**self.service_tokens[token_id], "client_secret": secret}, status=201)
+
+    async def get_service_token(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        token = self.service_tokens.get(request.match_info["token_id"])
+        return self._ok(token) if token else self._token_not_found()
+
+    async def update_service_token(self, request: web.Request) -> web.Response:
+        body = await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        token = self.service_tokens.get(request.match_info["token_id"])
+        if token is None:
+            return self._token_not_found()
+        assert body is not None
+        token.update({k: v for k, v in body.items() if k in ("name", "duration")})
+        return self._ok(token)
+
+    async def refresh_service_token(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        token = self.service_tokens.get(request.match_info["token_id"])
+        if token is None:
+            return self._token_not_found()
+        year = int(token["expires_at"][:4]) + 1
+        token["expires_at"] = f"{year}{token['expires_at'][4:]}"
+        return self._ok(token)
+
+    async def delete_service_token(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        token_id = request.match_info["token_id"]
+        if token_id not in self.service_tokens:
+            return self._token_not_found()
+        if any(
+            r.get("service_token", {}).get("token_id") == token_id
+            for app in self.apps.values()
+            for pol in app.get("policies") or []
+            for r in pol.get("include") or []
+        ):
+            return web.json_response(
+                {
+                    "success": False,
+                    "errors": [{"code": 12132, "message": "service token in use by a policy"}],
+                    "result": None,
+                },
+                status=400,
+            )
+        return self._ok(self.service_tokens.pop(token_id))
 
     async def list_tags(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -465,6 +541,11 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     app.router.add_get("/memberships", fake.list_memberships)
     app.router.add_get(f"{base}/organizations", fake.organizations)
     app.router.add_get(f"{base}/service_tokens", fake.list_service_tokens)
+    app.router.add_post(f"{base}/service_tokens", fake.create_service_token)
+    app.router.add_get(f"{base}/service_tokens/{{token_id}}", fake.get_service_token)
+    app.router.add_put(f"{base}/service_tokens/{{token_id}}", fake.update_service_token)
+    app.router.add_delete(f"{base}/service_tokens/{{token_id}}", fake.delete_service_token)
+    app.router.add_post(f"{base}/service_tokens/{{token_id}}/refresh", fake.refresh_service_token)
     app.router.add_get(f"{base}/tags", fake.list_tags)
     app.router.add_post(f"{base}/tags", fake.create_tag)
     app.router.add_get(f"{base}/tags/{{tag_name}}", fake.get_tag)

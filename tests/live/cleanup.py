@@ -50,9 +50,10 @@ async def delete_run(api: CloudflareAccessApi, run: str) -> list[str]:
             await api.delete_app(app["id"])
             deleted.append(f"app {app['name']}")
     for tok in await api.list_service_tokens():
-        if tok.get("name") == token_name:
+        name = tok.get("name") or ""
+        if name == token_name or host_marker in name:
             await api.delete_service_token(tok["id"])
-            deleted.append(f"token {token_name}")
+            deleted.append(f"token {name}")
     sdk, account = api.sdk, api.account_id
     async for script in sdk.workers.scripts.list(account_id=account):
         if script.id == worker:
@@ -73,7 +74,9 @@ async def sweep_stale(api: CloudflareAccessApi) -> list[str]:
             deleted.append(f"app {name}")
     for tok in await api.list_service_tokens():
         name = tok.get("name") or ""
-        if name.startswith(RUN_PREFIX) and _older_than(tok.get("created_at"), STALE_AGE):
+        if (name.startswith(RUN_PREFIX) or f" {RUN_PREFIX}-" in name) and _older_than(
+            tok.get("created_at"), STALE_AGE
+        ):
             try:
                 await api.delete_service_token(tok["id"])
             except CloudflareApiError:
