@@ -153,8 +153,9 @@ the scopes above) and add its client ID under Home Assistant's *Application cred
 then takes the project's client's place.
 
 An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
-Identity Providers, and Groups: Read**) can replace the sign-in where a browser cannot reach
-the consent page, as in this project's CI: start the flow with the source `api_token`.
+Identity Providers, and Groups: Read**; **Access: Service Tokens: Read** for the options to
+offer service tokens by name) can replace the sign-in where a browser cannot reach the
+consent page, as in this project's CI: start the flow with the source `api_token`.
 
 ## Rollout
 

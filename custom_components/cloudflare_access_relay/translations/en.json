@@ -23,7 +23,7 @@
       },
       "api_token": {
         "title": "Cloudflare API token",
-        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'.",
+        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Read' lets the options offer service tokens by name.",
         "data": {
           "api_token": "API token",
           "account_id": "Account ID"
