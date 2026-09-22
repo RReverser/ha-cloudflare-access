@@ -103,10 +103,8 @@ def username_address(user: User) -> str | None:
 
 @callback
 def login_rows(hass: HomeAssistant, extra: Mapping[str, str]) -> list[tuple[User, str | None]]:
-    """Return the people whose username is not an address, with their login e-mail if any."""
-    return [
-        (user, extra.get(user.id)) for user in person_users(hass) if username_address(user) is None
-    ]
+    """Return every person with the address Access sees: the username, else the login e-mail."""
+    return [(user, username_address(user) or extra.get(user.id)) for user in person_users(hass)]
 
 
 @callback

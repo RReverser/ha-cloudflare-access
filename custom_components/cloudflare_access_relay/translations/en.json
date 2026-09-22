@@ -49,13 +49,13 @@
         "sections": {
           "bypass": {
             "name": "Bypass policies",
-            "description": "Let some requests through without a login, as [Access bypass policies]({docs_policies}).\n\nFor callers that can hold neither the login cookie nor a token: a third-party service posting to a webhook, a media player fetching audio by URL. Nothing is open unless listed.",
+            "description": "Let some requests through without a login: for callers that can hold neither the login cookie nor a token, such as a third-party service posting to a webhook or a media player fetching audio by URL. Nothing is open unless listed.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes anyone can reach without logging in.\n\nPick from what this Home Assistant serves, or type one.",
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in, each an [Access bypass policy]({docs_policies}).\n\nPick from what this Home Assistant serves, or type one.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nFor your own scripts on other machines."
             }
           }
@@ -105,13 +105,13 @@
         "sections": {
           "bypass": {
             "name": "Bypass policies",
-            "description": "Let some requests through without a login, as [Access bypass policies]({docs_policies}).\n\nFor callers that can hold neither the login cookie nor a token: a third-party service posting to a webhook, a media player fetching audio by URL. Nothing is open unless listed.",
+            "description": "Let some requests through without a login: for callers that can hold neither the login cookie nor a token, such as a third-party service posting to a webhook or a media player fetching audio by URL. Nothing is open unless listed.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes anyone can reach without logging in.\n\nPick from what this Home Assistant serves, or type one.",
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in, each an [Access bypass policy]({docs_policies}).\n\nPick from what this Home Assistant serves, or type one.",
               "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nFor your own scripts on other machines."
             }
           }
@@ -134,12 +134,11 @@
     },
     "user_no_address": {
       "title": "{user} cannot log in through Cloudflare Access",
-      "description": "**{user}** has no e-mail address, and Access admits people by address.\n\nFix this by entering the address their [login method]({docs_identity_providers}) knows them by, or [change their username]({docs_change_username}) to it.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Login e-mail for {user}",
-            "description": "The e-mail address Access knows **{user}** by.",
+            "description": "Access admits people by e-mail address, and **{user}** has none.\n\nEnter the address their [login method]({docs_identity_providers}) knows them by. The other way is to [change their username]({docs_change_username}) to it.",
             "data": {
               "email": "Login e-mail"
             }
@@ -156,7 +155,15 @@
   },
   "config_subentries": {
     "login_email": {
-      "entry_type": "Login e-mail"
+      "entry_type": "Login e-mail",
+      "initiate_flow": {
+        "user": "Add login e-mail"
+      },
+      "step": {
+        "user": {
+          "title": "Login e-mail"
+        }
+      }
     },
     "oauth_client": {
       "entry_type": "OAuth client",

@@ -126,12 +126,11 @@ def user_issue_id(entry: ConfigEntry, user_id: str) -> str:
 
 @callback
 def async_sync_user_rows(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Keep one subentry per person whose login username is not an e-mail address.
+    """Keep one subentry per person, titled with the e-mail address Access sees.
 
-    The row shows the login e-mail the integration keeps for them, or that they cannot
-    log in; a person without an address also gets a fixable repair issue that asks for
-    one. Deleting a row clears the address. People whose username is an address need
-    nothing and get no row; users without a person are not people.
+    The address is the login username when that is one, else the login e-mail the
+    integration keeps; a person with neither gets a fixable repair issue that asks for
+    one. Deleting a row clears a login e-mail. Users without a person are not people.
     """
     rows = {
         sub.data[CONF_USER_ID]: sub

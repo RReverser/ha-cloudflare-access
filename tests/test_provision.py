@@ -247,10 +247,14 @@ async def test_a_person_with_an_address_is_required(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "no_allowed_users"}, "gate on or off, nobody could log in"
 
-    # a person whose username is an address needs nothing: no row, no issue
-    await add_user(hass, "eve@example.com", name="Eve")
-    await _settle(hass)
-    assert [s.title for s in entry.subentries.values()] == ["Plain: no address, cannot log in"]
+    # a person whose username is an address is listed and needs nothing
+    eve = await add_user(hass, "eve@example.com", name="Eve")
+    await _settle(hass, 2)
+    assert sorted(s.title for s in entry.subentries.values()) == [
+        "Eve: eve@example.com",
+        "Plain: no address, cannot log in",
+    ]
+    assert registry.async_get_issue(DOMAIN, user_issue_id(entry, eve.id)) is None
 
 
 async def test_allow_policy_follows_the_users(hass: HomeAssistant, access: Access) -> None:
