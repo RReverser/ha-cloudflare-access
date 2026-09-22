@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every person below with an e-mail address, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.",
         "data": {
           "hostname": "Hostname",
           "session_duration": "Session duration",
@@ -45,7 +45,7 @@
         "sections": {
           "people": {
             "name": "People",
-            "description": "The e-mail address Access knows each person by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out."
+            "description": "Who gets in: every person with an e-mail address, the one Access knows them by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out.{no_address_note}"
           },
           "bypass": {
             "name": "Bypass policies",
@@ -90,21 +90,21 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every person below with an e-mail address, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "gate_enabled": "On: every request needs an Access login, except the open paths.\nOff: nothing is gated.",
+          "gate_enabled": "On: every request needs a login through the [login methods of your Zero Trust organization]({docs_identity_providers}), except the open paths.\nOff: nothing is gated.",
           "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again.\n\nAlso the lifetime of a registered client's refresh token.",
           "delete_objects_on_remove": "Whether removing the integration also removes its Access applications.\n\nOff keeps them, e.g. to adopt them from another instance."
         },
         "sections": {
           "people": {
             "name": "People",
-            "description": "The e-mail address Access knows each person by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out."
+            "description": "Who gets in: every person with an e-mail address, the one Access knows them by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out.{no_address_note}"
           },
           "bypass": {
             "name": "Bypass policies",
