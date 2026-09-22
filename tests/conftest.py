@@ -195,6 +195,7 @@ class FakeCloudflare:
     fail_status: int | None = None
     fail_predicate: Callable[[str, str], bool] | None = None
     team_domain: str = TEAM_DOMAIN
+    service_tokens: list[dict[str, Any]] = field(default_factory=list)
     server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
@@ -351,6 +352,13 @@ class FakeCloudflare:
             )
         return None
 
+    async def list_service_tokens(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        page = int(request.query.get("page", "1"))
+        return self._ok(self.service_tokens if page == 1 else [])
+
     async def list_tags(self, request: web.Request) -> web.Response:
         await self._record(request)
         return self._ok([{"name": t} for t in sorted(self.tags)])
@@ -456,6 +464,7 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     base = f"/accounts/{ACCOUNT_ID}/access"
     app.router.add_get("/memberships", fake.list_memberships)
     app.router.add_get(f"{base}/organizations", fake.organizations)
+    app.router.add_get(f"{base}/service_tokens", fake.list_service_tokens)
     app.router.add_get(f"{base}/tags", fake.list_tags)
     app.router.add_post(f"{base}/tags", fake.create_tag)
     app.router.add_get(f"{base}/tags/{{tag_name}}", fake.get_tag)

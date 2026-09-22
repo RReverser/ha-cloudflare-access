@@ -30,6 +30,7 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
+    CONF_SERVICE_TOKEN_IDS,
     DATA_TEAM_DOMAIN,
     DATA_TOKEN,
     DOMAIN,
@@ -134,6 +135,44 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
         "/api/webhook/hook-1",
         "/custom/typed",
     ]
+
+
+async def test_service_tokens_are_offered_by_name(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    """The account's service tokens are picked by name; the token id is what is stored."""
+    fake_cloudflare.service_tokens = [
+        {"id": "tok-1", "name": "Garage script", "client_id": "abc.access"},
+        {"id": "tok-2", "name": "Backup job", "client_id": "def.access"},
+    ]
+    result = await _start(hass, "api_token")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
+    bypass = result["data_schema"].schema[
+        next(k for k in result["data_schema"].schema if k == "bypass")
+    ]
+    field = next(k for k in bypass.schema.schema if k == CONF_SERVICE_TOKEN_IDS)
+    config = bypass.schema.schema[field].config
+    assert config["multiple"] and config["custom_value"]
+    assert config["options"] == [
+        {"value": "tok-2", "label": "Backup job"},
+        {"value": "tok-1", "label": "Garage script"},
+    ]
+    assert field.default() == []
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**SETTINGS_INPUT, "bypass": {CONF_SERVICE_TOKEN_IDS: ["tok-1"]}}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["result"].options[CONF_SERVICE_TOKEN_IDS] == ["tok-1"]
+
+    # the options form keeps a chosen token that Cloudflare no longer lists, by its id
+    fake_cloudflare.service_tokens = []
+    flow = await hass.config_entries.options.async_init(result["result"].entry_id)
+    bypass = flow["data_schema"].schema[
+        next(k for k in flow["data_schema"].schema if k == "bypass")
+    ]
+    field = next(k for k in bypass.schema.schema if k == CONF_SERVICE_TOKEN_IDS)
+    assert bypass.schema.schema[field].config["options"] == [{"value": "tok-1", "label": "tok-1"}]
+    assert field.default() == ["tok-1"]
 
 
 async def test_setup_asks_for_the_people_addresses(
@@ -264,7 +303,6 @@ async def test_settings_validation_errors(
 ) -> None:
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
-    reads = len(fake_cloudflare.requests)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_HOSTNAME: "", "session_duration": {"minutes": 0}}
     )
@@ -272,7 +310,7 @@ async def test_settings_validation_errors(
         CONF_HOSTNAME: "invalid_hostname",
         "session_duration": "invalid_duration",
     }
-    assert len(fake_cloudflare.requests) == reads
+    assert fake_cloudflare.writes() == []
     assert hass.config_entries.async_entries(DOMAIN) == []
 
 
