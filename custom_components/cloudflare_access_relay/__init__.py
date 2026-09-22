@@ -47,9 +47,11 @@ from .const import (
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
+    CONF_EMAIL,
     CONF_HOSTNAME,
     CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
+    CONF_USER_ID,
     DATA_BYPASS_APP_ID,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
@@ -63,6 +65,7 @@ from .const import (
     OPTION_APP_TAG,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
+    SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 from .edge_auth import async_install_middleware
 from .jwks import JwksVerifier
@@ -82,7 +85,7 @@ from .provision import (
     owned,
     reconcile_app,
 )
-from .users import allowed_emails, login_emails
+from .users import allowed_emails, login_emails, row_title, user_rows
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +116,40 @@ class EntryData:
 
 
 type AccessConfigEntry = ConfigEntry[EntryData]
+
+
+@callback
+def async_sync_user_rows(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Keep one subentry per Home Assistant user, titled with the address Access sees.
+
+    The rows are the integration page's user list: Reconfigure sets or changes the
+    login e-mail of a user whose username is not an address. A row that was deleted
+    comes back without an address; a user who is gone takes the row along.
+    """
+    rows = {
+        sub.data[CONF_USER_ID]: sub
+        for sub in entry.subentries.values()
+        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+    }
+    seen: set[str] = set()
+    for user, address, _source in user_rows(hass, login_emails(entry)):
+        seen.add(user.id)
+        title = row_title(user, address)
+        if (sub := rows.get(user.id)) is None:
+            hass.config_entries.async_add_subentry(
+                entry,
+                ConfigSubentry(
+                    data=MappingProxyType({CONF_USER_ID: user.id, CONF_EMAIL: None}),
+                    subentry_type=SUBENTRY_TYPE_LOGIN_EMAIL,
+                    title=title,
+                    unique_id=user.id,
+                ),
+            )
+        elif sub.title != title:
+            hass.config_entries.async_update_subentry(entry, sub, title=title)
+    for user_id, sub in rows.items():
+        if user_id not in seen:
+            hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
 
 
 @callback
@@ -248,6 +285,7 @@ async def _async_provision_entry(
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
     _async_migrate_redirect_uris(hass, entry)
+    async_sync_user_rows(hass, entry)
     options = provisioning_options(entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
@@ -257,7 +295,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
         raise ConfigEntryError(
             "No Home Assistant user carries an e-mail address, so nobody could log in. "
-            "Give one a login e-mail (Add login e-mail on the integration) and reload"
+            "Reconfigure a user on the integration page to give them one, then reload"
         )
     try:
         api = await api_for(hass, entry)
@@ -304,6 +342,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     """
 
     async def _refresh() -> None:
+        async_sync_user_rows(hass, entry)
         emails = allowed_emails(hass, login_emails(entry))
         options = provisioning_options(entry)
         if (

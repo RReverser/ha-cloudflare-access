@@ -41,7 +41,7 @@ from custom_components.cloudflare_access_relay.const import (
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 
-from .conftest import ACCOUNT_ID, ALICE, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwks, make_entry
+from .conftest import ACCOUNT_ID, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwks, make_entry
 
 TOKEN_INPUT = {CONF_API_TOKEN: "cf-token", CONF_ACCOUNT_ID: ACCOUNT_ID}
 SETTINGS_INPUT = {CONF_HOSTNAME: f"https://{HOSTNAME}/"}
@@ -149,10 +149,7 @@ async def test_setup_asks_for_a_login_email_when_no_user_has_an_address(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     keys = {str(k) for k in result["data_schema"].schema}
     assert {CONF_USER_ID, CONF_EMAIL} <= keys
-    assert result["description_placeholders"]["allowed_users"] == (
-        "\n- **Plain**: no address, cannot log in"
-    )
-    assert "Add login e-mail" in result["description_placeholders"]["no_address_note"]
+    assert "**Plain**: no e-mail address" in result["description_placeholders"]["no_address_note"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "not-an-address"}
@@ -166,10 +163,9 @@ async def test_setup_asks_for_a_login_email_when_no_user_has_an_address(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     entry = result["result"]
-    sub = next(iter(entry.subentries.values()))
-    assert sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+    (sub,) = [s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL]
     assert sub.data == {CONF_USER_ID: plain.id, CONF_EMAIL: "Plain@Example.com"}
-    assert sub.title == "Plain: Plain@Example.com" and sub.unique_id == plain.id
+    assert sub.title == "Plain: plain@example.com" and sub.unique_id == plain.id
     await hass.async_block_till_done()
     assert entry.runtime_data.emails == ["plain@example.com"]
 
@@ -189,9 +185,6 @@ async def test_token_flow_creates_entry(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
     assert result["data_schema"]({})[CONF_HOSTNAME] == HOSTNAME, "external URL prefilled"
-    assert result["description_placeholders"]["allowed_users"] == (
-        f"\n- **Alice**: {ALICE} (login username)"
-    )
     assert result["description_placeholders"]["no_address_note"] == ""
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
