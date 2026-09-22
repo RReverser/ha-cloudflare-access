@@ -74,6 +74,27 @@ def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
 
 
 @callback
+def user_rows(hass: HomeAssistant, extra: Mapping[str, str]) -> list[tuple[User, str | None, str]]:
+    """Return every user who may log in with their address and its source, by name.
+
+    The source is "username" for an address that is the login username, "login_email"
+    for one the integration keeps, and "" when the user has no address at all.
+    """
+    rows: list[tuple[User, str | None, str]] = []
+    for user in hass.auth._store._users.values():
+        if not _allowed(user):
+            continue
+        usernames = sorted(v for v in identity_values(user, {}) if "@" in v)
+        if usernames:
+            rows.append((user, usernames[0], "username"))
+        elif user.id in extra:
+            rows.append((user, extra[user.id], "login_email"))
+        else:
+            rows.append((user, None, ""))
+    return sorted(rows, key=lambda r: (r[0].name or "").casefold())
+
+
+@callback
 def users_without_address(hass: HomeAssistant, extra: Mapping[str, str]) -> list[User]:
     """Return the users who may log in but carry no e-mail address, by name."""
     users = [
