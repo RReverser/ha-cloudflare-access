@@ -628,6 +628,40 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
 # --------------------------------------------------------------------------- removal, failures
 
 
+async def test_disabling_the_entry_takes_the_gate_down_and_enabling_brings_it_back(
+    hass: HomeAssistant, access: Access
+) -> None:
+    from homeassistant.config_entries import ConfigEntryDisabler
+
+    cf = access.cloudflare
+    await _save_options(hass, access.entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/open"]}})
+    await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
+    await _settle(hass)
+    gate_id = access.entry.data[DATA_GATE_APP_ID]
+    assert len(cf.apps) == 3
+
+    # a reload leaves the edge alone
+    assert await hass.config_entries.async_reload(access.entry.entry_id)
+    await hass.async_block_till_done()
+    assert gate_id in cf.apps
+
+    await hass.config_entries.async_set_disabled_by(access.entry.entry_id, ConfigEntryDisabler.USER)
+    await hass.async_block_till_done()
+    assert access.entry.state is ConfigEntryState.NOT_LOADED
+    assert cf.by_name(GATE) is None and cf.by_name(BYPASS) is None, "the hostname is open again"
+    assert [a["name"] for a in cf.apps.values()] == [f"ha-access: client {HOSTNAME} Google Home"]
+    assert access.entry.data[DATA_GATE_APP_ID] is None
+    assert access.entry.data[DATA_POLICY_AUD] is None
+
+    await hass.config_entries.async_set_disabled_by(access.entry.entry_id, None)
+    await hass.async_block_till_done()
+    assert access.entry.state is ConfigEntryState.LOADED
+    gate = cf.by_name(GATE)
+    assert gate is not None and gate["id"] != gate_id and cf.by_name(BYPASS) is not None
+    assert access.entry.data[DATA_POLICY_AUD] == gate["aud"]
+    assert gate["policies"][-1]["include"][0]["linked_app_token"], "the client rule is back"
+
+
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
     await _save_options(
