@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.auth.models import User
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util.dt import utcnow
@@ -660,6 +660,53 @@ async def test_disabling_the_entry_takes_the_gate_down_and_enabling_brings_it_ba
     assert gate is not None and gate["id"] != gate_id and cf.by_name(BYPASS) is not None
     assert access.entry.data[DATA_POLICY_AUD] == gate["aud"]
     assert gate["policies"][-1]["include"][0]["linked_app_token"], "the client rule is back"
+
+
+async def test_disabling_an_entry_in_error_still_takes_the_gate_down(
+    hass: HomeAssistant, access: Access
+) -> None:
+    """An entry that is not loaded is never unloaded; the state change is caught instead."""
+    from homeassistant.config_entries import ConfigEntryDisabler
+
+    cf = access.cloudflare
+    gate_id = access.entry.data[DATA_GATE_APP_ID]
+    cf.fail_status = 400
+    assert not await hass.config_entries.async_reload(access.entry.entry_id)
+    assert access.entry.state is ConfigEntryState.SETUP_ERROR
+    assert gate_id in cf.apps, "a failed setup changes nothing at the edge"
+
+    cf.fail_status = None
+    await hass.config_entries.async_set_disabled_by(access.entry.entry_id, ConfigEntryDisabler.USER)
+    await hass.async_block_till_done()
+    assert cf.by_name(GATE) is None
+    assert access.entry.data[DATA_GATE_APP_ID] is None
+
+
+async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    from homeassistant.config_entries import ConfigEntryDisabler
+    from homeassistant.setup import async_setup_component
+
+    cf = fake_cloudflare
+    entry = make_entry(**{CONF_GATE_ENABLED: True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    gate_id = entry.data[DATA_GATE_APP_ID]
+    # disabled while Home Assistant was shutting down: the gate stayed up
+    hass.set_state(CoreState.stopping)
+    await hass.config_entries.async_set_disabled_by(entry.entry_id, ConfigEntryDisabler.USER)
+    await hass.async_block_till_done()
+    assert gate_id in cf.apps and entry.data[DATA_GATE_APP_ID] == gate_id
+
+    # the next start finds the disabled entry and takes the gate down
+    hass.set_state(CoreState.running)
+    hass.data.pop(DOMAIN, None)
+    hass.config.components.remove(DOMAIN)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+    assert gate_id not in cf.apps and entry.data[DATA_GATE_APP_ID] is None
 
 
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:

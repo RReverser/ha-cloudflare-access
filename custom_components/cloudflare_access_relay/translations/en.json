@@ -56,7 +56,7 @@
             },
             "data_description": {
               "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
-              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nUse these for your own scripts on other machines."
+              "service_token_ids": "Service tokens that may pass the gate.\n\nCreate a token under [service tokens]({docs_service_tokens}) in Zero Trust and pick it here. Cloudflare shows the token's Client ID and Client Secret once, when it is created; a script sends both as request headers, together with its usual Home Assistant token."
             }
           }
         }
@@ -115,7 +115,7 @@
             },
             "data_description": {
               "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
-              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nUse these for your own scripts on other machines."
+              "service_token_ids": "Service tokens that may pass the gate.\n\nCreate a token under [service tokens]({docs_service_tokens}) in Zero Trust and pick it here. Cloudflare shows the token's Client ID and Client Secret once, when it is created; a script sends both as request headers, together with its usual Home Assistant token."
             }
           }
         }

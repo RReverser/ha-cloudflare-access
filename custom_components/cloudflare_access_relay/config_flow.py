@@ -40,6 +40,7 @@ from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
     CloudflareAuthError,
+    CloudflareError,
     CloudflareUnavailableError,
 )
 from .const import (
@@ -179,8 +180,30 @@ def _parse_people(
     return emails
 
 
-async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
+async def _service_token_choices(
+    api: CloudflareAccessApi, chosen: list[str]
+) -> list[SelectOptionDict]:
+    """List the account's service tokens by name; a chosen one that no longer exists keeps its id."""
+    tokens: list[dict[str, Any]] = []
+    try:
+        tokens = await api.list_service_tokens()
+    except CloudflareError as err:
+        _LOGGER.warning("Service tokens could not be listed, only the chosen ones show: %s", err)
+    choices = {str(t["id"]): str(t.get("name") or t["id"]) for t in tokens if t.get("id")}
+    for token_id in chosen:
+        choices.setdefault(token_id, token_id)
+    return [
+        {"value": v, "label": label} for v, label in sorted(choices.items(), key=lambda i: i[1])
+    ]
+
+
+async def _advanced_schema(
+    hass: HomeAssistant, defaults: Mapping[str, Any], api: CloudflareAccessApi
+) -> dict[Any, Any]:
     bypass = defaults.get(SECTION_BYPASS) or {}
+    token_ids = list(
+        bypass.get(CONF_SERVICE_TOKEN_IDS) or defaults.get(CONF_SERVICE_TOKEN_IDS) or []
+    )
     return {
         vol.Optional(
             CONF_SESSION_DURATION,
@@ -210,14 +233,14 @@ async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> 
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
-                    vol.Optional(
-                        CONF_SERVICE_TOKEN_IDS,
-                        default=list(
-                            bypass.get(CONF_SERVICE_TOKEN_IDS)
-                            or defaults.get(CONF_SERVICE_TOKEN_IDS)
-                            or []
-                        ),
-                    ): _MULTI_TEXT,
+                    vol.Optional(CONF_SERVICE_TOKEN_IDS, default=token_ids): SelectSelector(
+                        SelectSelectorConfig(
+                            options=await _service_token_choices(api, token_ids),
+                            multiple=True,
+                            custom_value=True,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
             {"collapsed": True},
@@ -468,7 +491,9 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
                 ): str,
                 **people,
-                **await _advanced_schema(self.hass, defaults),
+                **await _advanced_schema(
+                    self.hass, defaults, self._api(self._credential[CONF_ACCOUNT_ID])
+                ),
             }
         )
         return self.async_show_form(
@@ -526,7 +551,9 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     default=bool(current.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED)),
                 ): BooleanSelector(),
                 **people,
-                **await _advanced_schema(self.hass, current),
+                **await _advanced_schema(
+                    self.hass, current, await api_for(self.hass, self.config_entry)
+                ),
             }
         )
         return self.async_show_form(

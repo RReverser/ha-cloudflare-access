@@ -181,14 +181,15 @@ the consent page, as in this project's CI: start the flow with the source `api_t
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
 | People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
-| Bypass policies → Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
+| Bypass policies → Service tokens allowed through | empty | Access service tokens of the account, offered by name (the token id is stored); adds a Service Auth policy so a request carrying the token's `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers passes the gate. Home Assistant's own authentication still applies behind it. Used by the live tests |
 | Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
 Disabling the integration entry takes the gate and the bypass application down, so the
 hostname is as it was without the integration; enabling it provisions them again. Registered
 clients' applications stay through a disable, so their consoles keep their credentials. A
-reload or a restart of Home Assistant leaves the edge alone.
+reload or a restart of Home Assistant leaves the edge alone. An entry disabled while it is in
+an error state, or during a shutdown, is taken down at the next start.
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access → Reload), which is the way to repair

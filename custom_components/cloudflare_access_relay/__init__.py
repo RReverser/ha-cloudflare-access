@@ -19,6 +19,7 @@ from homeassistant.config_entries import (
     SIGNAL_CONFIG_ENTRY_CHANGED,
     ConfigEntry,
     ConfigEntryChange,
+    ConfigEntryState,
     ConfigSubentry,
 )
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -95,9 +96,41 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Offer the project's public OAuth client, when one is published."""
+    """Offer the project's public OAuth client; take the gate down for disabled entries.
+
+    Disabling a loaded entry unloads it, and the unload takes the gate down. An entry
+    that is disabled while it is not loaded (in an error state) is never unloaded, and
+    one disabled during a shutdown is unloaded too late to talk to Cloudflare; both are
+    caught here, on the state change and at the next start.
+    """
     async_register_project_client(hass)
+
+    def _take_down(entry: ConfigEntry) -> None:
+        hass.async_create_task(
+            _async_take_gate_down(hass, entry), f"{DOMAIN}: gate down for {entry.title}"
+        )
+
+    @callback
+    def _entry_changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if (
+            change is ConfigEntryChange.UPDATED
+            and entry.domain == DOMAIN
+            and entry.disabled_by is not None
+            and entry.state is ConfigEntryState.NOT_LOADED
+            and _has_gate(entry)
+            and not hass.is_stopping
+        ):
+            _take_down(entry)
+
+    async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.disabled_by is not None and _has_gate(entry):
+            _take_down(entry)
     return True
+
+
+def _has_gate(entry: ConfigEntry) -> bool:
+    return bool(entry.data.get(DATA_GATE_APP_ID) or entry.data.get(DATA_BYPASS_APP_ID))
 
 
 @dataclass
@@ -431,7 +464,7 @@ async def _async_take_gate_down(hass: HomeAssistant, entry: ConfigEntry) -> None
             err,
         )
         return
-    if entry.data.get(DATA_GATE_APP_ID) or entry.data.get(DATA_BYPASS_APP_ID):
+    if _has_gate(entry):
         _LOGGER.info("Integration disabled: the Access gate for %s is down", entry.title)
     hass.config_entries.async_update_entry(
         entry,
