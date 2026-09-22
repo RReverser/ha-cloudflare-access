@@ -40,6 +40,7 @@ from .cloudflare_api import (
     CloudflareAccessApi,
     CloudflareApiError,
     CloudflareAuthError,
+    CloudflareError,
     CloudflareUnavailableError,
 )
 from .const import (
@@ -398,10 +399,49 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
-    """Unload the entry; the middleware stays but no longer finds it."""
+    """Unload the entry; the middleware stays but no longer finds it.
+
+    A disabled entry also takes the gate down: with the integration off, the hostname
+    goes back to how it was without it, and the origin no longer recognises Access
+    identities anyway. Re-enabling provisions everything again. Registered clients'
+    applications stay, so their consoles keep their credentials. A plain unload (a
+    reload, a restart) leaves the edge alone.
+    """
     entries: dict[str, EntryData] = hass.data.get(DOMAIN) or {}
     entries.pop(entry.entry_id, None)
+    if entry.disabled_by is not None and not hass.is_stopping:
+        await _async_take_gate_down(hass, entry)
     return True
+
+
+async def _async_take_gate_down(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the gate and bypass applications and forget them."""
+    try:
+        api = await api_for(hass, entry)
+        await async_delete_apps(
+            api,
+            app_tag(entry),
+            entry.data.get(DATA_GATE_APP_ID),
+            entry.data.get(DATA_BYPASS_APP_ID),
+        )
+    except CloudflareError as err:
+        _LOGGER.warning(
+            "The integration is disabled but the Access gate could not be taken down; "
+            "it stays until the integration is enabled or removed: %s",
+            err,
+        )
+        return
+    if entry.data.get(DATA_GATE_APP_ID) or entry.data.get(DATA_BYPASS_APP_ID):
+        _LOGGER.info("Integration disabled: the Access gate for %s is down", entry.title)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            DATA_GATE_APP_ID: None,
+            DATA_BYPASS_APP_ID: None,
+            DATA_POLICY_AUD: None,
+        },
+    )
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
