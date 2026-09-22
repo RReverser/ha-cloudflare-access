@@ -186,11 +186,10 @@ async def test_service_token_policy(
 
 
 async def test_a_person_with_an_address_is_required(
-    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, hass_client: Any
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
 ) -> None:
     """Nobody could pass the gate: setup is refused until a person gets an address."""
-    from custom_components.cloudflare_access_relay import user_issue_id
-    from custom_components.cloudflare_access_relay.const import CONF_EMAIL
+    from custom_components.cloudflare_access_relay.const import CONF_LOGIN_EMAILS
 
     plain = await add_user(hass, "plain-username", name="Plain")
     await add_user(hass, "addon-api", name="Add-on API", person=False)
@@ -199,62 +198,58 @@ async def test_a_person_with_an_address_is_required(
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert fake_cloudflare.writes() == []
-    # one row per person whose username is not an address; users without a person get none
-    (row,) = entry.subentries.values()
-    assert row.title == "Plain: no address, cannot log in" and row.data[CONF_EMAIL] is None
-    registry = ir.async_get(hass)
-    issue = registry.async_get_issue(DOMAIN, user_issue_id(entry, plain.id))
-    assert issue is not None and issue.is_fixable
 
-    # the repair's fix flow asks for the address and fills the row in
-    client = await hass_client()
-    resp = await client.post(
-        "/api/repairs/issues/fix", json={"handler": DOMAIN, "issue_id": issue.issue_id}
+    # the options' People section takes the address, even while the entry is in error
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    people = flow["data_schema"].schema[
+        next(k for k in flow["data_schema"].schema if k == "people")
+    ]
+    assert [str(k) for k in people.schema.schema] == ["Plain"], (
+        "users without a person are not people"
     )
-    assert resp.status == 200, await resp.text()
-    flow = await resp.json()
-    resp = await client.post(f"/api/repairs/issues/fix/{flow['flow_id']}", json={"email": "nope"})
-    assert (await resp.json())["errors"] == {"email": "invalid_email"}
-    resp = await client.post(
-        f"/api/repairs/issues/fix/{flow['flow_id']}", json={"email": "plain@example.com"}
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {CONF_GATE_ENABLED: False, "people": {"Plain": "plain@example.com"}}
     )
-    assert (await resp.json())["type"] == "create_entry", await resp.text()
-    assert row.title == "Plain: plain@example.com"
-    assert registry.async_get_issue(DOMAIN, user_issue_id(entry, plain.id)) is None
-    assert await hass.config_entries.async_reload(entry.entry_id)
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    assert entry.options[CONF_LOGIN_EMAILS] == {plain.id: "plain@example.com"}
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.emails == ["plain@example.com"]
 
-    # enabling the gate lists the address; deleting the row clears it, the row comes
-    # back empty with its repair, the policy keeps its last subjects
+    # the gate lists the address; the form shows it again, and refuses to drop the last one
     await _save_options(hass, entry, **{CONF_GATE_ENABLED: True})
     assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
         {"email": {"email": "plain@example.com"}}
     ]
-    hass.config_entries.async_remove_subentry(entry, row.subentry_id)
-    await _settle(hass)
-    (row,) = entry.subentries.values()
-    assert row.title == "Plain: no address, cannot log in"
-    assert registry.async_get_issue(DOMAIN, user_issue_id(entry, plain.id)) is not None
-    assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
-        {"email": {"email": "plain@example.com"}}
-    ]
-    assert registry.async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is not None
     flow = await hass.config_entries.options.async_init(entry.entry_id)
+    people = flow["data_schema"].schema[
+        next(k for k in flow["data_schema"].schema if k == "people")
+    ]
+    assert next(k for k in people.schema.schema if k == "Plain").default() == "plain@example.com"
     result = await hass.config_entries.options.async_configure(
-        flow["flow_id"], {CONF_GATE_ENABLED: False}
+        flow["flow_id"], {CONF_GATE_ENABLED: True, "people": {"Plain": ""}}
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "no_allowed_users"}, "gate on or off, nobody could log in"
+    assert result["errors"] == {"base": "no_allowed_users"}
 
-    # a person whose username is an address is listed and needs nothing
-    eve = await add_user(hass, "eve@example.com", name="Eve")
-    await _settle(hass, 2)
-    assert sorted(s.title for s in entry.subentries.values()) == [
-        "Eve: eve@example.com",
-        "Plain: no address, cannot log in",
+    # a person whose username is an address is shown read-only and needs nothing; with
+    # them present, Plain's address can be dropped and the policy follows
+    await add_user(hass, "eve@example.com", name="Eve")
+    await _settle(hass)
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    people = flow["data_schema"].schema[
+        next(k for k in flow["data_schema"].schema if k == "people")
     ]
-    assert registry.async_get_issue(DOMAIN, user_issue_id(entry, eve.id)) is None
+    fields = {str(k): v for k, v in people.schema.schema.items()}
+    assert fields["Eve"].config["read_only"] is True
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {CONF_GATE_ENABLED: True, "people": {"Plain": ""}}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
+        {"email": {"email": "eve@example.com"}}
+    ]
 
 
 async def test_allow_policy_follows_the_users(hass: HomeAssistant, access: Access) -> None:

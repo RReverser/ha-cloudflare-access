@@ -49,6 +49,7 @@ from .const import (
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EMAIL,
     CONF_HOSTNAME,
+    CONF_LOGIN_EMAILS,
     CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_USER_ID,
@@ -62,7 +63,6 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     ISSUE_NO_ALLOWED_USERS,
-    ISSUE_USER_NO_ADDRESS,
     OPTION_APP_TAG,
     RECONCILE_COOLDOWN_SECONDS,
     SUBENTRY_TYPE_CLIENT,
@@ -86,7 +86,7 @@ from .provision import (
     owned,
     reconcile_app,
 )
-from .users import allowed_emails, login_emails, login_rows, row_title
+from .users import allowed_emails, login_emails
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,58 +119,22 @@ class EntryData:
 type AccessConfigEntry = ConfigEntry[EntryData]
 
 
-def user_issue_id(entry: ConfigEntry, user_id: str) -> str:
-    """Return the id of the fixable issue for a person without an address."""
-    return f"{ISSUE_USER_NO_ADDRESS}_{entry.entry_id}_{user_id}"
-
-
 @callback
-def async_sync_user_rows(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Keep one subentry per person, titled with the e-mail address Access sees.
-
-    The address is the login username when that is one, else the login e-mail the
-    integration keeps; a person with neither gets a fixable repair issue that asks for
-    one. Deleting a row clears a login e-mail. Users without a person are not people.
-    """
-    rows = {
-        sub.data[CONF_USER_ID]: sub
-        for sub in entry.subentries.values()
-        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
-    }
-    registry = ir.async_get(hass)
-    seen: set[str] = set()
-    for user, address in login_rows(hass, login_emails(entry)):
-        seen.add(user.id)
-        title = row_title(user, address)
-        if (sub := rows.get(user.id)) is None:
-            hass.config_entries.async_add_subentry(
-                entry,
-                ConfigSubentry(
-                    data=MappingProxyType({CONF_USER_ID: user.id, CONF_EMAIL: None}),
-                    subentry_type=SUBENTRY_TYPE_LOGIN_EMAIL,
-                    title=title,
-                    unique_id=user.id,
-                ),
-            )
-        elif sub.title != title:
-            hass.config_entries.async_update_subentry(entry, sub, title=title)
-        if address:
-            ir.async_delete_issue(hass, DOMAIN, user_issue_id(entry, user.id))
-        elif registry.async_get_issue(DOMAIN, user_issue_id(entry, user.id)) is None:
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                user_issue_id(entry, user.id),
-                is_fixable=True,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key=ISSUE_USER_NO_ADDRESS,
-                translation_placeholders={"user": user.name or user.id, **FORM_PLACEHOLDERS},
-                data={"entry_id": entry.entry_id, "user_id": user.id},
-            )
-    for user_id, sub in rows.items():
-        if user_id not in seen:
-            hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
-            ir.async_delete_issue(hass, DOMAIN, user_issue_id(entry, user_id))
+def _async_migrate_login_email_rows(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Move the login e-mails an earlier version kept as subentries into the options."""
+    rows = [
+        sub for sub in entry.subentries.values() if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL
+    ]
+    if not rows:
+        return
+    emails = dict(entry.options.get(CONF_LOGIN_EMAILS) or {})
+    for sub in rows:
+        if sub.data.get(CONF_EMAIL) and sub.data.get(CONF_USER_ID):
+            emails.setdefault(sub.data[CONF_USER_ID], sub.data[CONF_EMAIL])
+        hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_LOGIN_EMAILS: emails}
+    )
 
 
 @callback
@@ -306,7 +270,7 @@ async def _async_provision_entry(
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
     _async_migrate_redirect_uris(hass, entry)
-    async_sync_user_rows(hass, entry)
+    _async_migrate_login_email_rows(hass, entry)
     options = provisioning_options(entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
@@ -316,7 +280,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
         raise ConfigEntryError(
             "No Home Assistant user carries an e-mail address, so nobody could log in. "
-            "Fix a person's repair issue under Settings > Repairs to give them one, then reload"
+            "Give a person one under the integration's options, People"
         )
     try:
         api = await api_for(hass, entry)
@@ -363,7 +327,6 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     """
 
     async def _refresh() -> None:
-        async_sync_user_rows(hass, entry)
         emails = allowed_emails(hass, login_emails(entry))
         options = provisioning_options(entry)
         if (

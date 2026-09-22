@@ -37,11 +37,10 @@ Google Home or Alexa link, nor on a real phone.
 - At least one Home Assistant user with an e-mail address; the integration refuses to set up
   without one, since nobody could pass the gate. Home Assistant has no e-mail field and no
   login provider stores one (the OIDC integrations record only a subject id), so an address
-  is either the login username or a **login e-mail** the integration keeps itself. Every
-  person has a row on the integration page showing the address Access sees; a person with
-  none gets a repair issue whose fix asks for one, and deleting the row clears a login
-  e-mail. Setup asks for the first address when nobody has one. Users without a person (an
-  add-on's API user) are not people and get no row. Those addresses are the gate's allow
+  is either the login username or a **login e-mail** the integration keeps itself, entered
+  under *People* in the options (and at setup): every person is listed there, read-only when
+  their username is an address, with an e-mail field otherwise. Users without a person (an
+  add-on's API user) are not people and are not listed. Those addresses are the gate's allow
   policy, and the address of an admitted request picks the user.
 - Behind Cloudflare, configure `http.use_x_forwarded_for` with Cloudflare's ranges as
   `trusted_proxies`, as for any reverse proxy, so Home Assistant's IP ban sees clients and not
@@ -180,6 +179,7 @@ the consent page, as in this project's CI: start the flow with the source `api_t
 | Option | Default | Meaning |
 |---|---|---|
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
+| People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
 | Bypass policies → Service tokens allowed through | empty | Client IDs of Access service tokens; adds a Service Auth policy so their `CF-Access-Client-Id/Secret` headers pass the gate. Used by the live tests |
 | Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |

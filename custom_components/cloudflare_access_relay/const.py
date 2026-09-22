@@ -58,8 +58,6 @@ OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
 # Repair issues
 ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
-# One fixable issue per person without an e-mail address; the fix asks for one.
-ISSUE_USER_NO_ADDRESS: Final = "user_no_address"
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.
@@ -67,8 +65,12 @@ ISSUE_RESTART_REQUIRED: Final = "restart_required"
 HEADER_JWT: Final = "Cf-Access-Jwt-Assertion"
 HEADER_CF_RAY: Final = "CF-Ray"
 
-# Login e-mail subentries: the address Access knows a Home Assistant user by, for users
-# whose login username is not one. One per user.
+# Login e-mails: the address Access knows a person by, for people whose login username
+# is not one. Kept in the options by user id; the form shows a "People" section with a
+# field per person, named after them (an untranslated field is labelled with its name).
+CONF_LOGIN_EMAILS: Final = "login_emails"
+SECTION_PEOPLE: Final = "people"
+# Earlier versions kept the addresses as subentries of this type; they are migrated.
 SUBENTRY_TYPE_LOGIN_EMAIL: Final = "login_email"
 CONF_USER_ID: Final = "user_id"
 CONF_EMAIL: Final = "email"
