@@ -416,12 +416,12 @@ async def _lifecycle(
             (entry.entry_id, "oauth_client"), context={"source": "user"}
         )
         result = await hass.config_entries.subentries.async_configure(
+            flow["flow_id"], {"name": "Live client", "kind": "login"}
+        )
+        assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+        result = await hass.config_entries.subentries.async_configure(
             flow["flow_id"],
-            {
-                "name": "Live client",
-                "redirect_uris": ["https://example.com/oauth/callback"],
-                "needs_credentials": True,
-            },
+            {"redirect_uris": ["https://example.com/oauth/callback"], "needs_credentials": True},
         )
         assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
         shown = result["description_placeholders"]
@@ -429,7 +429,9 @@ async def _lifecycle(
         result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
         subentry = next(
-            s for s in entry.subentries.values() if s.subentry_type == "oauth_client"
+            s
+            for s in entry.subentries.values()
+            if s.subentry_type == "oauth_client" and s.data.get("kind") == "login"
         )  # user rows are subentries too
         client_app = await api.get_app(subentry.data["app_id"])
         assert client_app and client_app["type"] == "saas", client_app
