@@ -64,8 +64,10 @@ class Api:
         page = 1
         while True:
             batch = self.call("GET", path, params={**params, "page": page, "per_page": 50})
-            items.extend(batch)
-            if len(batch) < 50:
+            new = [b for b in batch if b not in items]
+            items.extend(new)
+            # a listing that ignores paging answers every page alike
+            if len(batch) < 50 or not new:
                 return items
             page += 1
 
@@ -240,13 +242,12 @@ def cmd_publish(api: Api, args: argparse.Namespace) -> None:
 
 def cmd_scopes(api: Api, args: argparse.Namespace) -> None:
     """Print the OAuth scope catalogue (id, name) for the Access and membership scopes."""
-    for scope in api.list_all("/oauth/scopes"):
+    scopes = api.list_all("/oauth/scopes")
+    for scope in scopes:
         if re.search(r"access|membership", f"{scope['id']} {scope['name']}", re.IGNORECASE):
             print(f"{scope['id']}: {scope['name']} [{scope.get('category')}]")
-    missing = [
-        s for s in CLIENT_SCOPES if not any(s == x["id"] for x in api.list_all("/oauth/scopes"))
-    ]
-    print(f"client scopes: {CLIENT_SCOPES}; unknown: {missing}")
+    missing = [s for s in CLIENT_SCOPES if not any(s == x["id"] for x in scopes)]
+    print(f"{len(scopes)} scopes; client scopes: {CLIENT_SCOPES}; unknown: {missing}")
 
 
 def cmd_show(api: Api, args: argparse.Namespace) -> None:
