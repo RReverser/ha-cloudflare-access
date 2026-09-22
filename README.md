@@ -64,9 +64,9 @@ requests too, so its API calls and its device webhook pass the gate.
 which validates its token at the edge on every request and forwards the request to Home
 Assistant with the same signed assertion a browser session gets. Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
-Every such client is added under *Add OAuth client* on the integration entry, with a name and
-the callback URL(s) the client's own side shows; the callback belongs to the client and cannot
-be derived. Two kinds, one mechanism behind both:
+Every such client is added under *Add client* on the integration entry as *a client that
+logs people in*, with a name and the callback URL(s) the client's own side shows; the
+callback belongs to the client and cannot be derived. Two kinds, one mechanism behind both:
 
 - **Clients that discover and register themselves** (MCP clients): the gate has *managed
   OAuth* enabled, which makes Access the OAuth server for the hostname. An unauthenticated
@@ -153,9 +153,9 @@ the scopes above) and add its client ID under Home Assistant's *Application cred
 then takes the project's client's place.
 
 An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
-Identity Providers, and Groups: Read**; **Access: Service Tokens: Read** for the options to
-offer service tokens by name) can replace the sign-in where a browser cannot reach the
-consent page, as in this project's CI: start the flow with the source `api_token`.
+Identity Providers, and Groups: Read**, and **Access: Service Tokens: Edit** for script
+clients) can replace the sign-in where a browser cannot reach the consent page, as in this
+project's CI: start the flow with the source `api_token`.
 
 ## Rollout
 
@@ -182,7 +182,6 @@ consent page, as in this project's CI: start the flow with the source `api_token
 | Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
 | People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
-| Bypass policies → Service tokens allowed through | empty | Access service tokens of the account, offered by name (the token id is stored); adds a Service Auth policy so a request carrying the token's `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers passes the gate. Home Assistant's own authentication still applies behind it. Used by the live tests |
 | Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Registered clients' applications included |
 
@@ -200,11 +199,25 @@ The integration does not set up, and the options cannot be saved, while no user 
 address: nobody could log in. If the last such user goes while the gate is on, the policy keeps
 its last subjects and a repair issue says so.
 
-OAuth clients are subentries of the integration entry (*Add OAuth client*); one whose console
-needs credentials stores its application id, client id and secret, and *Reconfigure* shows the credentials
-again. For Google Home account linking enter the client id, client secret, authorization URL
-and token URL shown; for an Alexa skill the same four under account linking, with credentials
-in the request body.
+Clients are subentries of the integration entry (*Add client*), of two kinds:
+
+- **A client that logs people in** (above); one whose console needs credentials stores its
+  application id, client id and secret, and *Reconfigure* shows the credentials again. For
+  Google Home account linking enter the client id, client secret, authorization URL and token
+  URL shown; for an Alexa skill the same four under account linking, with credentials in the
+  request body.
+- **A script or service with its own credentials**: a machine with nobody behind it, for
+  example a backup job or a monitoring probe on another host. The integration creates an
+  Access service token named `ha-access: client <host> <name>` and shows its Client ID and
+  secret, which the script sends as the `CF-Access-Client-Id` and `CF-Access-Client-Secret`
+  request headers together with its usual Home Assistant token; the gate's *Service Auth*
+  policy names the token. *Reconfigure* renames the token, extends its validity (Cloudflare's
+  default is a year) and shows the credentials again. A token deleted outside the integration
+  is replaced with new credentials at the next reload, and removing the client, or the
+  integration, deletes the token. Service tokens of an earlier version's option are turned
+  into script clients at setup. Both the sign-in and an API token need **Access: Service
+  Tokens: Edit** for this; a sign-in granted before the scope was added asks to sign in again
+  when a script client is added.
 
 ## Verified Cloudflare behaviour
 
@@ -238,7 +251,7 @@ it with a run-scoped Access service token, and deletes the Worker, the token and
 application it created; a CI step that always runs afterwards (`tests/live/cleanup.py`)
 deletes them by name even when the job was cancelled, and sweeps leftovers of older runs.
 CI reads the credentials from the secrets `CF_API_TOKEN` (the two
-Access permissions above plus **Access: Service Tokens: Edit** and **Workers Scripts: Edit**)
+Access permissions above plus **Workers Scripts: Edit**)
 and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 
 ## Security properties

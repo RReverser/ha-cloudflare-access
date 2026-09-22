@@ -46,6 +46,9 @@ from .cloudflare_api import (
 )
 from .const import (
     CLIENT_APP_NAME_FMT,
+    CLIENT_KIND_LOGIN,
+    CLIENT_KIND_SCRIPT,
+    CONF_CLIENT_KIND,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
@@ -54,6 +57,7 @@ from .const import (
     CONF_LOGIN_EMAILS,
     CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
+    CONF_SERVICE_TOKEN_IDS,
     CONF_USER_ID,
     DATA_BYPASS_APP_ID,
     DATA_CLIENT_APP_ID,
@@ -62,11 +66,14 @@ from .const import (
     DATA_GATE_APP_ID,
     DATA_POLICY_AUD,
     DATA_TEAM_DOMAIN,
+    DATA_TOKEN_EXPIRES_AT,
+    DATA_TOKEN_ID,
     DOMAIN,
     FORM_PLACEHOLDERS,
     ISSUE_NO_ALLOWED_USERS,
     OPTION_APP_TAG,
     RECONCILE_COOLDOWN_SECONDS,
+    SERVICE_TOKEN_NAME_FMT,
     SUBENTRY_TYPE_CLIENT,
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
@@ -76,9 +83,11 @@ from .options import (
     api_for,
     app_tag,
     client_redirect_uris,
+    client_subentries,
     credentialed_clients,
     effective_options,
     provisioning_options,
+    script_clients,
 )
 from .provision import (
     ProvisionResult,
@@ -146,8 +155,10 @@ class EntryData:
     policy_aud: str | None
     # The users' e-mail addresses on the allow policies, as last reconciled.
     emails: list[str]
-    # Registered clients' Access applications, by subentry id, as last reconciled.
+    # Login clients' Access applications, by subentry id, as last reconciled.
     client_apps: dict[str, str]
+    # Script clients' service tokens, by subentry id, as last reconciled.
+    script_tokens: dict[str, str]
 
 
 type AccessConfigEntry = ConfigEntry[EntryData]
@@ -200,6 +211,123 @@ def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> Non
         )
     options = {k: v for k, v in entry.options.items() if k != CONF_CLIENT_REDIRECT_URIS}
     hass.config_entries.async_update_entry(entry, options=options)
+
+
+@callback
+def _async_migrate_client_kinds(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Mark the clients an earlier version created, which were all login clients."""
+    for sub in client_subentries(entry).values():
+        if CONF_CLIENT_KIND not in sub.data:
+            hass.config_entries.async_update_subentry(
+                entry, sub, data={**sub.data, CONF_CLIENT_KIND: CLIENT_KIND_LOGIN}
+            )
+
+
+async def _async_migrate_service_token_option(
+    hass: HomeAssistant, entry: ConfigEntry, api: CloudflareAccessApi
+) -> None:
+    """Turn the former service token option into script clients, one per token.
+
+    The token's name and Client ID are read from Cloudflare; its secret was never known
+    to the integration, so the client's page shows it as unknown until the token is
+    replaced. A token that no longer exists is dropped.
+    """
+    if CONF_SERVICE_TOKEN_IDS not in entry.options:
+        return
+    known = {sub.data.get(DATA_TOKEN_ID) for sub in script_clients(entry).values()}
+    for token_id in entry.options.get(CONF_SERVICE_TOKEN_IDS) or []:
+        if token_id in known:
+            continue
+        token = await api.get_service_token(token_id)
+        if token is None:
+            _LOGGER.warning("Service token %s no longer exists; it is dropped", token_id)
+            continue
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=MappingProxyType(
+                    {
+                        CONF_CLIENT_NAME: token.get("name") or token_id,
+                        CONF_CLIENT_KIND: CLIENT_KIND_SCRIPT,
+                        DATA_TOKEN_ID: token_id,
+                        DATA_CLIENT_ID: token.get("client_id"),
+                        DATA_CLIENT_SECRET: None,
+                        DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
+                    }
+                ),
+                subentry_type=SUBENTRY_TYPE_CLIENT,
+                title=token.get("name") or token_id,
+                unique_id=None,
+            ),
+        )
+    options = {k: v for k, v in entry.options.items() if k != CONF_SERVICE_TOKEN_IDS}
+    hass.config_entries.async_update_entry(entry, options=options)
+
+
+def _token_name(options: dict[str, Any], name: str) -> str:
+    return SERVICE_TOKEN_NAME_FMT.format(hostname=options[CONF_HOSTNAME], name=name)
+
+
+async def _async_reconcile_scripts(
+    hass: HomeAssistant, entry: ConfigEntry, api: CloudflareAccessApi, options: dict[str, Any]
+) -> dict[str, str]:
+    """Bring the script clients' service tokens in line with the subentries.
+
+    A client whose token was deleted outside the integration gets a new one, with a
+    new Client ID and secret that the script must be given again (the subentry is
+    updated and a warning logged). Tokens of removed clients are deleted by
+    `_async_delete_stale_tokens`, once the gate no longer refers to them.
+    """
+    tokens: dict[str, str] = {}
+    for sid, sub in script_clients(entry).items():
+        token_id = sub.data.get(DATA_TOKEN_ID)
+        if token_id and await api.get_service_token(token_id) is not None:
+            tokens[sid] = token_id
+            continue
+        created = await api.create_service_token(_token_name(options, sub.data[CONF_CLIENT_NAME]))
+        _LOGGER.warning(
+            "The service token of client %s was gone and has been replaced; give the script "
+            "the new Client ID and secret shown in the client's settings",
+            sub.title,
+        )
+        tokens[sid] = created["id"]
+        hass.config_entries.async_update_subentry(
+            entry,
+            sub,
+            data={
+                **sub.data,
+                DATA_TOKEN_ID: created["id"],
+                DATA_CLIENT_ID: created.get("client_id"),
+                DATA_CLIENT_SECRET: created.get("client_secret"),
+                DATA_TOKEN_EXPIRES_AT: created.get("expires_at"),
+            },
+        )
+    return tokens
+
+
+async def _async_delete_stale_tokens(
+    api: CloudflareAccessApi,
+    options: dict[str, Any],
+    previous: dict[str, str] | None,
+    current: dict[str, str],
+) -> None:
+    """Delete the service tokens of removed script clients.
+
+    Runs after the gate was written without their rules, as Cloudflare refuses to
+    delete a token a policy still names. `previous` is None at setup, when a client
+    removed while Home Assistant was down is found by its token's name instead.
+    """
+    if previous is not None:
+        for sid, token_id in previous.items():
+            if sid not in current:
+                _LOGGER.info("Deleting the service token of removed client %s", sid)
+                await api.delete_service_token(token_id)
+        return
+    prefix = _token_name(options, "")
+    for token in await api.list_service_tokens():
+        if token.get("name", "").startswith(prefix) and token["id"] not in current.values():
+            _LOGGER.info("Deleting the orphaned service token %s", token["name"])
+            await api.delete_service_token(token["id"])
 
 
 async def _async_reconcile_clients(
@@ -305,6 +433,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     """Provision the Access applications and recognise Access identities at the origin."""
     _async_migrate_redirect_uris(hass, entry)
     _async_migrate_login_email_rows(hass, entry)
+    _async_migrate_client_kinds(hass, entry)
     options = provisioning_options(entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
@@ -318,10 +447,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         )
     try:
         api = await api_for(hass, entry)
+        await _async_migrate_service_token_option(hass, entry, api)
+        options = provisioning_options(entry)
         await api.ensure_tag(options[OPTION_APP_TAG])
         client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
+        script_tokens = await _async_reconcile_scripts(hass, entry, api, options)
+        options = provisioning_options(entry)  # a replaced token has a new id
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
+        await _async_delete_stale_tokens(api, options, None, script_tokens)
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except CloudflareUnavailableError as err:
@@ -344,6 +478,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         policy_aud=result.policy_aud,
         emails=emails,
         client_apps=client_apps,
+        script_tokens=script_tokens,
     )
     entry.runtime_data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
@@ -366,7 +501,9 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
         if (
             emails == data.emails
             and set(credentialed_clients(entry)) == set(data.client_apps)
+            and set(script_clients(entry)) == set(data.script_tokens)
             and options[CONF_CLIENT_REDIRECT_URIS] == data.options[CONF_CLIENT_REDIRECT_URIS]
+            and options[CONF_SERVICE_TOKEN_IDS] == data.options[CONF_SERVICE_TOKEN_IDS]
         ):
             return
         data.options = options
@@ -390,10 +527,16 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             client_apps = await _async_reconcile_clients(
                 hass, entry, data.api, data.options, emails
             )
+            script_tokens = await _async_reconcile_scripts(hass, entry, data.api, data.options)
+            data.options = provisioning_options(entry)
             await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
+            await _async_delete_stale_tokens(
+                data.api, data.options, data.script_tokens, script_tokens
+            )
             data.emails = emails
             data.client_apps = client_apps
+            data.script_tokens = script_tokens
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
                 "Could not update the Access applications; reload the integration to retry: %s",
@@ -491,5 +634,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             entry.data.get(DATA_BYPASS_APP_ID),
             *(sub.data.get(DATA_CLIENT_APP_ID) for sub in credentialed_clients(entry).values()),
         )
+        for sub in script_clients(entry).values():
+            if sub.data.get(DATA_TOKEN_ID):
+                await api.delete_service_token(sub.data[DATA_TOKEN_ID])
     except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
-        _LOGGER.warning("Could not delete the Access applications; remove them by hand: %s", err)
+        _LOGGER.warning("Could not delete the Access objects; remove them by hand: %s", err)

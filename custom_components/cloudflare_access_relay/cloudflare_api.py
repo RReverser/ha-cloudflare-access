@@ -253,14 +253,55 @@ class CloudflareAccessApi:
             raise _translate(err, "listing service tokens") from err
         return tokens
 
-    async def create_service_token(self, name: str, duration: str = "24h") -> dict[str, Any]:
-        """Create a service token; the result carries client_id and client_secret once."""
+    async def create_service_token(self, name: str, duration: str | None = None) -> dict[str, Any]:
+        """Create a service token; the result carries client_id and client_secret once.
+
+        Without a duration Cloudflare applies its default validity.
+        """
         try:
-            tok = await (await self._c()).zero_trust.access.service_tokens.create(
-                account_id=self._account_id, name=name, duration=duration
+            tokens = (await self._c()).zero_trust.access.service_tokens
+            tok = await (
+                tokens.create(account_id=self._account_id, name=name, duration=duration)
+                if duration
+                else tokens.create(account_id=self._account_id, name=name)
             )
         except Exception as err:
             raise _translate(err, "creating a service token") from err
+        result: dict[str, Any] = _dump(tok)
+        return result
+
+    async def get_service_token(self, token_id: str) -> dict[str, Any] | None:
+        """Return a service token (without its secret), or None when it is gone."""
+        try:
+            tok = await (await self._c()).zero_trust.access.service_tokens.get(
+                token_id, account_id=self._account_id
+            )
+        except NotFoundError:
+            return None
+        except Exception as err:
+            raise _translate(err, f"reading service token {token_id}") from err
+        result: dict[str, Any] | None = _dump(tok)
+        return result
+
+    async def rename_service_token(self, token_id: str, name: str) -> dict[str, Any]:
+        """Rename a service token."""
+        try:
+            tok = await (await self._c()).zero_trust.access.service_tokens.update(
+                token_id, account_id=self._account_id, name=name
+            )
+        except Exception as err:
+            raise _translate(err, f"renaming service token {token_id}") from err
+        result: dict[str, Any] = _dump(tok)
+        return result
+
+    async def refresh_service_token(self, token_id: str) -> dict[str, Any]:
+        """Extend a service token's validity by its duration; the secret stays."""
+        try:
+            tok = await (await self._c()).zero_trust.access.service_tokens.refresh(
+                token_id, account_id=self._account_id
+            )
+        except Exception as err:
+            raise _translate(err, f"refreshing service token {token_id}") from err
         result: dict[str, Any] = _dump(tok)
         return result
 

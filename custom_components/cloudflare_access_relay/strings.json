@@ -23,7 +23,7 @@
       },
       "api_token": {
         "title": "Cloudflare API token",
-        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Read' lets the options offer service tokens by name.",
+        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Edit' as well, for script clients.",
         "data": {
           "api_token": "API token",
           "account_id": "Account ID"
@@ -51,12 +51,10 @@
             "name": "Bypass policies",
             "description": "Bypass policies let some requests through without a login.\n\nThey are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
             "data": {
-              "extra_bypass_paths": "Paths open without Access",
-              "service_token_ids": "Service tokens allowed through"
+              "extra_bypass_paths": "Paths open without Access"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
-              "service_token_ids": "Service tokens that may pass the gate.\n\nCreate a token under [service tokens]({docs_service_tokens}) in Zero Trust and pick it here. Cloudflare shows the token's Client ID and Client Secret once, when it is created; a script sends both as request headers, together with its usual Home Assistant token."
+              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix."
             }
           }
         }
@@ -110,12 +108,10 @@
             "name": "Bypass policies",
             "description": "Bypass policies let some requests through without a login.\n\nThey are for callers that cannot hold the login cookie or a token, for example a third-party service posting to a webhook, or a media player fetching audio by URL. Nothing is open unless it is listed here.",
             "data": {
-              "extra_bypass_paths": "Paths open without Access",
-              "service_token_ids": "Service tokens allowed through"
+              "extra_bypass_paths": "Paths open without Access"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix.",
-              "service_token_ids": "Service tokens that may pass the gate.\n\nCreate a token under [service tokens]({docs_service_tokens}) in Zero Trust and pick it here. Cloudflare shows the token's Client ID and Client Secret once, when it is created; a script sends both as request headers, together with its usual Home Assistant token."
+              "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix."
             }
           }
         }
@@ -125,6 +121,14 @@
       "no_allowed_users": "No person has an e-mail address, so nobody could log in. Enter one under People.",
       "invalid_duration": "The session must last at least one minute.",
       "invalid_email": "Enter an e-mail address."
+    }
+  },
+  "selector": {
+    "client_kind": {
+      "options": {
+        "login": "A client that logs people in",
+        "script": "A script or service with its own credentials"
+      }
     }
   },
   "issues": {
@@ -139,27 +143,37 @@
   },
   "config_subentries": {
     "oauth_client": {
-      "entry_type": "OAuth client",
+      "entry_type": "Client",
       "initiate_flow": {
-        "user": "Add OAuth client"
+        "user": "Add client"
       },
       "step": {
         "user": {
-          "title": "OAuth client",
-          "description": "A client that logs people in through Access and then calls Home Assistant with the token.\n\nFor example an MCP client such as Claude, Google Home account linking, or the Alexa skill. Enter the callback URL that the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks for a client ID and secret, you get them on the next page from [an Access application created for it]({docs_saas_apps}).",
+          "title": "Client",
+          "description": "Something that calls Home Assistant through the gate.\n\nThe next page asks for what the chosen kind needs.",
           "data": {
             "name": "Name",
+            "kind": "What is it"
+          },
+          "data_description": {
+            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
+            "kind": "A client that logs people in is a voice assistant, an MCP client such as Claude, or any app with a login page; it gets [an Access login]({docs_saas_apps}) and the person's own token.\n\nA script or service runs with nobody behind it, for example a backup job or a monitoring probe on another machine; it gets [an Access service token]({docs_service_tokens}) to send with every request."
+          }
+        },
+        "login": {
+          "title": "Where the client returns to",
+          "description": "Enter the callback URL that the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks for a client ID and secret, you get them on the next page from [an Access application created for it]({docs_saas_apps}).",
+          "data": {
             "redirect_uris": "Redirect URLs",
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "name": "A name that identifies the client to you.\n\nFor example Claude or Google Home.",
             "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },
         "reconfigure": {
-          "title": "Change the OAuth client",
+          "title": "Change the client",
           "description": "Saving updates the client.\n\nFor a console client, its application and credentials are updated too.",
           "data": {
             "name": "Name",
@@ -167,20 +181,35 @@
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "name": "A name that identifies the client to you.\n\nFor example Claude or Google Home.",
+            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
             "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
+          }
+        },
+        "reconfigure_script": {
+          "title": "Change the script",
+          "description": "Saving renames the token and extends its validity.\n\nThe next page shows the credentials again.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script."
           }
         },
         "credentials": {
           "title": "Credentials for {name}",
           "description": "Enter these in the client's console.\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+        },
+        "script_credentials": {
+          "title": "Credentials for {name}",
+          "description": "Enter these in the script.\n\nIt sends them as the request headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`, together with its usual Home Assistant token ([how service tokens work]({docs_service_tokens})). They are valid until {expires_at}; reconfigure the client to extend that. The secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`"
         }
       },
       "error": {
         "required": "This field is required.",
         "invalid_redirect_uri": "Redirect URLs must start with https://.",
         "invalid_auth": "Cloudflare rejected the credential.",
+        "missing_service_tokens_edit": "The Cloudflare credential cannot manage service tokens. Sign in with Cloudflare again to grant that, or give the API token 'Access: Service Tokens: Edit'.",
         "cannot_connect": "Cloudflare could not be reached.",
         "api_error": "Cloudflare returned an error; see the log."
       },
