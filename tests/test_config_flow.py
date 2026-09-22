@@ -149,8 +149,10 @@ async def test_setup_asks_for_a_login_email_when_no_user_has_an_address(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     keys = {str(k) for k in result["data_schema"].schema}
     assert {CONF_USER_ID, CONF_EMAIL} <= keys
-    assert result["description_placeholders"]["allowed_users"] == "\n- (nobody yet)"
-    assert "**Plain** cannot log in" in result["description_placeholders"]["no_address_note"]
+    assert result["description_placeholders"]["allowed_users"] == (
+        "\n- **Plain**: no address, cannot log in"
+    )
+    assert "Add login e-mail" in result["description_placeholders"]["no_address_note"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "not-an-address"}
@@ -187,7 +189,9 @@ async def test_token_flow_creates_entry(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
     assert result["data_schema"]({})[CONF_HOSTNAME] == HOSTNAME, "external URL prefilled"
-    assert result["description_placeholders"]["allowed_users"] == f"\n- {ALICE}"
+    assert result["description_placeholders"]["allowed_users"] == (
+        f"\n- **Alice**: {ALICE} (login username)"
+    )
     assert result["description_placeholders"]["no_address_note"] == ""
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)

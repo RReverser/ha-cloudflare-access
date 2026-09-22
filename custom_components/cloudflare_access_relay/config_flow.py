@@ -74,7 +74,7 @@ from .const import (
 )
 from .options import api_for, effective_options, provisioning_options
 from .provision import desired_client_app
-from .users import allowed_emails, login_emails, users_without_address
+from .users import allowed_emails, login_emails, user_rows, users_without_address
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -219,19 +219,25 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
 
 
 def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
-    """Who gets in, as a bullet list, and a note about users who cannot, only when there are any."""
-    emails = allowed_emails(hass, extra)
-    users = "".join(f"\n- {e}" for e in emails) if emails else "\n- (nobody yet)"
-    without = users_without_address(hass, extra)
+    """One line per user: the address and where it comes from, or that they cannot log in."""
+    lines = []
+    missing = False
+    for user, address, source in user_rows(hass, extra):
+        name = user.name or user.id
+        if source == "username":
+            lines.append(f"\n- **{name}**: {address} (login username)")
+        elif source == "login_email":
+            lines.append(f"\n- **{name}**: {address} (login e-mail, kept on the integration page)")
+        else:
+            missing = True
+            lines.append(f"\n- **{name}**: no address, cannot log in")
     note = ""
-    if without:
-        names = ", ".join(f"**{u.name or u.id}**" for u in without)
+    if missing:
         note = (
-            f"\n\nWithout an address, {names} cannot log in: add one under "
-            f'"Add login e-mail", or [change the username]'
-            f"({FORM_PLACEHOLDERS['docs_change_username']}) to the address."
+            '\n\nGive a user an address under "Add login e-mail" on the integration page, '
+            f"or [change the username]({FORM_PLACEHOLDERS['docs_change_username']}) to it."
         )
-    return {"allowed_users": users, "no_address_note": note}
+    return {"allowed_users": "".join(lines) or "\n- (no users)", "no_address_note": note}
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
