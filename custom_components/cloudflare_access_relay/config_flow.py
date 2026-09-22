@@ -269,18 +269,16 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
 
 
 def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
-    """Return a note naming the people who cannot log in, only when there are any."""
+    """Return a note naming the people who cannot log in, only when there are any.
+
+    Shown inside the People section, which renders plain text: no markup here.
+    """
     missing = users_without_address(hass, extra)
     if not missing:
         return {"no_address_note": ""}
-    names = ", ".join(f"**{u.name or u.id}**" for u in missing)
-    return {
-        "no_address_note": (
-            f"\n\n{names}: no e-mail address, cannot log in. Fix the repair issue under "
-            "Settings \u2192 Repairs to add one, or [change the username]"
-            f"({FORM_PLACEHOLDERS['docs_change_username']}) to it."
-        )
-    }
+    names = ", ".join(u.name or u.id for u in missing)
+    verb = "has" if len(missing) == 1 else "have"
+    return {"no_address_note": f" {names} {verb} none and cannot log in until one is entered."}
 
 
 class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
