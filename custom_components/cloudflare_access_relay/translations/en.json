@@ -43,20 +43,20 @@
           "hostname": "The public hostname Cloudflare serves, e.g. ha.example.com.",
           "user_id": "The Home Assistant user who gets the address.",
           "email": "The address the identity provider knows this user by.",
-          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again; also the lifetime of a registered client's refresh token.",
-          "delete_objects_on_remove": "Off keeps the Access applications in Cloudflare after removal, e.g. to adopt them from another instance."
+          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again.\n\nAlso the lifetime of a registered client's refresh token.",
+          "delete_objects_on_remove": "Whether removing the integration also removes its Access applications.\n\nOff keeps them, e.g. to adopt them from another instance."
         },
         "sections": {
           "bypass": {
             "name": "Bypass policies",
-            "description": "Access lets a request through without a login where a [bypass policy]({docs_policies}) says so. That is for callers that can neither hold the login cookie nor carry a token: a third-party service posting to a webhook, a media player fetching a file by URL. Each open path becomes a bypass policy on an application of its own; an Access service token passes the gate through a Service Auth policy instead. Nothing is open unless listed here.",
+            "description": "Let some requests through without a login, as [Access bypass policies]({docs_policies}).\n\nFor callers that can hold neither the login cookie nor a token: a third-party service posting to a webhook, a media player fetching audio by URL. Nothing is open unless listed.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes anyone can reach without logging in. Pick from what this Home Assistant serves, or type one.",
-              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine."
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in.\n\nPick from what this Home Assistant serves, or type one.",
+              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nFor your own scripts on other machines."
             }
           }
         }
@@ -99,20 +99,20 @@
         },
         "data_description": {
           "gate_enabled": "On: every request needs an Access login, except the open paths.\nOff: nothing is gated.",
-          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again; also the lifetime of a registered client's refresh token.",
-          "delete_objects_on_remove": "Off keeps the Access applications in Cloudflare after removal, e.g. to adopt them from another instance."
+          "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again.\n\nAlso the lifetime of a registered client's refresh token.",
+          "delete_objects_on_remove": "Whether removing the integration also removes its Access applications.\n\nOff keeps them, e.g. to adopt them from another instance."
         },
         "sections": {
           "bypass": {
             "name": "Bypass policies",
-            "description": "Access lets a request through without a login where a [bypass policy]({docs_policies}) says so. That is for callers that can neither hold the login cookie nor carry a token: a third-party service posting to a webhook, a media player fetching a file by URL. Each open path becomes a bypass policy on an application of its own; an Access service token passes the gate through a Service Auth policy instead. Nothing is open unless listed here.",
+            "description": "Let some requests through without a login, as [Access bypass policies]({docs_policies}).\n\nFor callers that can hold neither the login cookie nor a token: a third-party service posting to a webhook, a media player fetching audio by URL. Nothing is open unless listed.",
             "data": {
               "extra_bypass_paths": "Paths open without Access",
               "service_token_ids": "Service tokens allowed through"
             },
             "data_description": {
-              "extra_bypass_paths": "Path prefixes anyone can reach without logging in. Pick from what this Home Assistant serves, or type one.",
-              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate, e.g. for a script on another machine."
+              "extra_bypass_paths": "Path prefixes anyone can reach without logging in.\n\nPick from what this Home Assistant serves, or type one.",
+              "service_token_ids": "Client IDs of [Access service tokens]({docs_service_tokens}) that may pass the gate.\n\nFor your own scripts on other machines."
             }
           }
         }
@@ -142,7 +142,7 @@
       "step": {
         "user": {
           "title": "Login e-mail",
-          "description": "The address Access knows a Home Assistant user by, for a user whose login username is not one (Home Assistant has no e-mail field).\n\nIt joins the gate's allow policy, and a login with it is served as this user.",
+          "description": "The e-mail address Access knows a Home Assistant user by.\n\nFor a user whose login username is not an address; Home Assistant has no e-mail field. It joins the allow policy, and a login with it is served as this user.",
           "data": {
             "user_id": "User",
             "email": "Login e-mail"
@@ -177,7 +177,7 @@
       "step": {
         "user": {
           "title": "OAuth client",
-          "description": "A client that logs people in through Access and calls Home Assistant with the token: an MCP client such as Claude, Google Home account linking, the Alexa skill.\n\nEnter the callback URL the client's side shows. A client that [registers itself]({docs_managed_oauth}) needs nothing more; one whose console asks for a client ID and secret gets them on the next page, from [an Access application of its own]({docs_saas_apps}). Who may link is the gate's own allow rule.",
+          "description": "A client that logs people in through Access and calls Home Assistant with the token.\n\nAn MCP client such as Claude, Google Home account linking, the Alexa skill. Enter the callback URL the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more; one whose console asks for a client ID and secret gets them on the next page, from [an Access application of its own]({docs_saas_apps}).",
           "data": {
             "name": "Name",
             "redirect_uris": "Redirect URLs",
