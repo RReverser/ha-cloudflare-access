@@ -420,7 +420,9 @@ async def _lifecycle(
         assert shown["client_id"] and shown["client_secret"], shown
         result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
-        subentry = next(iter(entry.subentries.values()))
+        subentry = next(
+            s for s in entry.subentries.values() if s.subentry_type == "oauth_client"
+        )  # user rows are subentries too
         client_app = await api.get_app(subentry.data["app_id"])
         assert client_app and client_app["type"] == "saas", client_app
         assert client_app["saas_app"]["client_id"] == shown["client_id"]
