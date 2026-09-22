@@ -139,9 +139,10 @@ and keeps everything else.
 Cloudflare's OAuth lets the integration ask for exactly the permissions it uses, on the
 consent page, instead of a token you assemble by hand: `access.write` (Access: Apps and
 Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
-Read), `memberships.read` (Memberships Read, to find the account you granted on the consent
-page, since the token itself does not say) and `offline_access` (a refresh token, so the
-sign-in lasts). The integration ships the
+Read), `access-service-token.write` (Access: Service Tokens Write, for script clients),
+`memberships.read` (Memberships Read, to find the account you granted on the consent page,
+since the token itself does not say) and `offline_access` (a refresh token, so the sign-in
+lasts). The integration ships the
 client ID of the project's public OAuth client (PKCE, no secret), so there is nothing to
 register. The token set is refreshed before every API call; when Cloudflare stops accepting
 it, the integration asks to sign in again.

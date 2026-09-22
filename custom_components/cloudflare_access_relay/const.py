@@ -51,6 +51,7 @@ OAUTH_TOKEN_URL: Final = "https://dash.cloudflare.com/oauth2/token"
 OAUTH_SCOPES: Final[tuple[str, ...]] = (
     "access.write",
     "access-acct.read",
+    "access-service-token.write",
     "memberships.read",
     "offline_access",
 )
