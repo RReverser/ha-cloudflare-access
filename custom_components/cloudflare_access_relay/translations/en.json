@@ -31,22 +31,22 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every user with an e-mail address, as listed on the integration page, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
+        "description": "The gate starts off; nothing changes at the edge until you switch it on in the options.\n\nWho gets in: every person below with an e-mail address, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
         "data": {
           "hostname": "Hostname",
-          "user_id": "User",
-          "email": "Login e-mail",
           "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
           "hostname": "The public hostname Cloudflare serves, e.g. ha.example.com.",
-          "user_id": "The Home Assistant user who gets the address.",
-          "email": "The address the identity provider knows this user by.",
           "session_duration": "How long an [Access session]({docs_session}) lasts before the person must log in again.\n\nAlso the lifetime of a registered client's refresh token.",
           "delete_objects_on_remove": "Whether removing the integration also removes its Access applications.\n\nOff keeps them, e.g. to adopt them from another instance."
         },
         "sections": {
+          "people": {
+            "name": "People",
+            "description": "The e-mail address Access knows each person by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out."
+          },
           "bypass": {
             "name": "Bypass policies",
             "description": "Let some requests through without a login: for callers that can hold neither the login cookie nor a token, such as a third-party service posting to a webhook or a media player fetching audio by URL. Nothing is open unless listed.",
@@ -74,8 +74,7 @@
       "invalid_hostname": "Enter a hostname such as ha.example.com.",
       "invalid_duration": "The session must last at least one minute.",
       "invalid_email": "Enter an e-mail address.",
-      "unknown_user": "Choose a user.",
-      "user_taken": "This user already has a login e-mail."
+      "no_allowed_users": "No person has an e-mail address, so nobody could log in. Give one under People."
     },
     "abort": {
       "already_configured": "This hostname is already configured.",
@@ -91,7 +90,7 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
-        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every user with an e-mail address, as listed on the integration page, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
+        "description": "Saving re-provisions the Access applications; reloading the integration does the same without a change.\n\nWho gets in: every person below with an e-mail address, through the [login methods of your Zero Trust organization]({docs_identity_providers}).{no_address_note}",
         "data": {
           "gate_enabled": "Gate the whole hostname",
           "session_duration": "Session duration",
@@ -103,6 +102,10 @@
           "delete_objects_on_remove": "Whether removing the integration also removes its Access applications.\n\nOff keeps them, e.g. to adopt them from another instance."
         },
         "sections": {
+          "people": {
+            "name": "People",
+            "description": "The e-mail address Access knows each person by. A person whose login username is an address is shown as is; type one for anyone else, or leave it empty to keep them out."
+          },
           "bypass": {
             "name": "Bypass policies",
             "description": "Let some requests through without a login: for callers that can hold neither the login cookie nor a token, such as a third-party service posting to a webhook or a media player fetching audio by URL. Nothing is open unless listed.",
@@ -119,8 +122,9 @@
       }
     },
     "error": {
-      "no_allowed_users": "No user has an e-mail address, so nobody could log in. Add a login e-mail first.",
-      "invalid_duration": "The session must last at least one minute."
+      "no_allowed_users": "No person has an e-mail address, so nobody could log in. Give one under People.",
+      "invalid_duration": "The session must last at least one minute.",
+      "invalid_email": "Enter an e-mail address."
     }
   },
   "issues": {
@@ -130,41 +134,10 @@
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
-      "description": "No active user has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a user one under \"Add login e-mail\" on the integration, or [change a username]({docs_change_username}) to the address."
-    },
-    "user_no_address": {
-      "title": "{user} cannot log in through Cloudflare Access",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Login e-mail for {user}",
-            "description": "Access admits people by e-mail address, and **{user}** has none.\n\nEnter the address their [login method]({docs_identity_providers}) knows them by. The other way is to [change their username]({docs_change_username}) to it.",
-            "data": {
-              "email": "Login e-mail"
-            }
-          }
-        },
-        "error": {
-          "invalid_email": "Enter an e-mail address."
-        },
-        "abort": {
-          "gone": "The integration entry or the user no longer exists."
-        }
-      }
+      "description": "No person has an e-mail address any more, so there is nobody to list in the gate's allow policy; it was left as it was.\n\nGive a person one under the integration's options, People, or [change a username]({docs_change_username}) to the address."
     }
   },
   "config_subentries": {
-    "login_email": {
-      "entry_type": "Login e-mail",
-      "initiate_flow": {
-        "user": "Add login e-mail"
-      },
-      "step": {
-        "user": {
-          "title": "Login e-mail"
-        }
-      }
-    },
     "oauth_client": {
       "entry_type": "OAuth client",
       "initiate_flow": {

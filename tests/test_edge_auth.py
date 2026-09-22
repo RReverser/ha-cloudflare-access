@@ -105,11 +105,7 @@ async def test_identity_is_the_login_username_without_configuration(
 async def test_a_login_email_names_a_user_whose_username_is_not_an_address(
     hass: HomeAssistant, access: Access, alice: User, hass_client_no_auth: Any
 ) -> None:
-    from custom_components.cloudflare_access_relay.const import (
-        CONF_EMAIL,
-        CONF_USER_ID,
-        SUBENTRY_TYPE_LOGIN_EMAIL,
-    )
+    from custom_components.cloudflare_access_relay.const import CONF_LOGIN_EMAILS
 
     from .conftest import add_user
 
@@ -120,17 +116,9 @@ async def test_a_login_email_names_a_user_whose_username_is_not_an_address(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("dave@example.com")})}
     )
     assert resp.status == 401, "no address yet"
-    from custom_components.cloudflare_access_relay import async_sync_user_rows
-
-    async_sync_user_rows(hass, access.entry)  # the row a new user gets on the integration page
-    (row,) = [
-        s
-        for s in access.entry.subentries.values()
-        if s.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL and s.data[CONF_USER_ID] == dave.id
-    ]
-    assert row.title == "Dave: no address, cannot log in"
-    hass.config_entries.async_update_subentry(
-        access.entry, row, data={CONF_USER_ID: dave.id, CONF_EMAIL: "Dave@example.com"}
+    hass.config_entries.async_update_entry(
+        access.entry,
+        options={**access.entry.options, CONF_LOGIN_EMAILS: {dave.id: "Dave@example.com"}},
     )
     resp = await client.get(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint("dave@example.com")})}

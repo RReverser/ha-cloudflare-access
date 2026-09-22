@@ -26,11 +26,10 @@ from custom_components.cloudflare_access_relay.config_flow import (
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
-    CONF_EMAIL,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_USER_ID,
+    CONF_LOGIN_EMAILS,
     DATA_TEAM_DOMAIN,
     DATA_TOKEN,
     DOMAIN,
@@ -38,7 +37,6 @@ from custom_components.cloudflare_access_relay.const import (
     OAUTH_CLIENT_ID,
     OAUTH_SCOPES,
     OAUTH_TOKEN_URL,
-    SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 
 from .conftest import ACCOUNT_ID, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwks, make_entry
@@ -138,36 +136,52 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
     ]
 
 
-async def test_setup_asks_for_a_login_email_when_no_user_has_an_address(
+async def test_setup_asks_for_the_people_addresses(
     hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
 ) -> None:
-    """Nobody could pass the gate otherwise, so the first address is part of setup."""
+    """A People section lists every person: read-only when the username is an address."""
     from .conftest import add_user
 
     plain = await add_user(hass, "plain-username", name="Plain")
+    await add_user(hass, "eve@example.com", name="Eve")
+    await add_user(hass, "addon-api", name="Add-on API", person=False)
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
-    keys = {str(k) for k in result["data_schema"].schema}
-    assert {CONF_USER_ID, CONF_EMAIL} <= keys
+    people = result["data_schema"].schema[
+        next(k for k in result["data_schema"].schema if k == "people")
+    ]
+    fields = {str(k): v for k, v in people.schema.schema.items()}
+    assert set(fields) == {"Plain", "Eve"}, "users without a person are not people"
+    assert fields["Eve"].config["read_only"] is True
+    assert next(k for k in people.schema.schema if k == "Eve").default() == "eve@example.com"
+    assert "read_only" not in fields["Plain"].config
     assert "**Plain**: no e-mail address" in result["description_placeholders"]["no_address_note"]
 
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "not-an-address"}
+        result["flow_id"], {**SETTINGS_INPUT, "people": {"Plain": "not-an-address"}}
     )
-    assert result["type"] is FlowResultType.FORM and result["errors"] == {
-        CONF_EMAIL: "invalid_email"
-    }
+    assert result["type"] is FlowResultType.FORM and result["errors"] == {"base": "invalid_email"}
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {**SETTINGS_INPUT, CONF_USER_ID: plain.id, CONF_EMAIL: "Plain@Example.com "},
+        result["flow_id"], {**SETTINGS_INPUT, "people": {"Plain": "Plain@Example.com "}}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     entry = result["result"]
-    (sub,) = [s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL]
-    assert sub.data == {CONF_USER_ID: plain.id, CONF_EMAIL: "Plain@Example.com"}
-    assert sub.title == "Plain: plain@example.com" and sub.unique_id == plain.id
+    assert entry.options[CONF_LOGIN_EMAILS] == {plain.id: "Plain@Example.com"}
     await hass.async_block_till_done()
-    assert entry.runtime_data.emails == ["plain@example.com"]
+    assert entry.runtime_data.emails == ["eve@example.com", "plain@example.com"]
+
+
+async def test_setup_refuses_when_nobody_could_log_in(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks
+) -> None:
+    from .conftest import add_user
+
+    await add_user(hass, "plain-username", name="Plain")
+    result = await _start(hass, "api_token")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "no_allowed_users"}
 
 
 async def _start(hass: HomeAssistant, source: str) -> dict[str, Any]:

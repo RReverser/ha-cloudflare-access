@@ -3,9 +3,9 @@
 A user is known to Access by an e-mail address. Home Assistant has no e-mail field;
 the only place it keeps one is the login username, when the user was created with the
 address as username (no login provider, core or third-party, stores an e-mail on the
-credential). For everyone else the integration keeps its own: a "login e-mail"
-subentry per user. The same values serve both directions: every address found feeds
-the Access allow policy, and a request's Access identity picks the user that carries it.
+credential). For everyone else the integration keeps its own login e-mail in the entry
+options. The same values serve both directions: every address found feeds the Access
+allow policy, and a request's Access identity picks the user that carries it.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from homeassistant.auth.models import User
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_EMAIL, CONF_USER_ID, SUBENTRY_TYPE_LOGIN_EMAIL
+from .const import CONF_LOGIN_EMAILS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,18 +32,9 @@ def _norm(value: str) -> str:
 
 @callback
 def login_emails(entry: ConfigEntry) -> dict[str, str]:
-    """Return the addresses the entry's login e-mail subentries give users, by user id."""
-    return {
-        sub.data[CONF_USER_ID]: _norm(sub.data[CONF_EMAIL])
-        for sub in entry.subentries.values()
-        if sub.subentry_type == SUBENTRY_TYPE_LOGIN_EMAIL and sub.data.get(CONF_EMAIL)
-    }
-
-
-def row_title(user: User, address: str | None) -> str:
-    """Return the title of a user's row on the integration page."""
-    name = user.name or user.id
-    return f"{name}: {address}" if address else f"{name}: no address, cannot log in"
+    """Return the login e-mails the entry keeps, by user id, case-folded."""
+    stored = entry.options.get(CONF_LOGIN_EMAILS) or {}
+    return {uid: _norm(email) for uid, email in stored.items() if email and "@" in email}
 
 
 def identity_values(user: User, extra: Mapping[str, str]) -> set[str]:
@@ -83,7 +74,7 @@ def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
 def person_users(hass: HomeAssistant) -> list[User]:
     """Return the users a person is linked to: the people who log in, by name.
 
-    Users without a person (an add-on's API user, say) are not people and get no row.
+    Users without a person (an add-on's API user, say) are not people and are not listed.
     """
     collections = hass.data.get("person") or ()
     ids = {
