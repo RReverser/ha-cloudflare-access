@@ -71,6 +71,8 @@ from .const import (
     DATA_TOKEN_ID,
     DOMAIN,
     FORM_PLACEHOLDERS,
+    HA_MCP_DOMAIN,
+    ISSUE_MCP_AUTH_CONFLICT,
     ISSUE_NO_ALLOWED_USERS,
     ISSUE_REVOKE_UNAVAILABLE,
     OPTION_APP_TAG,
@@ -85,6 +87,7 @@ from .edge_auth import async_install_middleware
 from .issues import issue_id
 from .jwks import JwksVerifier
 from .logins import LoginCoordinator, async_remove_login_history
+from .mcp import async_check_mcp_login_conflict
 from .options import (
     api_for,
     app_tag,
@@ -549,6 +552,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         logins=LoginCoordinator(hass, entry, api),
     )
     _async_set_watched_apps(data)
+    async_check_mcp_login_conflict(hass, entry, options)
     entry.runtime_data = data
     _async_track_changes(hass, entry, data)
     # The logs are a convenience: `async_refresh` rather than
@@ -585,6 +589,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     async def _refresh() -> None:
         emails = await allowed_emails(hass, login_emails(entry))
         options = {**provisioning_options(entry), OPTION_IDP_IDS: data.options[OPTION_IDP_IDS]}
+        async_check_mcp_login_conflict(hass, entry, options)
         if (
             emails == data.emails
             and set(credentialed_clients(entry)) == set(data.client_apps)
@@ -646,7 +651,8 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
 
     @callback
     def _entry_changed(_change: ConfigEntryChange, changed: ConfigEntry) -> None:
-        if changed.entry_id == entry.entry_id:
+        # this entry's subentries, and HA-MCP's login mode (see mcp.py)
+        if changed.entry_id == entry.entry_id or changed.domain == HA_MCP_DOMAIN:
             debouncer.async_schedule_call()
 
     @callback
@@ -714,7 +720,7 @@ async def _async_take_gate_down(hass: HomeAssistant, entry: ConfigEntry) -> None
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the Cloudflare objects when the entry is removed, if asked to."""
     await async_remove_login_history(hass, entry)
-    for key in (ISSUE_NO_ALLOWED_USERS, ISSUE_REVOKE_UNAVAILABLE):
+    for key in (ISSUE_NO_ALLOWED_USERS, ISSUE_REVOKE_UNAVAILABLE, ISSUE_MCP_AUTH_CONFLICT):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     options = effective_options(entry)
     if not options[CONF_DELETE_OBJECTS_ON_REMOVE]:

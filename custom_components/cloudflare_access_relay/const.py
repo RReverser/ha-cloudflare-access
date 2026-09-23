@@ -72,6 +72,17 @@ ISSUE_REVOKE_UNAVAILABLE: Final = "revoke_unavailable"
 ISSUE_DENIED_LOGIN: Final = "denied_login"
 # The credential cannot read the authentication logs.
 ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
+# HA-MCP demands its own login on a webhook the gate also guards.
+ISSUE_MCP_AUTH_CONFLICT: Final = "mcp_auth_conflict"
+
+# The HA-MCP custom component, whose login modes clash with the gate (README, "MCP servers
+# behind the gate"): its config entry domain, the option holding the mode and the value
+# that works behind the gate, and the entry data holding its webhook id.
+HA_MCP_DOMAIN: Final = "ha_mcp_tools"
+HA_MCP_OPT_AUTH: Final = "webhook_auth"
+HA_MCP_AUTH_NONE: Final = "none"
+HA_MCP_OPT_WEBHOOK_ENABLED: Final = "enable_webhook"
+HA_MCP_DATA_WEBHOOK_ID: Final = "webhook_id"
 
 # Login history: Access's authentication logs are polled (Cloudflare pushes nothing on the
 # Free plan, which keeps them for 24 hours) and turned into an event per login attempt,
