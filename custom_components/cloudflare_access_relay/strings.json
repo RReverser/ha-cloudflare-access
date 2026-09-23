@@ -31,7 +31,7 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "The gate starts off.\n\nNothing changes at the edge until you enable it in the options.",
+        "description": "Access starts disabled.\n\nNothing changes at the edge until you enable it in the options, so you can prepare the settings first.",
         "data": {
           "hostname": "Hostname",
           "session_duration": "Session duration",
@@ -90,12 +90,12 @@
         "title": "Cloudflare Access for {hostname}",
         "description": "Saving re-provisions the Access applications.\n\nReloading the integration does the same without a change.",
         "data": {
-          "gate_enabled": "Gate the whole hostname",
+          "gate_enabled": "Enabled",
           "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "gate_enabled": "Requires a login for every request to the hostname.\n\nThe login goes through the [login methods of your Zero Trust organization]({docs_identity_providers}); the bypass policies below stay open. Off: nothing is gated.",
+          "gate_enabled": "Requires a login for every request to the hostname.\n\nThe login goes through the [login methods of your Zero Trust organization]({docs_identity_providers}); the bypass policies below stay open. Off: nothing is gated, and the settings can be prepared first.",
           "session_duration": "How long an [Access session]({docs_session}) lasts before the person has to log in again.\n\nThe same time applies to a registered client's refresh token.",
           "delete_objects_on_remove": "When the integration is removed, its Access applications are removed too.\n\nTurn this off to keep them in Cloudflare, for example so another instance can adopt them."
         },

@@ -180,7 +180,7 @@ project's CI: start the flow with the source `api_token`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| Gate the whole hostname | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application |
+| Enabled | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application, and the other settings can be prepared first. The switch stays an option rather than the entry's own enable/disable because Home Assistant hides the options dialog of a disabled entry |
 | People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
 | Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
