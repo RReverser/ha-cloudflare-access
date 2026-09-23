@@ -292,15 +292,15 @@ which the live test shows present).
 
 Endpoint `/api/webhook/mcp_<secret>`, an ordinary Home Assistant webhook (no Home Assistant
 authentication of its own), stateless streamable HTTP. Its authentication mode is one of
-`none` (the secret URL is the credential; an auto-approving OAuth surface satisfies clients
-that insist on OAuth), `ha_auth` (the client logs in through Home Assistant's OAuth,
+`none`, its *secret URL* mode (the random webhook URL itself is the credential; an
+auto-approving OAuth surface satisfies clients that insist on OAuth), `ha_auth` (the client logs in through Home Assistant's OAuth,
 administrators only) or `legacy` (its own OAuth with a static client ID and secret). In
 every mode the component strips the caller's bearer and performs the calls with its own
 provisioned admin user, so its login is a gate, never per-person attribution.
 
 | Where | Setting | Why |
 |---|---|---|
-| HA-MCP | Authentication mode `none`; remote access via webhook on; "Network access" set to `127.0.0.1` | Behind the gate the person's Access login is the credential and the secret URL a second factor; `none` is the only mode whose OAuth surface does not fight Access's (see below); the loopback setting closes the LAN port 9584 that the component otherwise opens |
+| HA-MCP | Authentication mode `none` (the secret URL); remote access via webhook on; "Network access" set to `127.0.0.1` | Behind the gate the person's Access login is the credential and the secret URL a second factor; `none` is the only mode whose OAuth surface does not fight Access's (see below); the loopback setting closes the LAN port 9584 that the component otherwise opens |
 | Here | The MCP client added as *a client that logs people in*; the webhook **not** an open path | Same flow as above: the client registers and logs in at Access; the origin rule maps the identity (used for the login history and the events), and the component runs the call as its admin user as it always does |
 | Client | `https://<host>/api/webhook/mcp_<secret>`, OAuth client ID and secret left empty | |
 
@@ -316,7 +316,7 @@ Alternatives:
   one bearer, Access refuses the component's tokens and the component refuses Access's, so
   each side's login page blocks the other. The integration raises a repair issue when it
   sees this combination. Those modes are usable only with the webhook listed as an open
-  path, where the component's own login is then the only gate; `ha_auth` also still
+  path, where the component's own login is then the only gate and the issue is not raised; `ha_auth` also still
   requires the Home Assistant External URL to match and dynamic registration on the
   client's side, which claude.ai has failed at in the component's own issue tracker.
 - The component updates its server package from PyPI on its own every six hours, so its
