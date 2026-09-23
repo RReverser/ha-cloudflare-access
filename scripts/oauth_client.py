@@ -7,9 +7,9 @@ token, or locally with CF_API_TOKEN and CF_ACCOUNT_ID set:
     uv run python -m scripts.oauth_client publish --yes
     uv run python -m scripts.oauth_client show
 
-`grant` gives the token itself the two permissions the other commands need (OAuth
-Clients Write on the account, DNS Write on the client URL's zone); it needs the
-token to carry "API Tokens Edit". `create` creates the client, or updates it when
+`grant` gives the token itself the permissions the other commands need (OAuth
+Clients Write on the account, DNS Write on the client URL's zone) and the Access
+permissions the live tests exercise; it needs the token to carry "API Tokens Edit". `create` creates the client, or updates it when
 one with the same name exists. `verify` adds the domain-verification TXT record
 Cloudflare asks for and waits until Cloudflare has seen it. `publish` makes the
 client public, which is permanent; it needs --yes.
@@ -119,6 +119,19 @@ def cmd_grant(api: Api, args: argparse.Namespace) -> None:
         (
             permission_group(groups, r"^dns (write|edit)$", "com.cloudflare.api.account.zone"),
             {f"com.cloudflare.api.account.zone.{zone['id']}": "*"},
+        ),
+        # what the live tests need of the integration's own permissions
+        (
+            permission_group(
+                groups, r"^access: service tokens (write|edit)$", "com.cloudflare.api.account"
+            ),
+            account,
+        ),
+        (
+            permission_group(
+                groups, r"^access: organizations revoke$", "com.cloudflare.api.account"
+            ),
+            account,
         ),
     ]
     policies = list(token["policies"])
