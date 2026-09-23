@@ -26,12 +26,11 @@ Environment (GitHub Actions repository secrets):
 from __future__ import annotations
 
 import base64
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 import contextlib
 import json
 import os
 from pathlib import Path
-import socket
 import time
 from typing import Any
 
@@ -43,7 +42,6 @@ from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.setup import async_setup_component
 import httpx
 import pytest
-import pytest_socket
 
 from custom_components.cloudflare_access_relay.cloudflare_api import (
     CloudflareAccessApi,
@@ -64,7 +62,7 @@ from custom_components.cloudflare_access_relay.const import (
     HEADER_JWT,
 )
 
-from ..conftest import add_user
+from ..conftest import add_user, is_access_redirect
 from .cleanup import delete_run, run_names, sweep_stale
 
 pytestmark = pytest.mark.skipif(
@@ -87,19 +85,6 @@ def _claims(token: str) -> dict[str, Any]:
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
 
 
-def _is_access_redirect(resp: httpx.Response) -> bool:
-    """Access's answer to an unauthenticated request: a redirect to the login page for a
-    browser, or (managed OAuth) a 401 pointing a non-browser client at its OAuth metadata."""
-    if resp.status_code == 401 and "www-authenticate" in resp.headers:
-        return True
-    return resp.status_code in (
-        301,
-        302,
-        303,
-        307,
-    ) and ".cloudflareaccess.com/" in resp.headers.get("location", "")
-
-
 def _set_cookie_token(resp: httpx.Response) -> str | None:
     for value in resp.headers.get_list("set-cookie"):
         if value.startswith("CF_Authorization="):
@@ -119,24 +104,6 @@ async def _until(check: Callable[[], Any], what: str, timeout: float = EDGE_TIME
         time.sleep(3)
 
 
-@pytest.fixture
-def internet() -> Iterator[None]:
-    """Allow real network access for this test.
-
-    The Home Assistant test plugin blocks sockets, restricts connections to
-    127.0.0.1 and refuses DNS names on every test; `socket_enabled` alone only
-    lifts the first of those.
-    """
-    saved = (socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname)
-    pytest_socket._remove_restrictions()
-    socket.getaddrinfo = pytest_socket._true_getaddrinfo
-    socket.gethostbyname = pytest_socket._true_gethostbyname
-    try:
-        yield
-    finally:
-        socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname = saved
-
-
 class Edge:
     """HTTP client for the test host; no redirects followed, no cookies remembered."""
 
@@ -150,7 +117,7 @@ class Edge:
 
     async def wait_gate(self, path: str, gated: bool) -> None:
         async def check() -> bool:
-            return _is_access_redirect(await self.get(path)) == gated
+            return is_access_redirect(await self.get(path)) == gated
 
         assert await _until(check, path), (
             f"{path} did not become {'gated' if gated else 'open'} in {EDGE_TIMEOUT}s"
@@ -416,7 +383,7 @@ async def _lifecycle(
         ), "the credential must be able to revoke sessions"
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
-        assert _is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"
+        assert is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"
 
         print("== the gate is an OAuth server: Access serves the discovery document itself")
         resp = await edge.get("/.well-known/oauth-authorization-server")
@@ -531,7 +498,7 @@ async def _lifecycle(
         bypass_id = entry.data[DATA_BYPASS_APP_ID]
         assert bypass_id and await api.get_app(bypass_id)
         await edge.wait_gate("/api/open/echo", False)
-        assert _is_access_redirect(await edge.get("/api/echo")), "everything else stays gated"
+        assert is_access_redirect(await edge.get("/api/echo")), "everything else stays gated"
         await _save_options(hass, entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: []}})
         assert entry.data[DATA_BYPASS_APP_ID] is None and await api.get_app(bypass_id) is None
         await edge.wait_gate("/api/open/echo", True)
@@ -568,7 +535,7 @@ async def _lifecycle(
         await api.update_app(gate_id, {**drift, "enable_binding_cookie": True})
 
         async def refused() -> bool:
-            return _is_access_redirect(await edge.get("/api/echo", cookies=cookie))
+            return is_access_redirect(await edge.get("/api/echo", cookies=cookie))
 
         assert await _until(refused, "binding refusal"), (
             "with the binding cookie on, a copied token must be refused"
