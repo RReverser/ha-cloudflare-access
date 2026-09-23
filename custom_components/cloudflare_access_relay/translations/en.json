@@ -229,5 +229,12 @@
         "reconfigure_successful": "The client was updated."
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "last_login": {
+        "name": "{name} last login"
+      }
+    }
   }
 }

@@ -26,6 +26,7 @@ from custom_components.cloudflare_access_relay.const import (
     ISSUE_NO_ALLOWED_USERS,
     RECONCILE_COOLDOWN_SECONDS,
 )
+from custom_components.cloudflare_access_relay.issues import issue_id
 from custom_components.cloudflare_access_relay.provision import (
     app_matches,
     desired_bypass_app,
@@ -379,12 +380,18 @@ async def test_last_user_leaving_keeps_the_policy_and_raises_an_issue(
         {"email": {"email": ALICE}},
         {"email": {"email": BOB}},
     ], "an empty allow policy would lock everyone out: the last subjects stay"
-    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is not None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, ISSUE_NO_ALLOWED_USERS))
+        is not None
+    )
 
     await add_user(hass, ALICE)
     await _settle(hass)
     assert cf.by_name(GATE)["policies"][0]["include"] == [{"email": {"email": ALICE}}]
-    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_NO_ALLOWED_USERS) is None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, ISSUE_NO_ALLOWED_USERS))
+        is None
+    )
 
 
 def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
@@ -795,7 +802,7 @@ async def test_disabling_an_entry_in_error_still_takes_the_gate_down(
 
     cf.fail_status = None
     await hass.config_entries.async_set_disabled_by(access.entry.entry_id, ConfigEntryDisabler.USER)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     assert cf.by_name(GATE) is None
     assert access.entry.data[DATA_GATE_APP_ID] is None
 
@@ -810,12 +817,12 @@ async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
     entry = make_entry(**{CONF_GATE_ENABLED: True})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     gate_id = entry.data[DATA_GATE_APP_ID]
     # disabled while Home Assistant was shutting down: the gate stayed up
     hass.set_state(CoreState.stopping)
     await hass.config_entries.async_set_disabled_by(entry.entry_id, ConfigEntryDisabler.USER)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     assert gate_id in cf.apps and entry.data[DATA_GATE_APP_ID] == gate_id
 
     # the next start finds the disabled entry and takes the gate down
@@ -823,7 +830,7 @@ async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
     hass.data.pop(DOMAIN, None)
     hass.config.components.remove(DOMAIN)
     assert await async_setup_component(hass, DOMAIN, {})
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     assert gate_id not in cf.apps and entry.data[DATA_GATE_APP_ID] is None
 
 
@@ -843,7 +850,7 @@ async def test_the_gate_sends_people_straight_to_the_only_login_method(
     # a second login method brings Cloudflare's picker page back
     cf.identity_providers.append({"id": "google-1", "name": "Google", "type": "google"})
     assert await hass.config_entries.async_reload(access.entry.entry_id)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     gate = cf.by_name(GATE)
     assert gate["allowed_idps"] == [] and gate["auto_redirect_to_identity"] is False
 
@@ -866,7 +873,7 @@ async def test_a_person_who_loses_access_is_logged_out(
         {"email": {"email": "Gone@example.com"}}
     )
     assert await hass.config_entries.async_reload(access.entry.entry_id)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     assert cf.revoked == [BOB, "gone@example.com"]
 
     # a credential that cannot revoke leaves the session and raises a repair issue
@@ -876,14 +883,20 @@ async def test_a_person_who_loses_access_is_logged_out(
     await hass.auth.async_remove_user(carol)
     await _settle(hass)
     assert cf.revoked == [BOB, "gone@example.com"]
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable") is not None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"revoke_unavailable_{access.entry.entry_id}")
+        is not None
+    )
     cf.fail_status = cf.fail_predicate = None
     dave = await add_user(hass, "dave@example.com", name="Dave")
     await _settle(hass)
     await hass.auth.async_remove_user(dave)
     await _settle(hass)
     assert cf.revoked[-1] == "dave@example.com", "the next revocation clears the issue"
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable") is None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"revoke_unavailable_{access.entry.entry_id}")
+        is None
+    )
 
 
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:

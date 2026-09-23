@@ -82,8 +82,9 @@ from .const import (
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 from .edge_auth import async_install_middleware
+from .issues import issue_id
 from .jwks import JwksVerifier
-from .logins import LoginCoordinator
+from .logins import LoginCoordinator, async_remove_login_history
 from .options import (
     api_for,
     app_tag,
@@ -122,7 +123,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_register_project_client(hass)
 
     def _take_down(entry: ConfigEntry) -> None:
-        hass.async_create_task(
+        hass.async_create_background_task(
             _async_take_gate_down(hass, entry), f"{DOMAIN}: gate down for {entry.title}"
         )
 
@@ -408,7 +409,11 @@ async def _async_delete_stale_clients(
 
 
 async def _async_revoke_removed(
-    hass: HomeAssistant, api: CloudflareAccessApi, previous: set[str], current: Sequence[str]
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    api: CloudflareAccessApi,
+    previous: set[str],
+    current: Sequence[str],
 ) -> None:
     """End the Access sessions of the addresses that just left the allow list.
 
@@ -430,7 +435,7 @@ async def _async_revoke_removed(
             ir.async_create_issue(
                 hass,
                 DOMAIN,
-                ISSUE_REVOKE_UNAVAILABLE,
+                issue_id(entry, ISSUE_REVOKE_UNAVAILABLE),
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
                 translation_key=ISSUE_REVOKE_UNAVAILABLE,
@@ -438,7 +443,7 @@ async def _async_revoke_removed(
             return
         _LOGGER.info("Ended the Access sessions of %s, no longer on the allow list", email)
     if removed:
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_REVOKE_UNAVAILABLE)
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_REVOKE_UNAVAILABLE))
 
 
 async def _async_provision_entry(
@@ -472,16 +477,30 @@ async def _async_provision_entry(
     return result
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Bring an entry of an earlier version up to date (minor version 2).
+
+    Home Assistant calls this once, before setup, when the stored version is behind the
+    flow's. The service token option of an earlier version needs Cloudflare and is
+    migrated at setup instead, where a failure is retried like any other.
+    """
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        _async_migrate_redirect_uris(hass, entry)
+        _async_migrate_login_email_rows(hass, entry)
+        _async_migrate_client_kinds(hass, entry)
+        hass.config_entries.async_update_entry(entry, minor_version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
-    _async_migrate_redirect_uris(hass, entry)
-    _async_migrate_login_email_rows(hass, entry)
-    _async_migrate_client_kinds(hass, entry)
     options = provisioning_options(entry)
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
-    emails = allowed_emails(hass, login_emails(entry))
+    emails = await allowed_emails(hass, login_emails(entry))
     if not emails:
         # An allow policy without subjects is a lock-out (and Cloudflare refuses it).
         raise ConfigEntryError(
@@ -503,7 +522,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
         await _async_delete_stale_tokens(api, options, None, script_tokens)
-        await _async_revoke_removed(hass, api, previous, emails)
+        await _async_revoke_removed(hass, entry, api, previous, emails)
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except CloudflareUnavailableError as err:
@@ -531,9 +550,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     )
     _async_set_watched_apps(data)
     entry.runtime_data = data
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
     _async_track_changes(hass, entry, data)
-    # the logs are a convenience: a failure here is logged by the coordinator, not fatal
+    # The logs are a convenience: `async_refresh` rather than
+    # `async_config_entry_first_refresh`, so a failure is logged by the coordinator and
+    # does not fail the setup.
+    await data.logins.async_load()
     await data.logins.async_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -562,7 +583,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     """
 
     async def _refresh() -> None:
-        emails = allowed_emails(hass, login_emails(entry))
+        emails = await allowed_emails(hass, login_emails(entry))
         options = {**provisioning_options(entry), OPTION_IDP_IDS: data.options[OPTION_IDP_IDS]}
         if (
             emails == data.emails
@@ -581,14 +602,14 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             ir.async_create_issue(
                 hass,
                 DOMAIN,
-                ISSUE_NO_ALLOWED_USERS,
+                issue_id(entry, ISSUE_NO_ALLOWED_USERS),
                 is_fixable=False,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_NO_ALLOWED_USERS,
                 translation_placeholders=FORM_PLACEHOLDERS,
             )
             return
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_NO_ALLOWED_USERS)
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_NO_ALLOWED_USERS))
         try:
             client_apps = await _async_reconcile_clients(
                 hass, entry, data.api, data.options, emails
@@ -601,7 +622,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 data.api, data.options, data.script_tokens, script_tokens
             )
             await _async_revoke_removed(
-                hass, data.api, {e.strip().lower() for e in data.emails}, emails
+                hass, entry, data.api, {e.strip().lower() for e in data.emails}, emails
             )
             data.emails = emails
             data.client_apps = client_apps
@@ -654,8 +675,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> b
     applications stay, so their consoles keep their credentials. A plain unload (a
     reload, a restart) leaves the edge alone.
     """
-    entries: dict[str, EntryData] = hass.data.get(DOMAIN) or {}
-    entries.pop(entry.entry_id, None)
     await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if entry.disabled_by is not None and not hass.is_stopping:
         await _async_take_gate_down(hass, entry)
@@ -694,6 +713,9 @@ async def _async_take_gate_down(hass: HomeAssistant, entry: ConfigEntry) -> None
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the Cloudflare objects when the entry is removed, if asked to."""
+    await async_remove_login_history(hass, entry)
+    for key in (ISSUE_NO_ALLOWED_USERS, ISSUE_REVOKE_UNAVAILABLE):
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     options = effective_options(entry)
     if not options[CONF_DELETE_OBJECTS_ON_REMOVE]:
         return

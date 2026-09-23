@@ -372,9 +372,9 @@ async def _lifecycle(
             return bool(app) and app["policies"][0]["include"] == [{"email": {"email": EMAIL}}]
 
         assert await _until(second_gone, "allow policy without the removed user", 60)
-        assert not ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable"), (
-            "the credential must be able to revoke sessions"
-        )
+        assert not ir.async_get(hass).async_get_issue(
+            DOMAIN, f"revoke_unavailable_{entry.entry_id}"
+        ), "the credential must be able to revoke sessions"
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
         assert _is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"

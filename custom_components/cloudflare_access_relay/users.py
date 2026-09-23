@@ -14,8 +14,9 @@ from collections.abc import Mapping
 import logging
 
 from homeassistant.auth.models import User
+from homeassistant.components.person import ATTR_USER_ID
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 
 from .const import CONF_LOGIN_EMAILS
 
@@ -30,7 +31,6 @@ def _norm(value: str) -> str:
     return value.strip().casefold()
 
 
-@callback
 def login_emails(entry: ConfigEntry) -> dict[str, str]:
     """Return the login e-mails the entry keeps, by user id, case-folded."""
     stored = entry.options.get(CONF_LOGIN_EMAILS) or {}
@@ -53,8 +53,7 @@ def _allowed(user: User) -> bool:
     return user.is_active and not user.system_generated
 
 
-@callback
-def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
+async def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
     """Return the e-mail addresses of the users who may log in, sorted.
 
     A value that is not an e-mail address (a plain username) cannot be an Access
@@ -62,7 +61,7 @@ def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
     """
     found = {
         value
-        for user in hass.auth._store._users.values()
+        for user in await hass.auth.async_get_users()
         if _allowed(user)
         for value in identity_values(user, extra)
         if "@" in value
@@ -70,20 +69,18 @@ def allowed_emails(hass: HomeAssistant, extra: Mapping[str, str]) -> list[str]:
     return sorted(found)
 
 
-@callback
-def person_users(hass: HomeAssistant) -> list[User]:
+async def person_users(hass: HomeAssistant) -> list[User]:
     """Return the users a person is linked to: the people who log in, by name.
 
-    Users without a person (an add-on's API user, say) are not people and are not listed.
+    A person entity carries the id of its user as a state attribute. Users without a
+    person (an add-on's API user, say) are not people and are not listed.
     """
-    collections = hass.data.get("person") or ()
     ids = {
-        item.get("user_id")
-        for coll in collections[:2]
-        for item in coll.async_items()
-        if item.get("user_id")
+        state.attributes.get(ATTR_USER_ID)
+        for state in hass.states.async_all("person")
+        if state.attributes.get(ATTR_USER_ID)
     }
-    users = [u for u in hass.auth._store._users.values() if _allowed(u) and u.id in ids]
+    users = [u for u in await hass.auth.async_get_users() if _allowed(u) and u.id in ids]
     return sorted(users, key=lambda u: (u.name or "").casefold())
 
 
@@ -92,16 +89,18 @@ def username_address(user: User) -> str | None:
     return next((v for v in sorted(identity_values(user, {})) if "@" in v), None)
 
 
-@callback
-def login_rows(hass: HomeAssistant, extra: Mapping[str, str]) -> list[tuple[User, str | None]]:
+async def login_rows(
+    hass: HomeAssistant, extra: Mapping[str, str]
+) -> list[tuple[User, str | None]]:
     """Return every person with the address Access sees: the username, else the login e-mail."""
-    return [(user, username_address(user) or extra.get(user.id)) for user in person_users(hass)]
+    return [
+        (user, username_address(user) or extra.get(user.id)) for user in await person_users(hass)
+    ]
 
 
-@callback
-def users_without_address(hass: HomeAssistant, extra: Mapping[str, str]) -> list[User]:
+async def users_without_address(hass: HomeAssistant, extra: Mapping[str, str]) -> list[User]:
     """Return the people who carry no e-mail address at all, by name."""
-    return [user for user, address in login_rows(hass, extra) if not address]
+    return [user for user, address in await login_rows(hass, extra) if not address]
 
 
 async def async_find_user(

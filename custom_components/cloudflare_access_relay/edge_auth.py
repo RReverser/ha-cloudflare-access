@@ -23,10 +23,12 @@ from typing import TYPE_CHECKING
 
 from aiohttp import hdrs, web
 from aiohttp.typedefs import Handler
+from homeassistant.components.http.ban import process_wrong_login
 from homeassistant.components.http.const import KEY_HASS_USER
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.http import KEY_AUTHENTICATED, KEY_HASS
+from homeassistant.util.hass_dict import HassKey
 
 from .const import (
     CLAIM_COMMON_NAME,
@@ -45,7 +47,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_MIDDLEWARE_INSTALLED = f"{DOMAIN}_middleware"
+_MIDDLEWARE_INSTALLED: HassKey[bool] = HassKey(f"{DOMAIN}_middleware")
 
 
 @dataclass
@@ -57,15 +59,17 @@ class _Ctx:
 def entry_for(request: web.Request) -> _Ctx | None:
     """Pick the entry serving this request's host (or the only entry)."""
     hass: HomeAssistant = request.app[KEY_HASS]
-    entries: dict[str, EntryData] = hass.data.get(DOMAIN) or {}
-    if not entries:
+    loaded: list[EntryData] = [
+        entry.runtime_data for entry in hass.config_entries.async_loaded_entries(DOMAIN)
+    ]
+    if not loaded:
         return None
     host = request.host.split(":")[0].lower()
-    for data in entries.values():
+    for data in loaded:
         if data.options[CONF_HOSTNAME].lower() == host:
             return _Ctx(hass, data)
-    if len(entries) == 1:
-        return _Ctx(hass, next(iter(entries.values())))
+    if len(loaded) == 1:
+        return _Ctx(hass, loaded[0])
     return None
 
 
@@ -76,8 +80,10 @@ def _via_edge(request: web.Request, hostname: str) -> bool:
     return request.host.split(":")[0].lower() == hostname.lower()
 
 
-def _reject(request: web.Request, reason: str) -> web.Response:
+async def _reject(request: web.Request, reason: str) -> web.Response:
+    """Refuse the request; it counts as a failed login, like a bad bearer does in core."""
     _LOGGER.info("Rejected edge-authenticated bearer on %s: %s", request.path, reason)
+    await process_wrong_login(request)
     return web.json_response(
         {"message": f"Cloudflare Access identity not accepted: {reason}"},
         status=401,
@@ -102,17 +108,17 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
     try:
         claims = await ctx.data.verifier.verify(assertion, ctx.data.policy_aud)
     except JwtVerifyError as err:
-        return _reject(request, f"the Access assertion did not verify ({err})")
+        return await _reject(request, f"the Access assertion did not verify ({err})")
     # An identity-provider login is named by its e-mail address; a service token has no
     # address and is named by its common name.
     identity = claims.get(CLAIM_EMAIL) or claims.get(CLAIM_COMMON_NAME)
     if not isinstance(identity, str) or not identity:
-        return _reject(
+        return await _reject(
             request, f"the assertion carries neither {CLAIM_EMAIL} nor {CLAIM_COMMON_NAME}"
         )
     user = await async_find_user(ctx.hass, login_emails(ctx.data.entry), identity)
     if user is None:
-        return _reject(request, f"no single Home Assistant user is {identity!r}")
+        return await _reject(request, f"no single Home Assistant user is {identity!r}")
     request[KEY_AUTHENTICATED] = True
     request[KEY_HASS_USER] = user
     _LOGGER.debug("Authenticated %s as %s via the Access assertion", request.path, user.name)

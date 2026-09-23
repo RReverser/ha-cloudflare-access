@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
+
+from homeassistant.util.event_type import EventType
+from homeassistant.util.signal_type import SignalType
 
 DOMAIN: Final = "cloudflare_access_relay"
 VERSION: Final = "0.2.0"
@@ -74,11 +77,11 @@ ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
 # Free plan, which keeps them for 24 hours) and turned into an event per login attempt,
 # a "last login" sensor per person, and a repair issue for a denied login. The interval is
 # the coordinator's default; Home Assistant's system options can turn polling off.
-EVENT_LOGIN: Final = "cloudflare_access_login"
+EVENT_LOGIN = EventType[dict[str, Any]]("cloudflare_access_relay_login")
 LOG_POLL_INTERVAL_SECONDS: Final = 15 * 60
 LOGS_STORE_VERSION: Final = 1
 # Sent after a reconciliation, when the people may have changed.
-SIGNAL_PEOPLE_CHANGED: Final = "cloudflare_access_relay_people_changed"
+SIGNAL_PEOPLE_CHANGED = SignalType[str]("cloudflare_access_relay_people_changed")
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.
