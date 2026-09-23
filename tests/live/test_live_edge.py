@@ -17,7 +17,9 @@ any hostname; it is deleted at the end. Nothing has to exist beforehand.
 Environment (GitHub Actions repository secrets):
   CF_API_TOKEN    account token with "Access: Apps and Policies: Edit",
                   "Access: Organizations, Identity Providers, and Groups: Read",
-                  "Access: Service Tokens: Edit" and "Workers Scripts: Edit"
+                  "Access: Service Tokens: Edit", "Access: Organizations: Revoke"
+                  and "Workers Scripts: Edit" (the oauth-client workflow's `grant`
+                  command adds the Access ones to the token itself)
   CF_ACCOUNT_ID
 """
 
@@ -36,6 +38,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.setup import async_setup_component
 import httpx
@@ -350,6 +353,28 @@ async def _lifecycle(
             ]
 
         assert await _until(second_allowed, "allow policy follows the users", 60)
+        idps = await api.list_identity_providers()
+        gate_now = await api.get_app(gate_id)
+        assert gate_now is not None
+        assert gate_now.get("auto_redirect_to_identity", False) is (len(idps) == 1), (
+            "with one login method people skip the picker page"
+        )
+        assert gate_now.get("custom_deny_message", "").startswith(f"{host} is not open")
+
+        print("== a removed user leaves the allow policy and is logged out of Access")
+        second = next(
+            u for u in await hass.auth.async_get_users() if u.name == "second@example.com"
+        )
+        await hass.auth.async_remove_user(second)
+
+        async def second_gone() -> bool:
+            app = await api.get_app(gate_id)
+            return bool(app) and app["policies"][0]["include"] == [{"email": {"email": EMAIL}}]
+
+        assert await _until(second_gone, "allow policy without the removed user", 60)
+        assert not ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable"), (
+            "the credential must be able to revoke sessions"
+        )
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
         assert _is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"
