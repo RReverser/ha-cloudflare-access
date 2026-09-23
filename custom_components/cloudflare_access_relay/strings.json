@@ -23,7 +23,7 @@
       },
       "api_token": {
         "title": "Cloudflare API token",
-        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Edit' for script clients, and 'Access: Organizations: Revoke' to log removed people out.",
+        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Edit' for script clients, 'Access: Organizations: Revoke' to log removed people out, and 'Access: Audit Logs: Read' for the login history.",
         "data": {
           "api_token": "API token",
           "account_id": "Account ID"
@@ -143,6 +143,14 @@
     "revoke_unavailable": {
       "title": "Removed people keep their Cloudflare Access sessions",
       "description": "A person is no longer allowed in, but the Cloudflare credential cannot end their Access sessions, so they last until they expire.\n\nSign in with Cloudflare again to grant that, or give the API token 'Access: Organizations Revoke'."
+    },
+    "denied_login": {
+      "title": "{email} was refused by Cloudflare Access",
+      "description": "Someone logged in as {email} on {when} and was turned away from {app}, because the address is not on the allow list.\n\nIf this is a person of the household, give them the address under the integration's options, People. Otherwise nothing is needed; the attempt got nowhere."
+    },
+    "logs_unavailable": {
+      "title": "Cloudflare Access login history cannot be read",
+      "description": "The Cloudflare credential cannot read the authentication logs, so last-login times, login events and denied-login warnings are missing.\n\nSign in with Cloudflare again to grant that, or give the API token 'Access: Audit Logs Read'."
     }
   },
   "config_subentries": {

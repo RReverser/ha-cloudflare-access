@@ -23,7 +23,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigSubentry,
 )
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -33,7 +33,7 @@ from homeassistant.exceptions import (
 from homeassistant.helpers import issue_registry as ir
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 
@@ -77,11 +77,13 @@ from .const import (
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
     SERVICE_TOKEN_NAME_FMT,
+    SIGNAL_PEOPLE_CHANGED,
     SUBENTRY_TYPE_CLIENT,
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
 from .edge_auth import async_install_middleware
 from .jwks import JwksVerifier
+from .logins import LoginCoordinator
 from .options import (
     api_for,
     app_tag,
@@ -164,6 +166,8 @@ class EntryData:
     client_apps: dict[str, str]
     # Script clients' service tokens, by subentry id, as last reconciled.
     script_tokens: dict[str, str]
+    # The login history coordinator.
+    logins: LoginCoordinator
 
 
 type AccessConfigEntry = ConfigEntry[EntryData]
@@ -523,11 +527,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         emails=emails,
         client_apps=client_apps,
         script_tokens=script_tokens,
+        logins=LoginCoordinator(hass, entry, api),
     )
+    _async_set_watched_apps(data)
     entry.runtime_data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
     _async_track_changes(hass, entry, data)
+    # the logs are a convenience: a failure here is logged by the coordinator, not fatal
+    await data.logins.async_refresh()
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+PLATFORMS = [Platform.SENSOR]
+
+
+@callback
+def _async_set_watched_apps(data: EntryData) -> None:
+    """Tell the login watcher which applications are this entry's."""
+    data.logins.app_ids = {
+        app_id
+        for app_id in (data.entry.data.get(DATA_GATE_APP_ID), *data.client_apps.values())
+        if app_id
+    }
 
 
 @callback
@@ -584,6 +606,8 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             data.emails = emails
             data.client_apps = client_apps
             data.script_tokens = script_tokens
+            _async_set_watched_apps(data)
+            async_dispatcher_send(hass, SIGNAL_PEOPLE_CHANGED, entry.entry_id)
         except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
             _LOGGER.warning(
                 "Could not update the Access applications; reload the integration to retry: %s",
@@ -632,6 +656,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> b
     """
     entries: dict[str, EntryData] = hass.data.get(DOMAIN) or {}
     entries.pop(entry.entry_id, None)
+    await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if entry.disabled_by is not None and not hass.is_stopping:
         await _async_take_gate_down(hass, entry)
     return True

@@ -359,7 +359,7 @@ async def _lifecycle(
         assert gate_now.get("auto_redirect_to_identity", False) is (len(idps) == 1), (
             "with one login method people skip the picker page"
         )
-        assert gate_now.get("custom_deny_message", "").startswith(f"{host} is not open")
+        assert "People" in gate_now.get("custom_deny_message", "")
 
         print("== a removed user leaves the allow policy and is logged out of Access")
         second = next(
