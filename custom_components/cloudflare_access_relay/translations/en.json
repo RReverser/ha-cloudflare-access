@@ -154,7 +154,7 @@
     },
     "mcp_auth_conflict": {
       "title": "HA-MCP's login mode does not work behind Cloudflare Access",
-      "description": "HA-MCP is set to the '{mode}' mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL ('none'): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate."
+      "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL (none): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate."
     }
   },
   "config_subentries": {
