@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import AccessConfigEntry
-from .const import CONF_HOSTNAME, DOMAIN, SIGNAL_PEOPLE_CHANGED
+from .const import DOMAIN, SIGNAL_PEOPLE_CHANGED
 from .logins import LoginCoordinator
 from .users import identity_values, login_emails, person_users
 
@@ -84,7 +84,7 @@ class LastLoginSensor(CoordinatorEntity[LoginCoordinator], SensorEntity):
         self._attr_translation_placeholders = {"name": user.name or user.id}
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name=entry.options.get(CONF_HOSTNAME) or entry.title,
+            name=entry.title,
             manufacturer="Cloudflare",
             model="Access",
             entry_type=DeviceEntryType.SERVICE,

@@ -23,7 +23,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigSubentry,
 )
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -35,6 +35,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.typing import ConfigType
 
 from .application_credentials import async_register_project_client
@@ -74,6 +75,7 @@ from .const import (
     HA_MCP_DOMAIN,
     ISSUE_MCP_AUTH_CONFLICT,
     ISSUE_NO_ALLOWED_USERS,
+    ISSUE_NO_EXTERNAL_URL,
     ISSUE_REVOKE_UNAVAILABLE,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
@@ -294,8 +296,11 @@ async def _async_reconcile_scripts(
     tokens: dict[str, str] = {}
     for sid, sub in script_clients(entry).items():
         token_id = sub.data.get(DATA_TOKEN_ID)
-        if token_id and await api.get_service_token(token_id) is not None:
+        if token_id and (token := await api.get_service_token(token_id)) is not None:
             tokens[sid] = token_id
+            wanted = _token_name(options, sub.data[CONF_CLIENT_NAME])
+            if token.get("name") != wanted:  # the hostname or the client's name changed
+                await api.rename_service_token(token_id, wanted)
             continue
         created = await api.create_service_token(_token_name(options, sub.data[CONF_CLIENT_NAME]))
         _LOGGER.warning(
@@ -494,12 +499,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _async_migrate_login_email_rows(hass, entry)
         _async_migrate_client_kinds(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=2)
+    if entry.minor_version < 3:
+        # the hostname is Home Assistant's External URL now, not an option
+        options = {k: v for k, v in entry.options.items() if k != CONF_HOSTNAME}
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=3)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
-    options = provisioning_options(entry)
+    try:
+        options = provisioning_options(hass, entry)
+    except NoURLAvailableError as err:
+        raise ConfigEntryError(
+            "Home Assistant has no External URL, so there is no hostname to guard. Set it "
+            "under Settings, System, Network"
+        ) from err
+    ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_NO_EXTERNAL_URL))
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
@@ -513,7 +529,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     try:
         api = await api_for(hass, entry)
         await _async_migrate_service_token_option(hass, entry, api)
-        options = await async_provisioning_options(entry, api)
+        options = await async_provisioning_options(hass, entry, api)
         await api.ensure_tag(options[OPTION_APP_TAG])
         # who the gate admitted before this run: anyone dropped since is logged out below
         previous = allowed_emails_of(
@@ -521,7 +537,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         )
         client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
         script_tokens = await _async_reconcile_scripts(hass, entry, api, options)
-        options = await async_provisioning_options(entry, api)  # a replaced token has a new id
+        options = await async_provisioning_options(
+            hass, entry, api
+        )  # a replaced token has a new id
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
         await _async_delete_stale_tokens(api, options, None, script_tokens)
@@ -588,10 +606,29 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
 
     async def _refresh() -> None:
         emails = await allowed_emails(hass, login_emails(entry))
-        options = {**provisioning_options(entry), OPTION_IDP_IDS: data.options[OPTION_IDP_IDS]}
+        try:
+            options = {
+                **provisioning_options(hass, entry),
+                OPTION_IDP_IDS: data.options[OPTION_IDP_IDS],
+            }
+        except NoURLAvailableError:
+            # nothing to guard any more; the applications stay as they are until it is back
+            _LOGGER.warning("Home Assistant's External URL is gone; the Access gate stays as it is")
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id(entry, ISSUE_NO_EXTERNAL_URL),
+                is_fixable=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key=ISSUE_NO_EXTERNAL_URL,
+                translation_placeholders=FORM_PLACEHOLDERS,
+            )
+            return
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_NO_EXTERNAL_URL))
         async_check_mcp_login_conflict(hass, entry, options)
         if (
             emails == data.emails
+            and options[CONF_HOSTNAME] == data.options[CONF_HOSTNAME]
             and set(credentialed_clients(entry)) == set(data.client_apps)
             and set(script_clients(entry)) == set(data.script_tokens)
             and options[CONF_CLIENT_REDIRECT_URIS] == data.options[CONF_CLIENT_REDIRECT_URIS]
@@ -620,7 +657,12 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 hass, entry, data.api, data.options, emails
             )
             script_tokens = await _async_reconcile_scripts(hass, entry, data.api, data.options)
-            data.options = await async_provisioning_options(entry, data.api)
+            data.options = await async_provisioning_options(hass, entry, data.api)
+            if entry.title != data.options[CONF_HOSTNAME]:
+                # the External URL changed: the applications were renamed above; follow it
+                hass.config_entries.async_update_entry(
+                    entry, title=data.options[CONF_HOSTNAME], unique_id=data.options[CONF_HOSTNAME]
+                )
             await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
             await _async_delete_stale_tokens(
@@ -669,6 +711,8 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     )
     for event in (EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED):
         entry.async_on_unload(hass.bus.async_listen(event, _schedule))
+    # the External URL is the hostname: follow a change of it
+    entry.async_on_unload(hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, _schedule))
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
 
 
@@ -720,7 +764,12 @@ async def _async_take_gate_down(hass: HomeAssistant, entry: ConfigEntry) -> None
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the Cloudflare objects when the entry is removed, if asked to."""
     await async_remove_login_history(hass, entry)
-    for key in (ISSUE_NO_ALLOWED_USERS, ISSUE_REVOKE_UNAVAILABLE, ISSUE_MCP_AUTH_CONFLICT):
+    for key in (
+        ISSUE_NO_ALLOWED_USERS,
+        ISSUE_REVOKE_UNAVAILABLE,
+        ISSUE_MCP_AUTH_CONFLICT,
+        ISSUE_NO_EXTERNAL_URL,
+    ):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     options = effective_options(entry)
     if not options[CONF_DELETE_OBJECTS_ON_REMOVE]:

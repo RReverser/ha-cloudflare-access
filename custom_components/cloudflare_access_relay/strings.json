@@ -31,14 +31,12 @@
       },
       "settings": {
         "title": "Hostname and options",
-        "description": "Access starts disabled.\n\nNothing changes at the edge until you enable it in the options, so you can prepare the settings first.",
+        "description": "Cloudflare Access will guard {hostname}, the hostname of your External URL.\n\nNothing changes at the edge until you enable it in the options, so you can prepare the settings first.",
         "data": {
-          "hostname": "Hostname",
           "session_duration": "Session duration",
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "hostname": "The public hostname Cloudflare serves, e.g. ha.example.com.",
           "session_duration": "How long an [Access session]({docs_session}) lasts before the person has to log in again.\n\nThe same time applies to a registered client's refresh token.",
           "delete_objects_on_remove": "When the integration is removed, its Access applications are removed too.\n\nTurn this off to keep them in Cloudflare, for example so another instance can adopt them."
         },
@@ -69,7 +67,6 @@
       "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
-      "invalid_hostname": "Enter a hostname such as ha.example.com.",
       "invalid_duration": "The session must last at least one minute.",
       "invalid_email": "Enter an e-mail address.",
       "no_allowed_users": "No person has an e-mail address, so nobody could log in. Enter one under People."
@@ -81,7 +78,8 @@
       "missing_org_read": "The credential cannot read the Zero Trust organization (the team domain). It needs 'Access: Organizations, Identity Providers, and Groups: Read'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log.",
-      "no_accounts": "The sign-in reaches no Cloudflare account with a Zero Trust organization.\n\nSelect the account on Cloudflare's consent page, and set up Zero Trust in it first."
+      "no_accounts": "The sign-in reaches no Cloudflare account with a Zero Trust organization.\n\nSelect the account on Cloudflare's consent page, and set up Zero Trust in it first.",
+      "no_external_url": "Home Assistant has no External URL, so there is no hostname to guard. Set it under [Settings, System, Network]({docs_external_url}), then add the integration again."
     }
   },
   "options": {
@@ -155,6 +153,10 @@
     "mcp_auth_conflict": {
       "title": "HA-MCP's login mode does not work behind Cloudflare Access",
       "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL (none): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate."
+    },
+    "no_external_url": {
+      "title": "Home Assistant's External URL is gone",
+      "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more.\n\nThe applications stay as they were. Set the External URL again under [Settings, System, Network]({docs_external_url}); the gate follows it."
     }
   },
   "config_subentries": {

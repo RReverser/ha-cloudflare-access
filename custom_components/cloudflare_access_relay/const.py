@@ -20,7 +20,8 @@ DATA_POLICY_AUD: Final = "policy_aud"
 DATA_GATE_APP_ID: Final = "gate_app_id"
 DATA_BYPASS_APP_ID: Final = "bypass_app_id"
 
-# Options
+# Options. The hostname is not an option: it is Home Assistant's External URL, read at
+# provisioning time (`CONF_HOSTNAME` is the provisioning key; earlier versions stored it).
 CONF_HOSTNAME: Final = "hostname"
 CONF_GATE_ENABLED: Final = "gate_enabled"
 CONF_SESSION_DURATION: Final = "session_duration"
@@ -74,6 +75,8 @@ ISSUE_DENIED_LOGIN: Final = "denied_login"
 ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
 # HA-MCP demands its own login on a webhook the gate also guards.
 ISSUE_MCP_AUTH_CONFLICT: Final = "mcp_auth_conflict"
+# Home Assistant's External URL was removed after setup.
+ISSUE_NO_EXTERNAL_URL: Final = "no_external_url"
 
 # The HA-MCP custom component, whose login modes clash with the gate (README, "MCP servers
 # behind the gate"): its config entry domain, the option holding the mode and the value
@@ -204,6 +207,7 @@ FORM_PLACEHOLDERS: Final[dict[str, str]] = {
     "#changing-a-username",
     "docs_identity_providers": _CF_DOCS + "integrations/identity-providers/",
     "docs_saas_apps": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/saas-apps/",
+    "docs_external_url": "https://www.home-assistant.io/docs/configuration/basic/#editing-the-network-settings",
 }
 DOCS_OAUTH_CLIENTS: Final = (
     "https://developers.cloudflare.com/fundamentals/api/how-to/oauth-clients/"

@@ -29,7 +29,6 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_API_TOKEN,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_GATE_ENABLED,
-    CONF_HOSTNAME,
     DOMAIN,
 )
 
@@ -40,6 +39,12 @@ ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
 ALICE = "alice@example.com"
 BOB = "bob@example.com"
 CLIENT_ID = "https://ha.example.com/"
+
+
+@pytest.fixture(autouse=True)
+def external_url(hass: HomeAssistant) -> None:
+    """The instance's External URL: the hostname the gate guards."""
+    hass.config.external_url = f"https://{HOSTNAME}"
 
 
 @pytest.fixture(autouse=True)
@@ -609,7 +614,6 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
 
 def make_entry(**options: Any) -> MockConfigEntry:
     opts: dict[str, Any] = {
-        CONF_HOSTNAME: HOSTNAME,
         CONF_GATE_ENABLED: False,
         CONF_DELETE_OBJECTS_ON_REMOVE: True,
     }

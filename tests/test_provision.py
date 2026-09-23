@@ -899,6 +899,43 @@ async def test_a_person_who_loses_access_is_logged_out(
     )
 
 
+async def test_the_gate_follows_a_changed_external_url(hass: HomeAssistant, access: Access) -> None:
+    """The hostname is the External URL's: a change renames everything, a removal freezes it."""
+    from homeassistant.helpers import issue_registry as ir
+
+    cf = access.cloudflare
+    await _register_script(hass, access.entry, "Probe")
+    await _settle(hass)
+    gate_id = access.entry.data[DATA_GATE_APP_ID]
+    await hass.config.async_update(external_url="https://new.example.com")
+    await _settle(hass)
+    gate = cf.apps[gate_id]
+    assert gate["name"] == "ha-access: gate new.example.com" and gate["domain"] == "new.example.com"
+    assert access.entry.title == "new.example.com" and access.entry.unique_id == "new.example.com"
+    (token,) = cf.service_tokens.values()
+    assert token["name"] == "ha-access: client new.example.com Probe"
+
+    await hass.config.async_update(external_url=None)
+    await _settle(hass)
+    assert cf.apps[gate_id]["domain"] == "new.example.com", "nothing torn down"
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"no_external_url_{access.entry.entry_id}")
+        is not None
+    )
+    await hass.config.async_update(external_url="https://new.example.com")
+    await _settle(hass)
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"no_external_url_{access.entry.entry_id}")
+        is None
+    )
+
+    # a restart without an External URL refuses to set up, with a clear reason
+    await hass.config.async_update(external_url=None)
+    assert not await hass.config_entries.async_reload(access.entry.entry_id)
+    assert access.entry.state is ConfigEntryState.SETUP_ERROR
+    assert "External URL" in str(access.entry.reason)
+
+
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
     await _save_options(
