@@ -247,6 +247,78 @@ Clients are subentries of the integration entry (*Add client*), of two kinds:
   Tokens: Edit** for this; a sign-in granted before the scope was added asks to sign in again
   when a script client is added.
 
+## MCP servers behind the gate
+
+The self-registering clients above are MCP clients almost by definition, so the two MCP
+servers people run on Home Assistant deserve a precise account. Each was traced through the
+gate from its source (core 2026.9.2, HA-MCP component 2.2.x) and Cloudflare's documentation;
+what was not exercised on a live instance is marked.
+
+### The built-in `mcp_server` integration (recommended)
+
+Endpoint `POST /api/mcp` (also `/api/mcp/<api>`), stateless streamable HTTP, guarded by
+Home Assistant's own authentication. Behind the gate:
+
+1. The client's first call gets Access's 401 with OAuth metadata; the client registers
+   dynamically and completes PKCE against Access. Home Assistant's own OAuth is never
+   involved, which sidesteps its two gaps (no dynamic registration, no PKCE).
+2. Every later call carries an Access-issued token. Home Assistant does not recognise it,
+   the origin rule maps the Access identity to the person (see People), and the integration
+   runs the call **as that person**: admin required for any API other than Assist, the
+   person's group policy applied to every service call, the Assist exposure list applied to
+   every entity. Logbook attribution is per person.
+
+Setup: turn Enabled on, add the MCP client as *a client that logs people in* (its callback is
+in the list, Claude's is `https://claude.ai/api/mcp/auth_callback`), then add
+`https://<host>/api/mcp` in the client with the OAuth client ID and secret left empty. Set
+Home Assistant's External URL to the hostname and trust the tunnel as a proxy (Options).
+
+Avoid the legacy `GET /mcp_server/sse`: it binds a session to an unguessable id only, so any
+authenticated principal who learns the id can post into it. A header-only client (a script
+with no login) needs a script client's Client ID and secret plus a Home Assistant long-lived
+token; a Home Assistant token alone never passes the edge. Clients running on a person's own
+computer (Claude Code, Cursor's desktop app, VS Code, Gemini CLI) call back on localhost,
+which the gate does not admit yet.
+
+Not exercised live: claude.ai's hosted connector end to end (one June 2026 report has it
+failing against Cloudflare managed OAuth while Claude Code worked; the live test confirms the
+401 carries the `WWW-Authenticate` metadata that report blamed).
+
+### The HA-MCP custom component
+
+Endpoint `/api/webhook/mcp_<secret>`, an ordinary Home Assistant webhook (no Home Assistant
+authentication), stateless streamable HTTP. Three modes: `none` (the secret URL is the
+credential; an auto-approving OAuth surface satisfies clients that insist on OAuth),
+`ha_auth` (the client logs in through Home Assistant's OAuth, administrators only) and
+`legacy` (its own OAuth with a static client ID and secret). In every mode the component
+strips the caller's bearer and performs the calls with **its own provisioned admin user**,
+so the login is a gate, never per-person attribution.
+
+Behind the gate, use mode `none` and never list the webhook path as an open path. The
+client then logs in through Access exactly as with the built-in server, the URL secret
+becomes a second factor, and Home Assistant sees the component's admin user as before.
+`ha_auth` and `legacy` do not combine with the gate: the client can hold one bearer, Access
+refuses the component's tokens and the component refuses Access's, so each mode's login page
+blocks the other. Also set the component's "Network access" to `127.0.0.1` so its LAN port
+(9584, secret path only) is closed, and note it updates its server package from PyPI on its
+own every six hours.
+
+### Cloudflare's MCP servers and portals (optional, auditing only)
+
+Zero Trust > AI controls can register an MCP server object for either endpoint and put a
+portal in front of it. What it adds: tool synchronisation, per-call portal logs (tool name,
+status, duration; the caller's e-mail only through Enterprise Logpush; arguments never),
+daily call counts, optional Gateway routing (HTTP logs, 24-hour retention on the Free
+plan). What it costs: calls reach Home Assistant through the portal with one static
+credential, so per-person attribution is lost even for the built-in server; a new token scope
+(MCP Portals Write) and zone DNS write for the portal hostname; an extra Access login and
+seat per person; server state to keep in sync. Direct connections to the hostname are
+invisible to it. The integration therefore does not create these objects. To use one behind
+the gate, give the server object a script client's credentials as headers:
+`{"headers":{"cf-access-client-id":"<id>","cf-access-client-secret":"<secret>"}}` (the form
+Cloudflare documents for exactly this); without them the object's sync and calls fail as soon
+as Enabled is on.
+
 ## Verified Cloudflare behaviour
 
 Verified on the test host below with Access applications created from the integration's own
