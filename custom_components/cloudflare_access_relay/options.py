@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
     OAuth2TokenRequestReauthError,
     OAuth2TokenRequestTransientError,
 )
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 from .cloudflare_api import (
     CloudflareAccessApi,
@@ -29,6 +31,7 @@ from .const import (
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
+    CONF_HOSTNAME,
     CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
@@ -54,6 +57,27 @@ DEFAULT_OPTIONS: dict[str, Any] = {
 def effective_options(entry: ConfigEntry) -> dict[str, Any]:
     """Return the entry options with defaults filled in."""
     return {**DEFAULT_OPTIONS, **entry.options}
+
+
+def normalise_hostname(raw: str) -> str:
+    """Accept 'ha.example.com', 'https://ha.example.com/' or with a path."""
+    raw = raw.strip()
+    if "://" in raw:
+        raw = urlparse(raw).netloc
+    return raw.split("/")[0].split(":")[0].strip().lower()
+
+
+@callback
+def external_hostname(hass: HomeAssistant) -> str:
+    """Return the hostname of Home Assistant's External URL, the hostname the gate guards.
+
+    Raises NoURLAvailableError when no External URL is configured (an IP or an internal
+    address is not one).
+    """
+    hostname = normalise_hostname(get_url(hass, allow_internal=False, allow_ip=False))
+    if not hostname:
+        raise NoURLAvailableError
+    return hostname
 
 
 def app_tag(entry: ConfigEntry) -> str:
@@ -108,10 +132,14 @@ def service_token_ids(entry: ConfigEntry) -> list[str]:
     )
 
 
-def provisioning_options(entry: ConfigEntry) -> dict[str, Any]:
-    """Return the options as provisioning sees them: what the clients add, and the tag."""
+def provisioning_options(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
+    """Return the options as provisioning sees them: the hostname, the clients' part, the tag.
+
+    Raises NoURLAvailableError when Home Assistant has no External URL.
+    """
     return {
         **effective_options(entry),
+        CONF_HOSTNAME: external_hostname(hass),
         CONF_CLIENT_REDIRECT_URIS: client_redirect_uris(entry),
         CONF_SERVICE_TOKEN_IDS: service_token_ids(entry),
         OPTION_APP_TAG: app_tag(entry),
@@ -119,11 +147,11 @@ def provisioning_options(entry: ConfigEntry) -> dict[str, Any]:
 
 
 async def async_provisioning_options(
-    entry: ConfigEntry, api: CloudflareAccessApi
+    hass: HomeAssistant, entry: ConfigEntry, api: CloudflareAccessApi
 ) -> dict[str, Any]:
     """Return the provisioning options with what only Cloudflare knows: the login methods."""
     return {
-        **provisioning_options(entry),
+        **provisioning_options(hass, entry),
         OPTION_IDP_IDS: [idp["id"] for idp in await api.list_identity_providers() if idp.get("id")],
     }
 

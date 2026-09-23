@@ -54,7 +54,6 @@ from custom_components.cloudflare_access_relay.const import (
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
-    CONF_HOSTNAME,
     CONF_SESSION_DURATION,
     DATA_BYPASS_APP_ID,
     DATA_GATE_APP_ID,
@@ -295,6 +294,8 @@ async def _lifecycle(
         print("== config flow creates the entry; gate off: nothing at the edge changes")
         # the allow policy is derived from the Home Assistant users: one with an address
         await add_user(hass, EMAIL, name=EMAIL)
+        # the hostname is the External URL's
+        await hass.config.async_update(external_url=f"https://{host}")
         # CI cannot click a consent page: the token path, started by its source
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "api_token"})
         assert result["type"] is FlowResultType.FORM and result["step_id"] == "api_token"
@@ -307,8 +308,7 @@ async def _lifecycle(
         )
         assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            {CONF_HOSTNAME: host, CONF_SESSION_DURATION: SESSION_FORM},
+            result["flow_id"], {CONF_SESSION_DURATION: SESSION_FORM}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
         entry: ConfigEntry = result["result"]

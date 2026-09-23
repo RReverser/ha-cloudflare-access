@@ -6,7 +6,6 @@ from collections.abc import Mapping
 import logging
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
@@ -21,7 +20,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.httpx_client import get_async_client
-from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.selector import (
     BooleanSelector,
     DurationSelector,
@@ -82,6 +81,7 @@ from .options import (
     api_for,
     async_provisioning_options,
     effective_options,
+    external_hostname,
     provisioning_options,
 )
 from .provision import desired_client_app
@@ -150,14 +150,6 @@ def _duration_from_form(value: Any) -> str | None:
 # Started with this source (tests, automation) instead of the sign-in; also the reauth
 # path of an entry created with a token.
 SOURCE_API_TOKEN = "api_token"
-
-
-def normalise_hostname(raw: str) -> str:
-    """Accept 'ha.example.com', 'https://ha.example.com/' or with a path."""
-    raw = raw.strip()
-    if "://" in raw:
-        raw = urlparse(raw).netloc
-    return raw.split("/")[0].split(":")[0].strip().lower()
 
 
 def _clean_list(values: list[str] | None) -> list[str]:
@@ -307,8 +299,9 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     DOMAIN = DOMAIN
     VERSION = 1
-    # 2: options and subentries of earlier versions are migrated (`async_migrate_entry`).
-    MINOR_VERSION = 2
+    # 2: options and subentries of earlier versions are migrated; 3: the hostname is the
+    # External URL, no longer an option (`async_migrate_entry`).
+    MINOR_VERSION = 3
 
     def __init__(self) -> None:
         """Start with no credential."""
@@ -455,25 +448,24 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     # -------------------------------------------------------------------- settings
 
-    def _default_hostname(self) -> str:
-        """Offer the instance's public URL's hostname, when it has one."""
-        try:
-            return normalise_hostname(get_url(self.hass, allow_internal=False, allow_ip=False))
-        except NoURLAvailableError:
-            return ""
-
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Hostname, the people's addresses and the advanced options; the gate starts off."""
+        """Ask for the people's addresses and the advanced options; the gate starts off.
+
+        The hostname is Home Assistant's External URL; without one there is nothing to
+        guard, so the flow stops and says where to set it.
+        """
         errors: dict[str, str] = {}
+        try:
+            hostname = external_hostname(self.hass)
+        except NoURLAvailableError:
+            return self.async_abort(
+                reason="no_external_url", description_placeholders=FORM_PLACEHOLDERS
+            )
         if user_input is not None:
-            hostname = normalise_hostname(user_input[CONF_HOSTNAME])
-            if not hostname:
-                errors[CONF_HOSTNAME] = "invalid_hostname"
             emails = _parse_people(user_input, self._people, errors)
             options = _validate_options(user_input, errors)
-            options[CONF_HOSTNAME] = hostname
             options[CONF_LOGIN_EMAILS] = emails
             if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
@@ -487,21 +479,14 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 )
         defaults: dict[str, Any] = dict(user_input or {})
         people, self._people = await _people_section(self.hass, {}, defaults)
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_HOSTNAME, default=defaults.get(CONF_HOSTNAME) or self._default_hostname()
-                ): str,
-                **people,
-                **await _advanced_schema(self.hass, defaults),
-            }
-        )
+        schema = vol.Schema({**people, **await _advanced_schema(self.hass, defaults)})
         return self.async_show_form(
             step_id="settings",
             data_schema=schema,
             errors=errors,
             description_placeholders={
                 **FORM_PLACEHOLDERS,
+                CONF_HOSTNAME: hostname,
                 **await _users_placeholders(self.hass, {}),
             },
         )
@@ -539,7 +524,6 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         if user_input is not None:
             emails = _parse_people(user_input, self._people, errors)
             options = _validate_options(user_input, errors)
-            options[CONF_HOSTNAME] = current[CONF_HOSTNAME]
             options[CONF_LOGIN_EMAILS] = emails
             if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
@@ -565,7 +549,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             errors=errors,
             description_placeholders={
                 **FORM_PLACEHOLDERS,
-                CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
+                CONF_HOSTNAME: self.config_entry.title,
                 **await _users_placeholders(self.hass, login_emails(self.config_entry)),
             },
         )
@@ -745,7 +729,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         emails = await allowed_emails(self.hass, login_emails(entry))
         try:
             api = await api_for(self.hass, entry)
-            options = await async_provisioning_options(entry, api)
+            options = await async_provisioning_options(self.hass, entry, api)
             desired = desired_client_app(
                 options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
             )
@@ -786,7 +770,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     async def _async_create_token(self, errors: dict[str, str]) -> SubentryFlowResult:
         """Create the script client's service token and show its credentials."""
         entry = self._get_entry()
-        options = provisioning_options(entry)
+        options = provisioning_options(self.hass, entry)
         name = SERVICE_TOKEN_NAME_FMT.format(
             hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]
         )
@@ -832,7 +816,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     async def _async_renew_token(self, errors: dict[str, str]) -> SubentryFlowResult:
         """Rename the token and extend its validity, then show the credentials again."""
         entry = self._get_entry()
-        options = provisioning_options(entry)
+        options = provisioning_options(self.hass, entry)
         token_id = self._data.get(DATA_TOKEN_ID)
         name = SERVICE_TOKEN_NAME_FMT.format(
             hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]

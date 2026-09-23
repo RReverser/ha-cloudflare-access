@@ -21,14 +21,12 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 from custom_components.cloudflare_access_relay.config_flow import (
     _duration_from_form,
     _duration_to_form,
-    normalise_hostname,
 )
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
-    CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
     DATA_TEAM_DOMAIN,
     DATA_TOKEN,
@@ -42,14 +40,26 @@ from custom_components.cloudflare_access_relay.const import (
 from .conftest import ACCOUNT_ID, HOSTNAME, TEAM_DOMAIN, FakeCloudflare, FakeJwks, make_entry
 
 TOKEN_INPUT = {CONF_API_TOKEN: "cf-token", CONF_ACCOUNT_ID: ACCOUNT_ID}
-SETTINGS_INPUT = {CONF_HOSTNAME: f"https://{HOSTNAME}/"}
+SETTINGS_INPUT: dict[str, Any] = {}
 
 
 def test_normalise_hostname() -> None:
+    from custom_components.cloudflare_access_relay.options import normalise_hostname
+
     assert normalise_hostname("HA.Example.com") == "ha.example.com"
     assert normalise_hostname("https://ha.example.com:8123/lovelace") == "ha.example.com"
     assert normalise_hostname(" ha.example.com/ ") == "ha.example.com"
     assert normalise_hostname("") == ""
+
+
+async def test_setup_stops_without_an_external_url(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    """The hostname is the External URL's; without one there is nothing to guard."""
+    hass.config.external_url = None
+    result = await _start(hass, "api_token")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_external_url"
 
 
 def test_duration_round_trip() -> None:
@@ -198,7 +208,8 @@ async def test_token_flow_creates_entry(
     assert result["step_id"] == "api_token"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
-    assert result["data_schema"]({})[CONF_HOSTNAME] == HOSTNAME, "external URL prefilled"
+    assert result["description_placeholders"]["hostname"] == HOSTNAME, "the External URL's"
+    assert "hostname" not in {str(k) for k in result["data_schema"].schema}
     assert result["description_placeholders"]["no_address_note"] == ""
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
@@ -214,7 +225,7 @@ async def test_token_flow_creates_entry(
         "gate_app_id": None,
         "bypass_app_id": None,
     }
-    assert entry.options[CONF_HOSTNAME] == HOSTNAME
+    assert entry.title == HOSTNAME and "hostname" not in entry.options
     assert entry.options[CONF_GATE_ENABLED] is False, "gate starts disabled"
     await hass.async_block_till_done()
     assert entry.state is config_entries.ConfigEntryState.LOADED
@@ -265,12 +276,9 @@ async def test_settings_validation_errors(
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_HOSTNAME: "", "session_duration": {"minutes": 0}}
+        result["flow_id"], {"session_duration": {"minutes": 0}}
     )
-    assert result["errors"] == {
-        CONF_HOSTNAME: "invalid_hostname",
-        "session_duration": "invalid_duration",
-    }
+    assert result["errors"] == {"session_duration": "invalid_duration"}
     assert fake_cloudflare.writes() == []
     assert hass.config_entries.async_entries(DOMAIN) == []
 
@@ -445,7 +453,7 @@ async def test_sign_in_reauth_flow(
             CONF_ACCOUNT_ID: ACCOUNT_ID,
             DATA_TEAM_DOMAIN: TEAM_DOMAIN,
         },
-        options={CONF_HOSTNAME: HOSTNAME},
+        options={},
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -483,7 +491,7 @@ async def test_refused_refresh_triggers_reauth(
             CONF_ACCOUNT_ID: ACCOUNT_ID,
             DATA_TEAM_DOMAIN: TEAM_DOMAIN,
         },
-        options={CONF_HOSTNAME: HOSTNAME},
+        options={},
     )
     entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(entry.entry_id)

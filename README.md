@@ -133,7 +133,11 @@ and keeps everything else.
    OAuth callback inside its own web view in place of the frontend, and the setup dialog is
    lost. This is how the app handles the callback of any OAuth integration.)
 3. Back in Home Assistant, the account is picked if the sign-in reaches one, asked for
-   otherwise. Then the hostname (pre-filled from the external URL) and the advanced options.
+   otherwise. Then the people's addresses and the advanced options. The hostname is the one
+   of Home Assistant's External URL (Settings → System → Network); without one the setup
+   stops and says so. A later change of the External URL renames the Access applications and
+   the service tokens to the new hostname; removing it leaves them as they are and raises a
+   repair issue until it is back.
    The form shows which users' addresses the gate would let in.
 4. The integration validates the credential by listing the Access applications and reading
    the team domain, and creates nothing yet: the gate starts **off**. Read *Rollout* before
@@ -258,8 +262,8 @@ documentation; what was not exercised on a live instance is marked.
 
 ### The Cloudflared add-on
 
-The add-on's `external_hostname` is the hostname to enter here (the setup form prefills it
-from Home Assistant's External URL). Nothing else is needed for the gate: the add-on carries
+The add-on's `external_hostname` and Home Assistant's External URL name the same hostname,
+and the gate guards the latter. Nothing else is needed for the gate: the add-on carries
 the request to Home Assistant, and the gate is enforced at Cloudflare's edge before that. The
 add-on's own [Home Assistant configuration](https://github.com/homeassistant-apps/app-cloudflared/blob/main/cloudflared/DOCS.md#home-assistant-configuration)
 steps apply as they are.
@@ -282,7 +286,7 @@ Home Assistant's own authentication.
 
 | Where | Setting | Why |
 |---|---|---|
-| `mcp_server` | Defaults. Home Assistant's External URL = the hostname | Its own 401 metadata is built from the External URL |
+| `mcp_server` | Defaults | Its own 401 metadata is built from the External URL, which is the guarded hostname |
 | Here | The MCP client added as *a client that logs people in* (its callback is in the list; Claude's is `https://claude.ai/api/mcp/auth_callback`); `/api/mcp` **not** an open path | The client's first call gets Access's 401 with OAuth metadata, registers dynamically and completes PKCE against Access; every later call carries an Access token that the origin rule maps to the person, and the server runs the call as that person (admin required outside the Assist API, the person's group policy on every service call, the Assist exposure list on every entity) |
 | Client | `https://<host>/api/mcp`, OAuth client ID and secret left empty | Home Assistant's own OAuth never runs, which sidesteps its two gaps: no dynamic registration and no PKCE |
 
