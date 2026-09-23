@@ -126,12 +126,9 @@ OPTION_APP_TAG: Final = "app_tag"
 # gate sends people straight to it instead of showing Cloudflare's picker page.
 OPTION_IDP_IDS: Final = "idp_ids"
 # Shown by Access to a person who logged in but is not on the allow list. Cloudflare
-# refuses punctuation in it (", . ! : @ ? -" by its own message, and a semicolon was
-# refused too), so letters, digits and spaces only: no hostname, no full stops.
-DENY_MESSAGE: Final = (
-    "This address is not allowed in yet so ask whoever runs this Home Assistant to add it "
-    "under People in the Cloudflare Access integration options"
-)
+# allows at most 75 characters and refuses punctuation (", . ! : @ ? -" by its own
+# message; a semicolon was refused too), so letters, digits and spaces only.
+DENY_MESSAGE: Final = "Not allowed in yet ask the Home Assistant owner to add you under People"
 
 # Access application names: readable in the dashboard, and the way an application is
 # found again when the stored ids are lost (together with the tag).
