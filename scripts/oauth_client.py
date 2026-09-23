@@ -133,6 +133,10 @@ def cmd_grant(api: Api, args: argparse.Namespace) -> None:
             ),
             account,
         ),
+        (
+            permission_group(groups, r"^access: audit logs read$", "com.cloudflare.api.account"),
+            account,
+        ),
     ]
     policies = list(token["policies"])
     present = {
