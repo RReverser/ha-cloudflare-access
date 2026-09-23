@@ -73,7 +73,6 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     HA_MCP_DOMAIN,
-    ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
     ISSUE_MCP_AUTH_CONFLICT,
     ISSUE_NO_ALLOWED_USERS,
     ISSUE_NO_EXTERNAL_URL,
@@ -517,7 +516,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
             "Home Assistant has no External URL, so there is no hostname to guard. Set it "
             "under Settings, System, Network"
         ) from err
-    for key in (ISSUE_NO_EXTERNAL_URL, ISSUE_HOSTNAME_NOT_IN_ACCOUNT, ISSUE_UPDATE_FAILED):
+    for key in (ISSUE_NO_EXTERNAL_URL, ISSUE_UPDATE_FAILED):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
@@ -552,19 +551,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     except CloudflareUnavailableError as err:
         raise ConfigEntryNotReady(str(err)) from err
     except CloudflareApiError as err:
-        if err.hostname_not_in_account:
-            raise ConfigEntryError(
-                f"Cloudflare refuses to guard {options[CONF_HOSTNAME]}: it is not in a zone of "
-                "this Cloudflare account. Home Assistant's External URL (Settings, System, "
-                "Network) must name a hostname served through Cloudflare from this account"
-            ) from err
         if any(e.get("code") == 11010 for e in err.errors):
             raise ConfigEntryError(
                 "An Access application for this hostname already exists but does not carry "
                 f"this entry's tag ({options[OPTION_APP_TAG]}), so it is not touched; delete "
                 f"it or give it the tag in the Cloudflare dashboard, then reload: {err}"
             ) from err
-        raise ConfigEntryError(f"Cloudflare rejected the configuration: {err}") from err
+        raise ConfigEntryError(
+            f"Cloudflare refused the Access configuration for {options[CONF_HOSTNAME]}: {err}"
+        ) from err
 
     data = EntryData(
         entry=entry,
@@ -695,21 +690,6 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             # the next change tries again from the last state Cloudflare accepted
             data.options = previous_options
             _LOGGER.warning("Could not update the Access applications: %s", err)
-            if isinstance(err, CloudflareApiError) and err.hostname_not_in_account:
-                ir.async_create_issue(
-                    hass,
-                    DOMAIN,
-                    issue_id(entry, ISSUE_HOSTNAME_NOT_IN_ACCOUNT),
-                    is_fixable=False,
-                    severity=ir.IssueSeverity.ERROR,
-                    translation_key=ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
-                    translation_placeholders={
-                        **FORM_PLACEHOLDERS,
-                        "hostname": options[CONF_HOSTNAME],
-                        "previous_hostname": previous_options[CONF_HOSTNAME],
-                    },
-                )
-                return
             ir.async_create_issue(
                 hass,
                 DOMAIN,
@@ -717,11 +697,13 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 is_fixable=False,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_UPDATE_FAILED,
-                translation_placeholders={"error": str(err)},
+                translation_placeholders={
+                    "hostname": previous_options[CONF_HOSTNAME],
+                    "error": str(err),
+                },
             )
             return
-        for key in (ISSUE_HOSTNAME_NOT_IN_ACCOUNT, ISSUE_UPDATE_FAILED):
-            ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_UPDATE_FAILED))
 
     debouncer = Debouncer(
         hass,
@@ -810,7 +792,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         ISSUE_REVOKE_UNAVAILABLE,
         ISSUE_MCP_AUTH_CONFLICT,
         ISSUE_NO_EXTERNAL_URL,
-        ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
         ISSUE_UPDATE_FAILED,
     ):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))

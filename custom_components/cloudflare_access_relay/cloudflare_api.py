@@ -54,15 +54,6 @@ class CloudflareApiError(CloudflareError):
         )
         super().__init__(detail)
 
-    @property
-    def hostname_not_in_account(self) -> bool:
-        """Cloudflare refused the application's hostname as outside the account's zones.
-
-        Verified against the API: ``12130: access.api.error.invalid_request: domain does
-        not belong to zone``. Code 12130 alone covers other invalid requests too.
-        """
-        return any("does not belong to zone" in str(e.get("message", "")) for e in self.errors)
-
 
 def _errors_of(err: APIStatusError) -> list[dict[str, Any]]:
     body = err.body

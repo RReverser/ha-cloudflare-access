@@ -945,33 +945,27 @@ async def test_a_hostname_outside_the_account_is_refused(
     await hass.config.async_update(external_url="https://ha.elsewhere.net")
     await _settle(hass)
     assert cf.apps[gate_id]["domain"] == HOSTNAME, "the gate keeps guarding the last hostname"
-    issue = ir.async_get(hass).async_get_issue(
-        DOMAIN, issue_id(access.entry, "hostname_not_in_account")
-    )
-    assert issue is not None
-    assert issue.translation_placeholders == {
-        **issue.translation_placeholders,
-        "hostname": "ha.elsewhere.net",
-        "previous_hostname": HOSTNAME,
-    }
+    assert access.entry.title == HOSTNAME, "the entry follows the gate, not the External URL"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, "update_failed"))
+    assert issue is not None and issue.translation_placeholders is not None
+    assert issue.translation_placeholders["hostname"] == HOSTNAME
+    assert "does not belong to zone" in issue.translation_placeholders["error"]
 
     # back to a hostname of the account: the gate follows and the repair goes
     await hass.config.async_update(external_url="https://again.example.com")
     await _settle(hass)
     assert cf.apps[gate_id]["domain"] == "again.example.com"
+    assert access.entry.title == "again.example.com"
     assert (
-        ir.async_get(hass).async_get_issue(
-            DOMAIN, issue_id(access.entry, "hostname_not_in_account")
-        )
-        is None
+        ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, "update_failed")) is None
     )
 
-    # a restart with the foreign hostname refuses to set up, naming the hostname
+    # a restart with the foreign hostname refuses to set up, quoting Cloudflare
     await hass.config.async_update(external_url="https://ha.elsewhere.net")
     assert not await hass.config_entries.async_reload(access.entry.entry_id)
     assert access.entry.state is ConfigEntryState.SETUP_ERROR
     assert "ha.elsewhere.net" in str(access.entry.reason)
-    assert "not in a zone of this Cloudflare account" in str(access.entry.reason)
+    assert "does not belong to zone" in str(access.entry.reason)
 
 
 async def test_a_failed_update_raises_a_repair_and_is_retried(
