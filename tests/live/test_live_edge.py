@@ -37,7 +37,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.setup import async_setup_component
 import httpx
@@ -378,9 +377,11 @@ async def _lifecycle(
             return bool(app) and app["policies"][0]["include"] == [{"email": {"email": EMAIL}}]
 
         assert await _until(second_gone, "allow policy without the removed user", 60)
-        assert not ir.async_get(hass).async_get_issue(
-            DOMAIN, f"revoke_unavailable_{entry.entry_id}"
-        ), "the credential must be able to revoke sessions"
+        assert not [
+            f
+            for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+            if f["context"].get("source") == "reauth"
+        ], "the credential must be able to revoke sessions"
         await edge.wait_gate("/api/echo", True)
         await edge.wait_gate("/", True)
         assert is_access_redirect(await edge.get("/auth/token")), "the login surface is gated too"

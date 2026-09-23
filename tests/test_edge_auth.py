@@ -12,7 +12,11 @@ from homeassistant.helpers.http import HomeAssistantView
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.cloudflare_access_relay.const import DOMAIN, ISSUE_RESTART_REQUIRED
+from custom_components.cloudflare_access_relay.const import (
+    DOMAIN,
+    ISSUE_MIDDLEWARE_UNAVAILABLE,
+    LEGACY_ISSUE_RESTART_REQUIRED,
+)
 from custom_components.cloudflare_access_relay.users import allowed_emails
 
 from .conftest import ALICE, BOB, HOSTNAME, Access, FakeCloudflare, FakeJwks, make_entry, token_for
@@ -173,16 +177,42 @@ async def test_disabled_gate_leaves_bearers_to_home_assistant(
     assert resp.status == 401
 
 
-async def test_setup_after_server_start_asks_for_a_restart(
+async def test_setup_after_server_start_still_recognises_access_identities(
     hass: HomeAssistant,
     fake_cloudflare: FakeCloudflare,
     jwks_server: FakeJwks,
+    rsa_keys: Any,
     alice: User,
     hass_client_no_auth: Any,
 ) -> None:
+    """Home Assistant's web server starts before any config entry loads (production)."""
+    from .conftest import Minter
+
+    ir.async_create_issue(  # what versions before 0.2.0 left behind on every start
+        hass,
+        DOMAIN,
+        LEGACY_ISSUE_RESTART_REQUIRED,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=LEGACY_ISSUE_RESTART_REQUIRED,
+    )
     assert await async_setup_component(hass, "api", {})
-    await hass_client_no_auth()  # starts the server: the app is frozen from here on
-    entry: MockConfigEntry = make_entry()
+    hass.http.register_view(WhoAmI())
+    client = await hass_client_no_auth()  # starts the server: the app is frozen from here on
+    assert hass.http.app.frozen
+    resp = await client.get("/api/whoami", headers=FOREIGN)
+    assert resp.status == 401, "the chain for this handler is built and cached before setup"
+
+    entry: MockConfigEntry = make_entry(gate_enabled=True)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_RESTART_REQUIRED) is not None
+    await hass.async_block_till_done()
+    registry = ir.async_get(hass)
+    assert registry.async_get_issue(DOMAIN, ISSUE_MIDDLEWARE_UNAVAILABLE) is None
+    assert registry.async_get_issue(DOMAIN, LEGACY_ISSUE_RESTART_REQUIRED) is None
+
+    mint = Minter(rsa_keys, entry.data["policy_aud"])
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge(**{HDR: mint(ALICE)})})
+    assert resp.status == 200 and (await resp.json())["user"] == alice.id
+    resp = await client.get("/api/whoami", headers={**FOREIGN, **edge()})
+    assert resp.status == 401, "Home Assistant's own verdict still stands without an assertion"

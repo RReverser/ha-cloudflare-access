@@ -18,6 +18,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -28,7 +29,6 @@ from .const import (
     DOMAIN,
     EVENT_LOGIN,
     ISSUE_DENIED_LOGIN,
-    ISSUE_LOGS_UNAVAILABLE,
     LOG_POLL_INTERVAL_SECONDS,
     LOGS_STORE_VERSION,
 )
@@ -78,8 +78,7 @@ def _store_for(hass: HomeAssistant, entry: ConfigEntry) -> Store[dict[str, Any]]
 async def async_remove_login_history(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the stored history and the repair issues of a removed entry."""
     await _store_for(hass, entry).async_remove()
-    for key in (ISSUE_LOGS_UNAVAILABLE, ISSUE_DENIED_LOGIN):
-        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
+    ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_DENIED_LOGIN))
 
 
 class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
@@ -119,22 +118,11 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         try:
             entries = await self._api.list_access_logs(since)
         except CloudflareAuthError as err:
-            assert self.config_entry is not None
-            ir.async_create_issue(
-                self.hass,
-                DOMAIN,
-                issue_id(self.config_entry, ISSUE_LOGS_UNAVAILABLE),
-                is_fixable=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key=ISSUE_LOGS_UNAVAILABLE,
-            )
-            raise UpdateFailed(f"the authentication logs cannot be read: {err}") from err
+            # the credential lacks the permission: signing in again grants it
+            raise ConfigEntryAuthFailed(f"the authentication logs cannot be read: {err}") from err
         except CloudflareError as err:
             raise UpdateFailed(f"the authentication logs were not read: {err}") from err
         assert self.config_entry is not None
-        ir.async_delete_issue(
-            self.hass, DOMAIN, issue_id(self.config_entry, ISSUE_LOGS_UNAVAILABLE)
-        )
         newest = since
         changed = False
         for entry in sorted(entries, key=lambda e: str(e.get("created_at") or "")):
@@ -183,12 +171,17 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
             self.hass,
             DOMAIN,
             issue_id(self.config_entry, ISSUE_DENIED_LOGIN),
-            is_fixable=False,
+            is_fixable=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_DENIED_LOGIN,
             translation_placeholders={
                 "email": email,
                 "when": when.astimezone(dt_util.get_default_time_zone()).strftime("%Y-%m-%d %H:%M"),
                 "app": str(entry.get("app_domain") or ""),
+            },
+            data={
+                "key": ISSUE_DENIED_LOGIN,
+                "entry_id": self.config_entry.entry_id,
+                "email": email,
             },
         )

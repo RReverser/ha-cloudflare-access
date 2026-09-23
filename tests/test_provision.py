@@ -861,7 +861,6 @@ async def test_a_person_who_loses_access_is_logged_out(
     hass: HomeAssistant, access: Access, bob: User
 ) -> None:
     """Dropping an address from the allow rule alone leaves the person's session valid."""
-    from homeassistant.helpers import issue_registry as ir
 
     cf = access.cloudflare
     assert cf.revoked == []
@@ -878,27 +877,19 @@ async def test_a_person_who_loses_access_is_logged_out(
     await hass.async_block_till_done(wait_background_tasks=True)
     assert cf.revoked == [BOB, "gone@example.com"]
 
-    # a credential that cannot revoke leaves the session and raises a repair issue
+    # a credential that cannot revoke leaves the session and asks for a new sign-in
     carol = await add_user(hass, "carol@example.com", name="Carol")
     await _settle(hass)
     cf.fail_status, cf.fail_predicate = 403, lambda _m, path: path.endswith("/revoke_user")
     await hass.auth.async_remove_user(carol)
     await _settle(hass)
     assert cf.revoked == [BOB, "gone@example.com"]
-    assert (
-        ir.async_get(hass).async_get_issue(DOMAIN, f"revoke_unavailable_{access.entry.entry_id}")
-        is not None
-    )
-    cf.fail_status = cf.fail_predicate = None
-    dave = await add_user(hass, "dave@example.com", name="Dave")
-    await _settle(hass)
-    await hass.auth.async_remove_user(dave)
-    await _settle(hass)
-    assert cf.revoked[-1] == "dave@example.com", "the next revocation clears the issue"
-    assert (
-        ir.async_get(hass).async_get_issue(DOMAIN, f"revoke_unavailable_{access.entry.entry_id}")
-        is None
-    )
+    reauth = [
+        f
+        for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if f["context"].get("source") == "reauth"
+    ]
+    assert len(reauth) == 1 and reauth[0]["context"]["entry_id"] == access.entry.entry_id
 
 
 async def test_the_gate_follows_a_changed_external_url(hass: HomeAssistant, access: Access) -> None:

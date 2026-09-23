@@ -9,6 +9,7 @@ own login is the only gate. Mode `none` works behind the gate as is.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from homeassistant.components.webhook import async_generate_path
@@ -39,7 +40,7 @@ def async_check_mcp_login_conflict(
     hass: HomeAssistant, entry: ConfigEntry, options: dict[str, Any]
 ) -> None:
     """Raise or clear the repair issue for an HA-MCP login mode that fights the gate."""
-    conflicts: list[str] = []
+    conflicts: list[tuple[str, str, str]] = []  # mode, HA-MCP entry id, webhook path
     if options.get(CONF_GATE_ENABLED):
         open_paths = [str(p) for p in options.get(CONF_EXTRA_BYPASS_PATHS) or []]
         for mcp in hass.config_entries.async_entries(HA_MCP_DOMAIN):
@@ -49,10 +50,11 @@ def async_check_mcp_login_conflict(
                 mode == HA_MCP_AUTH_NONE
                 or not mcp.options.get(HA_MCP_OPT_WEBHOOK_ENABLED, True)
                 or not webhook_id
-                or _open(async_generate_path(str(webhook_id)), open_paths)
             ):
                 continue
-            conflicts.append(mode)
+            path = async_generate_path(str(webhook_id))
+            if not _open(path, open_paths):
+                conflicts.append((mode, mcp.entry_id, path))
     if not conflicts:
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_MCP_AUTH_CONFLICT))
         return
@@ -60,8 +62,15 @@ def async_check_mcp_login_conflict(
         hass,
         DOMAIN,
         issue_id(entry, ISSUE_MCP_AUTH_CONFLICT),
-        is_fixable=False,
+        is_fixable=True,
         severity=ir.IssueSeverity.ERROR,
         translation_key=ISSUE_MCP_AUTH_CONFLICT,
-        translation_placeholders={"mode": ", ".join(sorted(set(conflicts)))},
+        translation_placeholders={"mode": ", ".join(sorted({c[0] for c in conflicts}))},
+        data={
+            "key": ISSUE_MCP_AUTH_CONFLICT,
+            "entry_id": entry.entry_id,
+            # issue data holds scalars only: the lists travel as JSON
+            "mcp_entry_ids": json.dumps([c[1] for c in conflicts]),
+            "webhook_paths": json.dumps([c[2] for c in conflicts]),
+        },
     )

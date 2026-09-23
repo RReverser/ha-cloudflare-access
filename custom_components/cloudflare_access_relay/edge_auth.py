@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING
 
-from aiohttp import hdrs, web
+from aiohttp import hdrs, web, web_app
 from aiohttp.typedefs import Handler
 from homeassistant.components.http.ban import process_wrong_login
 from homeassistant.components.http.const import KEY_HASS_USER
@@ -37,7 +37,7 @@ from .const import (
     DOMAIN,
     HEADER_CF_RAY,
     HEADER_JWT,
-    ISSUE_RESTART_REQUIRED,
+    ISSUE_MIDDLEWARE_UNAVAILABLE,
 )
 from .jwks import JwtVerifyError
 from .users import async_find_user, login_emails
@@ -127,21 +127,47 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
 
 @callback
 def async_install_middleware(hass: HomeAssistant) -> bool:
-    """Install the middleware once per run; False when the server already started."""
+    """Install the middleware once per run; False when the web server cannot take it.
+
+    Home Assistant starts its web server as soon as the frontend is up, before any
+    config entry loads, and aiohttp freezes an application's middleware list when the
+    server starts. So the list is always frozen here, and the middleware goes into the
+    chain aiohttp prepared instead (`_inject`).
+    """
     if hass.data.get(_MIDDLEWARE_INSTALLED):
         return True
     app = hass.http.app
-    if app.frozen:
+    if not app.frozen:
+        app.middlewares.append(_middleware)
+    elif not _inject(app):
         ir.async_create_issue(
             hass,
             DOMAIN,
-            ISSUE_RESTART_REQUIRED,
+            ISSUE_MIDDLEWARE_UNAVAILABLE,
             is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_RESTART_REQUIRED,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_MIDDLEWARE_UNAVAILABLE,
         )
         return False
-    app.middlewares.append(_middleware)
     hass.data[_MIDDLEWARE_INSTALLED] = True
-    ir.async_delete_issue(hass, DOMAIN, ISSUE_RESTART_REQUIRED)
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_MIDDLEWARE_UNAVAILABLE)
+    return True
+
+
+def _inject(app: web.Application) -> bool:
+    """Add the middleware to a started application's prepared chain.
+
+    aiohttp keeps the chain in the application's `_middlewares_handlers`, innermost
+    first, and caches the chain it builds per handler; both are private, so they are
+    checked before use and the tests install into a started server, where an aiohttp
+    that moved them fails the suite. Innermost is the right place: Home Assistant's
+    own authentication has run by then, and the rule only acts where it declined.
+    """
+    handlers = getattr(app, "_middlewares_handlers", None)
+    cache_clear = getattr(getattr(web_app, "_cached_build_middleware", None), "cache_clear", None)
+    if not isinstance(handlers, tuple) or not callable(cache_clear):
+        return False
+    app._middlewares_handlers = ((_middleware, True), *handlers)
+    app._run_middlewares = True
+    cache_clear()
     return True

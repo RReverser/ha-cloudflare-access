@@ -62,7 +62,12 @@ requests too, so its API calls and its device webhook pass the gate.
 
 **Token-bearing clients.** A client that cannot hold the cookie authenticates with Access,
 which validates its token at the edge on every request and forwards the request to Home
-Assistant with the same signed assertion a browser session gets. Access's own policies decide
+Assistant with the same signed assertion a browser session gets. At the origin the
+integration's request hook maps that assertion to the Home Assistant user, so Home
+Assistant's own authentication is satisfied without a second token. (Home Assistant starts
+its web server before any integration entry loads and the server's middleware list is
+frozen by then, so the hook is added to the running server's chain; it is covered by a test
+against a started server.) Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
 Every such client is added under *Add client* on the integration entry as *a client that
 logs people in*, with a name and the callback URL(s) the client's own side shows; the
@@ -137,7 +142,7 @@ and keeps everything else.
    of Home Assistant's External URL (Settings → System → Network); without one the setup
    stops and says so. A later change of the External URL renames the Access applications and
    the service tokens to the new hostname; removing it leaves them as they are and raises a
-   repair issue until it is back. A hostname Cloudflare refuses, such as one outside the
+   repair issue, whose fix takes the URL, until it is back. A hostname Cloudflare refuses, such as one outside the
    account's zones (`domain does not belong to zone`), is reported like any other refusal:
    at setup the entry shows Cloudflare's answer; on a later change the gate keeps the last
    hostname and a repair issue quotes the answer.
@@ -221,11 +226,12 @@ each new entry into:
 - a diagnostic sensor per person, "<name> last login", holding the time of their latest
   allowed login through any of their addresses;
 - a repair issue when someone logged in at the identity provider and was refused because the
-  address is not on the allow list; it names the address and the time, since the usual fix is
-  adding the address under People.
+  address is not on the allow list; it names the address and the time, and its fix gives the
+  address to a person of your choice as their login e-mail.
 
 The Free plan keeps these logs for 24 hours, so the first read looks back that far. A
-credential that cannot read them raises a repair issue and everything else keeps working.
+credential that cannot read them (a sign-in from before the permission was asked for, an
+API token without it) starts the sign-in again, and everything else keeps working meanwhile.
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access → Reload), which is the way to repair
@@ -235,8 +241,12 @@ The integration does not set up, and the options cannot be saved, while no user 
 address: nobody could log in. If the last such user goes while the gate is on, the policy keeps
 its last subjects and a repair issue says so. Any other change Cloudflare refuses or cannot take
 leaves the applications in their last state and raises a repair issue quoting Cloudflare's
-answer; the next change retries, and so does a reload. A sign-in Cloudflare no longer accepts
-starts the re-authentication flow.
+answer; the next change retries, and the issue's fix retries at once. A sign-in Cloudflare no
+longer accepts, or one that lacks a permission the integration uses, starts the sign-in again.
+
+Every repair issue whose remedy is an action offers it as its fix: retrying a failed update,
+setting the External URL, giving a refused address to a person, and settling HA-MCP's login
+mode against the gate.
 
 Clients are subentries of the integration entry (*Add client*), of two kinds:
 
@@ -342,7 +352,8 @@ Alternatives:
 - **`ha_auth` or `legacy` mode with the gate on the webhook does not work**: a client holds
   one bearer, Access refuses the component's tokens and the component refuses Access's, so
   each side's login page blocks the other. The integration raises a repair issue when it
-  sees this combination. Those modes are usable only with the webhook listed as an open
+  sees this combination, whose fix switches HA-MCP to `none` or lists the webhook under
+  Bypass policies. Those modes are usable only with the webhook listed as an open
   path, where the component's own login is then the only gate and the issue is not raised; `ha_auth` also still
   requires the Home Assistant External URL to match and dynamic registration on the
   client's side, which claude.ai has failed at in the component's own issue tracker.
@@ -414,7 +425,7 @@ and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
   deactivated, an address changed) the integration also revokes that person's Access
   sessions and tokens across the organization, which Cloudflare applies within about
   30 seconds. Addresses dropped while Home Assistant was down are found on the gate at the
-  next start. A credential that cannot revoke raises a repair issue instead.
+  next start. A credential that cannot revoke starts the sign-in again instead.
 - Home Assistant's own authentication is untouched and still applies behind the gate: a
   browser or app session needs a Home Assistant login too (or single sign-on through a login
   integration), and a Home Assistant token alone does not pass the edge.

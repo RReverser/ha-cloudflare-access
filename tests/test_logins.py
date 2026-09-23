@@ -90,20 +90,25 @@ async def test_logins_become_events_sensors_and_a_denied_login_issue(
     assert hass.states.get("sensor.ha_example_com_alice_last_login").state == stamp(5)
 
 
-async def test_logs_that_cannot_be_read_raise_an_issue_and_nothing_else(
+async def test_logs_that_cannot_be_read_start_the_sign_in_again(
     hass: HomeAssistant, access: Access
 ) -> None:
+    """A credential without the permission asks for a new sign-in; nothing else stops."""
     cf = access.cloudflare
     cf.fail_status, cf.fail_predicate = 403, lambda _m, path: path.endswith("/access_requests")
     await _poll(hass)
-    assert (
-        ir.async_get(hass).async_get_issue(DOMAIN, f"logs_unavailable_{access.entry.entry_id}")
-        is not None
-    )
+    assert _reauth_flows(hass) == 1
     assert access.entry.state.value == "loaded"
     cf.fail_status = cf.fail_predicate = None
     await _poll(hass)
-    assert (
-        ir.async_get(hass).async_get_issue(DOMAIN, f"logs_unavailable_{access.entry.entry_id}")
-        is None
+    assert _reauth_flows(hass) == 1, "one flow, whatever the number of failed reads"
+
+
+def _reauth_flows(hass: HomeAssistant) -> int:
+    return len(
+        [
+            f
+            for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+            if f["context"].get("source") == "reauth"
+        ]
     )
