@@ -52,6 +52,7 @@ OAUTH_SCOPES: Final[tuple[str, ...]] = (
     "access.write",
     "access-acct.read",
     "access-service-token.write",
+    "access-org.revoke",
     "memberships.read",
     "offline_access",
 )
@@ -61,6 +62,8 @@ OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
 # Repair issues
 ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
+# The credential cannot revoke sessions (a sign-in granted before the scope existed).
+ISSUE_REVOKE_UNAVAILABLE: Final = "revoke_unavailable"
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.
@@ -104,6 +107,14 @@ DATA_TOKEN_EXPIRES_AT: Final = "expires_at"
 # entry id is 26.
 APP_TAG_FMT: Final = "hass-{entry_id}"
 OPTION_APP_TAG: Final = "app_tag"
+# The organization's identity providers, read at provisioning time: with exactly one, the
+# gate sends people straight to it instead of showing Cloudflare's picker page.
+OPTION_IDP_IDS: Final = "idp_ids"
+# Shown by Access to a person who logged in but is not on the allow list.
+DENY_MESSAGE_FMT: Final = (
+    "{hostname} is not open to this address. Whoever runs it can add the address under "
+    "the Cloudflare Access integration's options, People, in Home Assistant."
+)
 
 # Access application names: readable in the dashboard, and the way an application is
 # found again when the stored ids are lost (together with the tag).

@@ -827,6 +827,64 @@ async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
     assert gate_id not in cf.apps and entry.data[DATA_GATE_APP_ID] is None
 
 
+async def test_the_gate_sends_people_straight_to_the_only_login_method(
+    hass: HomeAssistant, access: Access
+) -> None:
+    cf = access.cloudflare
+    gate = cf.by_name(GATE)
+    assert gate["allowed_idps"] == ["otp-1"] and gate["auto_redirect_to_identity"] is True
+    assert gate["custom_deny_message"].startswith(f"{HOSTNAME} is not open to this address.")
+    assert "People" in gate["custom_deny_message"]
+    await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
+    client = cf.by_name(f"ha-access: client {HOSTNAME} Google Home")
+    assert client["allowed_idps"] == ["otp-1"] and client["auto_redirect_to_identity"] is True
+
+    # a second login method brings Cloudflare's picker page back
+    cf.identity_providers.append({"id": "google-1", "name": "Google", "type": "google"})
+    assert await hass.config_entries.async_reload(access.entry.entry_id)
+    await hass.async_block_till_done()
+    gate = cf.by_name(GATE)
+    assert gate["allowed_idps"] == [] and gate["auto_redirect_to_identity"] is False
+
+
+async def test_a_person_who_loses_access_is_logged_out(
+    hass: HomeAssistant, access: Access, bob: User
+) -> None:
+    """Dropping an address from the allow rule alone leaves the person's session valid."""
+    from homeassistant.helpers import issue_registry as ir
+
+    cf = access.cloudflare
+    assert cf.revoked == []
+    await hass.auth.async_remove_user(bob)
+    await _settle(hass)
+    assert cf.by_name(GATE)["policies"][0]["include"] == [{"email": {"email": ALICE}}]
+    assert cf.revoked == [BOB]
+
+    # an address dropped while Home Assistant was down is found on the gate at the next start
+    cf.apps[access.entry.data[DATA_GATE_APP_ID]]["policies"][0]["include"].append(
+        {"email": {"email": "Gone@example.com"}}
+    )
+    assert await hass.config_entries.async_reload(access.entry.entry_id)
+    await hass.async_block_till_done()
+    assert cf.revoked == [BOB, "gone@example.com"]
+
+    # a credential that cannot revoke leaves the session and raises a repair issue
+    carol = await add_user(hass, "carol@example.com", name="Carol")
+    await _settle(hass)
+    cf.fail_status, cf.fail_predicate = 403, lambda _m, path: path.endswith("/revoke_user")
+    await hass.auth.async_remove_user(carol)
+    await _settle(hass)
+    assert cf.revoked == [BOB, "gone@example.com"]
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable") is not None
+    cf.fail_status = cf.fail_predicate = None
+    dave = await add_user(hass, "dave@example.com", name="Dave")
+    await _settle(hass)
+    await hass.auth.async_remove_user(dave)
+    await _settle(hass)
+    assert cf.revoked[-1] == "dave@example.com", "the next revocation clears the issue"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "revoke_unavailable") is None
+
+
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
     await _save_options(

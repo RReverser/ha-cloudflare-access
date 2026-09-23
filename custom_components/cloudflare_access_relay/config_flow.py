@@ -75,7 +75,12 @@ from .const import (
     SERVICE_TOKEN_NAME_FMT,
     SUBENTRY_TYPE_CLIENT,
 )
-from .options import api_for, effective_options, provisioning_options
+from .options import (
+    api_for,
+    async_provisioning_options,
+    effective_options,
+    provisioning_options,
+)
 from .provision import desired_client_app
 from .users import (
     allowed_emails,
@@ -716,12 +721,12 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         """Create or update the login client's Access application; return the data to store."""
         entry = self._get_entry()
         emails = allowed_emails(self.hass, login_emails(entry))
-        options = provisioning_options(entry)
-        desired = desired_client_app(
-            options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
-        )
         try:
             api = await api_for(self.hass, entry)
+            options = await async_provisioning_options(entry, api)
+            desired = desired_client_app(
+                options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
+            )
             await api.ensure_tag(options[OPTION_APP_TAG])
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
         except CloudflareAuthError:

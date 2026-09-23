@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     OPTION_APP_TAG,
+    OPTION_IDP_IDS,
     SUBENTRY_TYPE_CLIENT,
 )
 
@@ -107,6 +108,16 @@ def provisioning_options(entry: ConfigEntry) -> dict[str, Any]:
         CONF_CLIENT_REDIRECT_URIS: client_redirect_uris(entry),
         CONF_SERVICE_TOKEN_IDS: service_token_ids(entry),
         OPTION_APP_TAG: app_tag(entry),
+    }
+
+
+async def async_provisioning_options(
+    entry: ConfigEntry, api: CloudflareAccessApi
+) -> dict[str, Any]:
+    """Return the provisioning options with what only Cloudflare knows: the login methods."""
+    return {
+        **provisioning_options(entry),
+        OPTION_IDP_IDS: [idp["id"] for idp in await api.list_identity_providers() if idp.get("id")],
     }
 
 

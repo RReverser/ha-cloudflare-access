@@ -106,7 +106,7 @@ integration is repaired on the next reload.
 
 | Application | Exists | Destinations | Policies | Other |
 |---|---|---|---|---|
-| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the clients' callback URLs |
+| `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the clients' callback URLs; with exactly one login method in the organization, people are sent straight to it (no picker page); a deny message that names the People option |
 | `ha-access: bypass <host>` | while *Paths open without Access* is non-empty | the listed paths | `bypass` for everyone | |
 | `ha-access: client <host> <name>` | one per client whose console needs credentials | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
@@ -140,6 +140,7 @@ Cloudflare's OAuth lets the integration ask for exactly the permissions it uses,
 consent page, instead of a token you assemble by hand: `access.write` (Access: Apps and
 Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
 Read), `access-service-token.write` (Access: Service Tokens Write, for script clients),
+`access-org.revoke` (Access: Organizations Revoke, to log removed people out),
 `memberships.read` (Memberships Read, to find the account you granted on the consent page,
 since the token itself does not say) and `offline_access` (a refresh token, so the sign-in
 lasts). The integration ships the
@@ -154,8 +155,8 @@ the scopes above) and add its client ID under Home Assistant's *Application cred
 then takes the project's client's place.
 
 An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
-Identity Providers, and Groups: Read**, and **Access: Service Tokens: Edit** for script
-clients) can replace the sign-in where a browser cannot reach the consent page, as in this
+Identity Providers, and Groups: Read**, **Access: Service Tokens: Edit** for script
+clients, and **Access: Organizations: Revoke** to log removed people out) can replace the sign-in where a browser cannot reach the consent page, as in this
 project's CI: start the flow with the source `api_token`.
 
 ## Rollout
@@ -259,6 +260,12 @@ and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
 
 - Access is the only way in from the public hostname: every path, including the login pages,
   requires an Access session, an Access-issued token, or a listed service token.
+- Losing access ends the session: Access re-checks a person against the policy only when
+  their session expires, so when an address leaves the allow rule (a user removed or
+  deactivated, an address changed) the integration also revokes that person's Access
+  sessions and tokens across the organization, which Cloudflare applies within about
+  30 seconds. Addresses dropped while Home Assistant was down are found on the gate at the
+  next start. A credential that cannot revoke raises a repair issue instead.
 - Home Assistant's own authentication is untouched and still applies behind the gate: a
   browser or app session needs a Home Assistant login too (or single sign-on through a login
   integration), and a Home Assistant token alone does not pass the edge.

@@ -156,6 +156,27 @@ class CloudflareAccessApi:
         result: dict[str, Any] = _dump(org) or {}
         return result
 
+    async def list_identity_providers(self) -> list[dict[str, Any]]:
+        """Return the organization's identity providers (id, name, type)."""
+        idps: list[dict[str, Any]] = []
+        try:
+            async for idp in (await self._c()).zero_trust.identity_providers.list(
+                account_id=self._account_id, per_page=100
+            ):
+                idps.append(_dump(idp))
+        except Exception as err:
+            raise _translate(err, "listing identity providers") from err
+        return idps
+
+    async def revoke_user(self, email: str) -> None:
+        """End every Access session and token of the person with this address."""
+        try:
+            await (await self._c()).zero_trust.organizations.revoke_users(
+                account_id=self._account_id, email=email
+            )
+        except Exception as err:
+            raise _translate(err, f"revoking the sessions of {email}") from err
+
     async def get_team_domain(self) -> str:
         """Return the team domain, e.g. 'team.cloudflareaccess.com'."""
         org = await self.get_organization()

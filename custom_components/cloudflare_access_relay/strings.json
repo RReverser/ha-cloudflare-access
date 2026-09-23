@@ -23,7 +23,7 @@
       },
       "api_token": {
         "title": "Cloudflare API token",
-        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Edit' as well, for script clients.",
+        "description": "An account-level API token; it is stored in the config entry.\n\nIt needs the permissions 'Access: Apps and Policies: Edit' and 'Access: Organizations, Identity Providers, and Groups: Read'; 'Access: Service Tokens: Edit' for script clients, and 'Access: Organizations: Revoke' to log removed people out.",
         "data": {
           "api_token": "API token",
           "account_id": "Account ID"
@@ -139,6 +139,10 @@
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
       "description": "No person has an e-mail address any more, so there is nobody to put in the gate's allow policy.\n\nThe policy keeps its last entries. Enter an address under the integration's options, People, or [change a username]({docs_change_username}) to the address."
+    },
+    "revoke_unavailable": {
+      "title": "Removed people keep their Cloudflare Access sessions",
+      "description": "A person is no longer allowed in, but the Cloudflare credential cannot end their Access sessions, so they last until they expire.\n\nSign in with Cloudflare again to grant that, or give the API token 'Access: Organizations Revoke'."
     }
   },
   "config_subentries": {

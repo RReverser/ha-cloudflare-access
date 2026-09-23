@@ -21,11 +21,13 @@ from .const import (
     CONF_SESSION_DURATION,
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
+    DENY_MESSAGE_FMT,
     GATE_APP_NAME_FMT,
     GATE_LINKED_POLICY_NAME,
     GATE_POLICY_NAME,
     GATE_SERVICE_POLICY_NAME,
     OPTION_APP_TAG,
+    OPTION_IDP_IDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +52,31 @@ def _tags(options: dict[str, Any]) -> list[str]:
 def owned(app: dict[str, Any], tag: str) -> bool:
     """Return whether the application carries this entry's tag."""
     return tag in (app.get("tags") or [])
+
+
+def _login_settings(options: dict[str, Any]) -> dict[str, Any]:
+    """Return the login-method settings shared by the gate and the client applications.
+
+    With exactly one identity provider in the organization there is nothing to pick, so
+    people are sent straight to it; otherwise Access shows its picker page.
+    """
+    idps = list(options.get(OPTION_IDP_IDS) or [])
+    return {
+        "allowed_idps": idps if len(idps) == 1 else [],
+        "auto_redirect_to_identity": len(idps) == 1,
+    }
+
+
+def allowed_emails_of(app: dict[str, Any] | None) -> set[str]:
+    """Return the addresses an application's allow policy admits, as Cloudflare has it."""
+    found: set[str] = set()
+    for policy in (app or {}).get("policies") or []:
+        if policy.get("decision") != "allow":
+            continue
+        for rule in policy.get("include") or []:
+            if isinstance(email := (rule.get("email") or {}).get("email"), str):
+                found.add(email.strip().lower())
+    return found
 
 
 def include_rules(emails: Sequence[str]) -> list[dict[str, Any]]:
@@ -106,6 +133,8 @@ def desired_gate_app(
     return {
         "type": "self_hosted",
         "name": GATE_APP_NAME_FMT.format(hostname=hostname),
+        **_login_settings(options),
+        "custom_deny_message": DENY_MESSAGE_FMT.format(hostname=hostname),
         "tags": _tags(options),
         "domain": hostname,
         "destinations": [{"type": "public", "uri": hostname}],
@@ -177,6 +206,7 @@ def desired_client_app(
         "type": "saas",
         "name": CLIENT_APP_NAME_FMT.format(hostname=hostname, name=name),
         "tags": _tags(options),
+        **_login_settings(options),
         "app_launcher_visible": False,
         "saas_app": {
             "auth_type": "oidc",
@@ -208,6 +238,9 @@ _COMPARED_FIELDS = (
     "http_only_cookie_attribute",
     "same_site_cookie_attribute",
     "app_launcher_visible",
+    "allowed_idps",
+    "auto_redirect_to_identity",
+    "custom_deny_message",
 )
 
 
@@ -217,6 +250,9 @@ _CF_DEFAULTS: dict[str, Any] = {
     "path_cookie_attribute": False,
     "http_only_cookie_attribute": True,
     "app_launcher_visible": True,
+    "allowed_idps": [],
+    "auto_redirect_to_identity": False,
+    "custom_deny_message": "",
 }
 
 

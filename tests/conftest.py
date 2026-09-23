@@ -197,6 +197,11 @@ class FakeCloudflare:
     team_domain: str = TEAM_DOMAIN
     # service tokens by id, without their secrets (which are returned once, at creation)
     service_tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
+    identity_providers: list[dict[str, Any]] = field(
+        default_factory=lambda: [{"id": "otp-1", "name": "One-time PIN", "type": "onetimepin"}]
+    )
+    # addresses whose sessions were revoked, in order
+    revoked: list[str] = field(default_factory=list)
     server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
@@ -207,6 +212,7 @@ class FakeCloudflare:
             if r[0] in ("POST", "PUT", "DELETE")
             and (method is None or r[0] == method)
             and "/access/tags" not in r[1]
+            and "/revoke_user" not in r[1]
         ]
 
     def by_name(self, name: str) -> dict[str, Any] | None:
@@ -435,6 +441,21 @@ class FakeCloudflare:
             )
         return self._ok(self.service_tokens.pop(token_id))
 
+    async def list_identity_providers(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        page = int(request.query.get("page", "1"))
+        return self._ok(self.identity_providers if page == 1 else [])
+
+    async def revoke_user(self, request: web.Request) -> web.Response:
+        body = await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        assert body is not None and body.get("email")
+        self.revoked.append(body["email"])
+        return self._ok(True)
+
     async def list_tags(self, request: web.Request) -> web.Response:
         await self._record(request)
         return self._ok([{"name": t} for t in sorted(self.tags)])
@@ -540,6 +561,8 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     base = f"/accounts/{ACCOUNT_ID}/access"
     app.router.add_get("/memberships", fake.list_memberships)
     app.router.add_get(f"{base}/organizations", fake.organizations)
+    app.router.add_post(f"{base}/organizations/revoke_user", fake.revoke_user)
+    app.router.add_get(f"{base}/identity_providers", fake.list_identity_providers)
     app.router.add_get(f"{base}/service_tokens", fake.list_service_tokens)
     app.router.add_post(f"{base}/service_tokens", fake.create_service_token)
     app.router.add_get(f"{base}/service_tokens/{{token_id}}", fake.get_service_token)

@@ -8,6 +8,7 @@ with Access the clients that cannot register themselves.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
 from types import MappingProxyType
@@ -71,7 +72,9 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     ISSUE_NO_ALLOWED_USERS,
+    ISSUE_REVOKE_UNAVAILABLE,
     OPTION_APP_TAG,
+    OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
     SERVICE_TOKEN_NAME_FMT,
     SUBENTRY_TYPE_CLIENT,
@@ -82,6 +85,7 @@ from .jwks import JwksVerifier
 from .options import (
     api_for,
     app_tag,
+    async_provisioning_options,
     client_redirect_uris,
     client_subentries,
     credentialed_clients,
@@ -91,6 +95,7 @@ from .options import (
 )
 from .provision import (
     ProvisionResult,
+    allowed_emails_of,
     async_delete_apps,
     async_provision,
     desired_client_app,
@@ -398,6 +403,40 @@ async def _async_delete_stale_clients(
             await api.delete_app(app["id"])
 
 
+async def _async_revoke_removed(
+    hass: HomeAssistant, api: CloudflareAccessApi, previous: set[str], current: Sequence[str]
+) -> None:
+    """End the Access sessions of the addresses that just left the allow list.
+
+    Access re-checks a person against the policy only when their session expires, so
+    dropping an address from the rule alone would leave their sessions and their
+    clients' refresh tokens valid until then. A credential that cannot revoke (a
+    sign-in granted before the scope existed) raises a repair issue instead.
+    """
+    removed = sorted(previous - {e.strip().lower() for e in current})
+    for email in removed:
+        try:
+            await api.revoke_user(email)
+        except CloudflareAuthError as err:
+            _LOGGER.warning(
+                "The Access sessions of %s could not be ended; they last until they expire: %s",
+                email,
+                err,
+            )
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                ISSUE_REVOKE_UNAVAILABLE,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_REVOKE_UNAVAILABLE,
+            )
+            return
+        _LOGGER.info("Ended the Access sessions of %s, no longer on the allow list", email)
+    if removed:
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_REVOKE_UNAVAILABLE)
+
+
 async def _async_provision_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -448,14 +487,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     try:
         api = await api_for(hass, entry)
         await _async_migrate_service_token_option(hass, entry, api)
-        options = provisioning_options(entry)
+        options = await async_provisioning_options(entry, api)
         await api.ensure_tag(options[OPTION_APP_TAG])
+        # who the gate admitted before this run: anyone dropped since is logged out below
+        previous = allowed_emails_of(
+            await api.get_app(gate_id) if (gate_id := entry.data.get(DATA_GATE_APP_ID)) else None
+        )
         client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
         script_tokens = await _async_reconcile_scripts(hass, entry, api, options)
-        options = provisioning_options(entry)  # a replaced token has a new id
+        options = await async_provisioning_options(entry, api)  # a replaced token has a new id
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
         await _async_delete_stale_clients(api, options, None, client_apps)
         await _async_delete_stale_tokens(api, options, None, script_tokens)
+        await _async_revoke_removed(hass, api, previous, emails)
     except CloudflareAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except CloudflareUnavailableError as err:
@@ -497,7 +541,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
 
     async def _refresh() -> None:
         emails = allowed_emails(hass, login_emails(entry))
-        options = provisioning_options(entry)
+        options = {**provisioning_options(entry), OPTION_IDP_IDS: data.options[OPTION_IDP_IDS]}
         if (
             emails == data.emails
             and set(credentialed_clients(entry)) == set(data.client_apps)
@@ -528,11 +572,14 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 hass, entry, data.api, data.options, emails
             )
             script_tokens = await _async_reconcile_scripts(hass, entry, data.api, data.options)
-            data.options = provisioning_options(entry)
+            data.options = await async_provisioning_options(entry, data.api)
             await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
             await _async_delete_stale_tokens(
                 data.api, data.options, data.script_tokens, script_tokens
+            )
+            await _async_revoke_removed(
+                hass, data.api, {e.strip().lower() for e in data.emails}, emails
             )
             data.emails = emails
             data.client_apps = client_apps
