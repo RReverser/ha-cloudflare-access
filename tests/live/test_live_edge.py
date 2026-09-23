@@ -47,6 +47,7 @@ import pytest_socket
 
 from custom_components.cloudflare_access_relay.cloudflare_api import (
     CloudflareAccessApi,
+    CloudflareApiError,
 )
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
@@ -231,6 +232,43 @@ async def _app_updated_at(api: CloudflareAccessApi, entry: ConfigEntry) -> str:
     gate = await api.get_app(entry.data[DATA_GATE_APP_ID])
     assert gate
     return gate["updated_at"]
+
+
+async def test_live_foreign_hostname_is_refused(
+    hass: HomeAssistant, internet: None, disable_mock_zeroconf_resolver: None
+) -> None:
+    """An Access application for a hostname on a domain the account does not own.
+
+    The integration takes the hostname from Home Assistant's External URL; this checks
+    that Cloudflare refuses to guard a hostname outside the account instead of creating
+    an application that guards nothing.
+    """
+    api = CloudflareAccessApi(
+        os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"], http_client=get_async_client(hass)
+    )
+    foreign = f"{WORKER_NAME}.example.com"  # the run marker keeps the cleanup's sweep on it
+    body = {
+        "type": "self_hosted",
+        "name": f"ha-access: gate {foreign}",
+        "domain": foreign,
+        "destinations": [{"type": "public", "uri": foreign}],
+        "session_duration": "1h",
+        "app_launcher_visible": False,
+        "policies": [
+            {
+                "name": "ha-access: allow",
+                "decision": "allow",
+                "precedence": 1,
+                "include": [{"email": {"email": EMAIL}}],
+            }
+        ],
+    }
+    try:
+        with pytest.raises(CloudflareApiError) as refused:
+            await api.create_app(body)
+        print(f"== foreign hostname refused: {refused.value}")
+    finally:
+        await delete_run(api, RUN)
 
 
 async def test_live_lifecycle(
