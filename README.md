@@ -258,29 +258,22 @@ documentation; what was not exercised on a live instance is marked.
 
 ### The Cloudflared add-on
 
-The add-on's `external_hostname` is the hostname to enter here; the setup form prefills it
-from Home Assistant's External URL, which the add-on's own instructions have you set to the
-same value. Nothing else is needed for the gate: the add-on carries the request to Home
-Assistant, and the gate is enforced at Cloudflare's edge before that.
+The add-on's `external_hostname` is the hostname to enter here (the setup form prefills it
+from Home Assistant's External URL). Nothing else is needed for the gate: the add-on carries
+the request to Home Assistant, and the gate is enforced at Cloudflare's edge before that. The
+add-on's own [Home Assistant configuration](https://github.com/homeassistant-apps/app-cloudflared/blob/main/cloudflared/DOCS.md#home-assistant-configuration)
+steps apply as they are.
 
-Two settings around it matter:
-
-- **Trust the add-on as a proxy.** Under Settings → System → Network, turn on "Reverse
-  proxy - Trust X-Forwarded-For" and add the add-on's network `172.30.33.0/24` as a trusted
-  proxy, as the add-on's documentation says. Without it every request appears to come from
-  the tunnel's address: Home Assistant's own login attempt counter then bans everyone at
-  once after a few failures, and its logs are useless.
-- **Enforce the login inside the tunnel too (optional).** cloudflared can refuse any
-  request that lacks a valid Access assertion for the hostname, so the hostname stays closed
-  even if the Access application is edited or deleted outside the integration. This is the
-  origin setting Cloudflare calls *Protect with Access*, and it can only be turned on where
-  the tunnel's ingress is configured: with the add-on in its remote-managed mode (`tunnel_token`
-  set), in the Zero Trust dashboard under the tunnel's public hostname → Additional
-  application settings → Access, choosing the application `ha-access: gate <host>`. In the
-  add-on's default, locally managed mode there is no way to set it: the add-on generates the
-  ingress from its options, which have no origin settings, and its `run_parameters` option
-  accepts only a fixed list of daemon flags. The gate alone is the full protection in that
-  mode.
+One optional interaction between the two: cloudflared can refuse any request that lacks a
+valid Access assertion for the hostname, so the hostname stays closed even if the Access
+application is edited or deleted outside the integration. This is the origin setting
+Cloudflare calls *Protect with Access*, and it can only be turned on where the tunnel's
+ingress is configured. With the add-on in its remote-managed mode (`tunnel_token` set), it is
+in the Zero Trust dashboard under the tunnel's public hostname → Additional application
+settings → Access, choosing the application `ha-access: gate <host>`. In the add-on's
+default, locally managed mode there is no way to set it: the add-on generates the ingress
+from its options, which have no origin settings, and its `run_parameters` option accepts only
+a fixed list of daemon flags. The gate alone is the full protection in that mode.
 
 ### The built-in `mcp_server` integration
 
