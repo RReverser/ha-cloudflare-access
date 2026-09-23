@@ -247,17 +247,40 @@ Clients are subentries of the integration entry (*Add client*), of two kinds:
   Tokens: Edit** for this; a sign-in granted before the scope was added asks to sign in again
   when a script client is added.
 
-## MCP servers behind the gate
+## Using with other integrations
 
-Two MCP servers are common on Home Assistant, and they do different jobs: the built-in
-`mcp_server` integration exposes the Assist API (and other LLM APIs) and performs every
-call **as the person who logged in**; the HA-MCP custom component exposes a large
-administrative toolset and performs every call **as its own admin user** in every mode.
-People run either or both. Each has its own authentication settings, so each gets a
-configuration below: what to set on the server, what to add here, what to add on the
-Cloudflare side if wanted, why, and the alternatives with their trade-offs. Everything was
-traced from the sources (core 2026.9.2, HA-MCP 2.2.x) and Cloudflare's documentation; what
-was not exercised on a live instance is marked.
+The integration knows nothing about how the hostname reaches Home Assistant or what serves
+on it; it only guards the hostname. The three things people run next to it that deserve a
+precise account are the Cloudflared add-on, which usually provides the hostname, and the two
+MCP servers, which are the main users of the login clients. Everything below was traced from
+the sources (core 2026.9.2, HA-MCP 2.2.x, the add-on's configuration schema) and Cloudflare's
+documentation; what was not exercised on a live instance is marked.
+
+### The Cloudflared add-on
+
+The add-on's `external_hostname` is the hostname to enter here; the setup form prefills it
+from Home Assistant's External URL, which the add-on's own instructions have you set to the
+same value. Nothing else is needed for the gate: the add-on carries the request to Home
+Assistant, and the gate is enforced at Cloudflare's edge before that.
+
+Two settings around it matter:
+
+- **Trust the add-on as a proxy.** Under Settings → System → Network, turn on "Reverse
+  proxy - Trust X-Forwarded-For" and add the add-on's network `172.30.33.0/24` as a trusted
+  proxy, as the add-on's documentation says. Without it every request appears to come from
+  the tunnel's address: Home Assistant's own login attempt counter then bans everyone at
+  once after a few failures, and its logs are useless.
+- **Enforce the login inside the tunnel too (optional).** cloudflared can refuse any
+  request that lacks a valid Access assertion for the hostname, so the hostname stays closed
+  even if the Access application is edited or deleted outside the integration. This is the
+  origin setting Cloudflare calls *Protect with Access*, and it can only be turned on where
+  the tunnel's ingress is configured: with the add-on in its remote-managed mode (`tunnel_token`
+  set), in the Zero Trust dashboard under the tunnel's public hostname → Additional
+  application settings → Access, choosing the application `ha-access: gate <host>`. In the
+  add-on's default, locally managed mode there is no way to set it: the add-on generates the
+  ingress from its options, which have no origin settings, and its `run_parameters` option
+  accepts only a fixed list of daemon flags. The gate alone is the full protection in that
+  mode.
 
 ### The built-in `mcp_server` integration
 
@@ -266,7 +289,7 @@ Home Assistant's own authentication.
 
 | Where | Setting | Why |
 |---|---|---|
-| `mcp_server` | Defaults. Home Assistant's External URL = the hostname; the tunnel trusted as a proxy (Options) | Its own 401 metadata is built from the External URL; the proxy trust keeps `request.remote` real |
+| `mcp_server` | Defaults. Home Assistant's External URL = the hostname | Its own 401 metadata is built from the External URL |
 | Here | The MCP client added as *a client that logs people in* (its callback is in the list; Claude's is `https://claude.ai/api/mcp/auth_callback`); `/api/mcp` **not** an open path | The client's first call gets Access's 401 with OAuth metadata, registers dynamically and completes PKCE against Access; every later call carries an Access token that the origin rule maps to the person, and the server runs the call as that person (admin required outside the Assist API, the person's group policy on every service call, the Assist exposure list on every entity) |
 | Client | `https://<host>/api/mcp`, OAuth client ID and secret left empty | Home Assistant's own OAuth never runs, which sidesteps its two gaps: no dynamic registration and no PKCE |
 
@@ -322,10 +345,10 @@ Alternatives:
 - The component updates its server package from PyPI on its own every six hours, so its
   behaviour can change without a HACS update.
 
-### Cloudflare's MCP servers and portals on top of either
+### Cloudflare's MCP servers and portals
 
-Zero Trust > AI controls can register an MCP server object for either endpoint and put a
-portal in front of it, purely for auditing. What it adds on the Free plan: tool
+Zero Trust > AI controls can register an MCP server object for either MCP server above and
+put a portal in front of it, purely for auditing. What it adds on the Free plan: tool
 synchronisation, per-call portal logs (tool name, status, duration; the caller's e-mail
 only through Enterprise Logpush; arguments never), daily call counts, and optional Gateway
 routing with 24-hour HTTP logs. What it costs: the portal reaches Home Assistant with one
