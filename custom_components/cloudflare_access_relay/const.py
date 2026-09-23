@@ -150,6 +150,33 @@ BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 # Entry changes (client subentries) come in bursts; reconciliation runs once they settle.
 RECONCILE_COOLDOWN_SECONDS: Final = 5
 
+# Callback URLs of well-known clients, offered as choices for a login client's redirect
+# URLs (any URL can still be typed). Only URLs published by the vendor are listed, with
+# the page they come from; hosted callbacks only, since Access takes https URLs and a
+# trailing /* wildcard. Clients that run on a person's own computer (Claude Code, Cursor,
+# VS Code, Gemini CLI) call back on localhost, which is not a list entry at Access.
+KNOWN_REDIRECT_URIS: Final[tuple[tuple[str, str], ...]] = (
+    # https://claude.com/docs/connectors/building/authentication
+    ("https://claude.ai/api/mcp/auth_callback", "Claude (web, desktop, mobile)"),
+    # https://developers.openai.com/apps-sdk/build/auth
+    ("https://chatgpt.com/connector_platform_oauth_redirect", "ChatGPT"),
+    ("https://chatgpt.com/connector/oauth/*", "ChatGPT (per-connection callbacks)"),
+    # https://cursor.com/docs/mcp
+    ("https://www.cursor.com/agents/mcp/oauth/callback", "Cursor (web and cloud agents)"),
+    # https://code.visualstudio.com/api/extension-guides/ai/mcp
+    ("https://vscode.dev/redirect", "VS Code"),
+    ("https://insiders.vscode.dev/redirect", "VS Code Insiders"),
+    # https://support.google.com/g/answer/17106276
+    ("https://vertexaisearch.cloud.google.com/oauth-redirect", "Gemini Enterprise"),
+    # https://developers.google.com/workspace/guides/configure-mcp-servers
+    ("https://antigravity.google/oauth-callback", "Google Antigravity"),
+    # https://www.perplexity.ai/help-center/en/articles/13915507-adding-custom-remote-connectors
+    ("https://www.perplexity.ai/rest/connections/oauth_callback", "Perplexity"),
+    ("https://enterprise.perplexity.ai/rest/connections/oauth_callback", "Perplexity Enterprise"),
+    # https://learn.microsoft.com/en-us/connectors/custom-connectors/
+    ("https://global.consent.azure-apim.net/redirect/*", "Microsoft Copilot Studio"),
+)
+
 # Links and example URLs shown in the forms. Home Assistant forbids URLs inside the
 # translated strings, so they travel as description placeholders.
 _CF_DOCS: Final = "https://developers.cloudflare.com/cloudflare-one/"

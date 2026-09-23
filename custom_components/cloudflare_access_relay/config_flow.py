@@ -71,6 +71,7 @@ from .const import (
     DEFAULT_SESSION_DURATION,
     DOMAIN,
     FORM_PLACEHOLDERS,
+    KNOWN_REDIRECT_URIS,
     OPTION_APP_TAG,
     SECTION_BYPASS,
     SECTION_PEOPLE,
@@ -94,7 +95,17 @@ from .users import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_MULTI_TEXT = TextSelector(TextSelectorConfig(multiple=True))
+_REDIRECT_URIS = SelectSelector(
+    SelectSelectorConfig(
+        options=[
+            SelectOptionDict(value=uri, label=f"{label}: {uri}")
+            for uri, label in KNOWN_REDIRECT_URIS
+        ],
+        multiple=True,
+        custom_value=True,
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
 _CLIENT_KIND = SelectSelector(
     SelectSelectorConfig(
         options=[CLIENT_KIND_LOGIN, CLIENT_KIND_SCRIPT],
@@ -715,7 +726,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             fields[vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, ""))] = str
         fields[
             vol.Required(CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or []))
-        ] = _MULTI_TEXT
+        ] = _REDIRECT_URIS
         fields[
             vol.Required(CONF_NEEDS_CREDENTIALS, default=bool(defaults.get(CONF_NEEDS_CREDENTIALS)))
         ] = BooleanSelector()

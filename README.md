@@ -66,7 +66,12 @@ Assistant with the same signed assertion a browser session gets. Access's own po
 who may link, and revoking a person in Access ends their clients at the next token refresh.
 Every such client is added under *Add client* on the integration entry as *a client that
 logs people in*, with a name and the callback URL(s) the client's own side shows; the
-callback belongs to the client and cannot be derived. Two kinds, one mechanism behind both:
+callback belongs to the client and cannot be derived, but the form offers the published
+callbacks of well-known clients (Claude, ChatGPT, Cursor, VS Code, Gemini Enterprise,
+Antigravity, Perplexity, Copilot Studio) as choices. Clients that run on a person's own
+computer (Claude Code, Cursor's desktop app, VS Code, Gemini CLI) call back on localhost,
+which Access does not take as a list entry; they are not supported yet. Two kinds, one
+mechanism behind both:
 
 - **Clients that discover and register themselves** (MCP clients): the gate has *managed
   OAuth* enabled, which makes Access the OAuth server for the hostname. An unauthenticated
