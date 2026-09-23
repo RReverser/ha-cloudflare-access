@@ -59,7 +59,7 @@
       },
       "reauth_confirm": {
         "title": "Sign in with Cloudflare again",
-        "description": "Cloudflare no longer accepts the sign-in.\n\nOn the next page you sign in again."
+        "description": "Cloudflare no longer accepts the sign-in, or the sign-in lacks a permission the integration uses: reading the login history, or ending the sessions of removed people.\n\nOn the next page you sign in again and grant everything the integration uses."
       }
     },
     "error": {
@@ -130,37 +130,81 @@
     }
   },
   "issues": {
-    "restart_required": {
-      "title": "Restart Home Assistant to accept clients authenticated by Cloudflare Access",
-      "description": "The integration was set up after the web server had started, so its authentication middleware could not be installed.\n\nUntil Home Assistant restarts, it rejects requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access let through."
+    "middleware_unavailable": {
+      "title": "Clients authenticated by Cloudflare Access cannot be recognised",
+      "description": "Home Assistant's web server did not accept the integration's authentication hook, so requests from token-bearing clients (Google Assistant, Alexa, MCP clients) that Cloudflare Access let through are rejected by Home Assistant.\n\nThis follows a change in Home Assistant's web server library that the integration does not know yet. Report it with your Home Assistant version; a restart does not help."
     },
     "no_allowed_users": {
       "title": "No Home Assistant user can pass the Cloudflare Access gate",
       "description": "No person has an e-mail address any more, so there is nobody to put in the gate's allow policy.\n\nThe policy keeps its last entries. Enter an address under the integration's options, People, or [change a username]({docs_change_username}) to the address."
     },
-    "revoke_unavailable": {
-      "title": "Removed people keep their Cloudflare Access sessions",
-      "description": "A person is no longer allowed in, but the Cloudflare credential cannot end their Access sessions, so they last until they expire.\n\nSign in with Cloudflare again to grant that, or give the API token 'Access: Organizations Revoke'."
-    },
     "denied_login": {
       "title": "{email} was refused by Cloudflare Access",
-      "description": "Someone logged in as {email} on {when} and was turned away from {app}, because the address is not on the allow list.\n\nIf this is a person of the household, give them the address under the integration's options, People. Otherwise nothing is needed; the attempt got nowhere."
-    },
-    "logs_unavailable": {
-      "title": "Cloudflare Access login history cannot be read",
-      "description": "The Cloudflare credential cannot read the authentication logs, so last-login times, login events and denied-login warnings are missing.\n\nSign in with Cloudflare again to grant that, or give the API token 'Access: Audit Logs Read'."
+      "description": "Someone logged in as {email} on {when} and was turned away from {app}, because the address is not on the allow list.\n\nIf this is a person of the household, give them the address: the fix below does that, or the integration's options, People. Otherwise nothing is needed; the attempt got nowhere.",
+      "fix_flow": {
+        "step": {
+          "person": {
+            "title": "Let {email} in",
+            "description": "Pick the person this address belongs to. It becomes their login e-mail, and the gate lets it in from the next reload.",
+            "data": {
+              "user_id": "Person"
+            }
+          }
+        },
+        "abort": {
+          "no_people": "There is no person to give the address to.",
+          "entry_gone": "The integration entry is gone."
+        }
+      }
     },
     "mcp_auth_conflict": {
       "title": "HA-MCP's login mode does not work behind Cloudflare Access",
-      "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL (none): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate."
+      "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL (none): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Settle HA-MCP's login against the gate",
+            "description": "HA-MCP is in its {mode} mode. Choose which login remains on its webhook.",
+            "menu_options": {
+              "secret_url": "Switch HA-MCP to its secret URL mode: the Access login is the credential, the URL a second factor",
+              "bypass": "List the webhook under Bypass policies: HA-MCP's own login stays the only gate there"
+            }
+          }
+        },
+        "abort": {
+          "entry_gone": "The integration entry is gone."
+        }
+      }
     },
     "no_external_url": {
       "title": "Home Assistant's External URL is gone",
-      "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more.\n\nThe applications stay as they were. Set the External URL again under [Settings, System, Network]({docs_external_url}); the gate follows it."
+      "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more.\n\nThe applications stay as they were. Set the External URL again under [Settings, System, Network]({docs_external_url}); the gate follows it.",
+      "fix_flow": {
+        "step": {
+          "url": {
+            "title": "Set the External URL",
+            "description": "The public https URL of Home Assistant, whose hostname the gate guards. The gate follows it.",
+            "data": {
+              "external_url": "External URL"
+            }
+          }
+        },
+        "error": {
+          "invalid_url": "Enter an https URL with a hostname."
+        }
+      }
     },
     "update_failed": {
       "title": "The Cloudflare Access applications could not be updated",
-      "description": "A change of people, clients or the External URL could not be applied to the Access applications, which keep their last state: the gate still guards {hostname}.\n\nCloudflare answered: {error}\n\nThe next change tries again; reloading the integration retries at once."
+      "description": "A change of people, clients or the External URL could not be applied to the Access applications, which keep their last state: the gate still guards {hostname}.\n\nCloudflare answered: {error}\n\nThe next change tries again; the fix below tries at once.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Apply the change again",
+            "description": "Reloads the integration, which applies the change to the Access applications again.\n\nCloudflare's last answer: {error}"
+          }
+        }
+      }
     }
   },
   "config_subentries": {

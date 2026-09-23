@@ -65,14 +65,13 @@ OAUTH_SCOPES: Final[tuple[str, ...]] = (
 # A credential added under Settings → Application credentials takes its place.
 OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
-# Repair issues
+# Repair issues. Each one whose remedy is an action offers it as a fix flow (repairs.py);
+# the issue's data names the entry and carries what the flow needs. A credential that
+# lacks a permission (an older sign-in, an API token without it) starts the
+# re-authentication flow instead of an issue: signing in again is the remedy.
 ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
-# The credential cannot revoke sessions (a sign-in granted before the scope existed).
-ISSUE_REVOKE_UNAVAILABLE: Final = "revoke_unavailable"
 # Someone logged in at the identity provider but is not on the allow list.
 ISSUE_DENIED_LOGIN: Final = "denied_login"
-# The credential cannot read the authentication logs.
-ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
 # HA-MCP demands its own login on a webhook the gate also guards.
 ISSUE_MCP_AUTH_CONFLICT: Final = "mcp_auth_conflict"
 # Home Assistant's External URL was removed after setup.
@@ -99,9 +98,11 @@ LOGS_STORE_VERSION: Final = 1
 # Sent after a reconciliation, when the people may have changed.
 SIGNAL_PEOPLE_CHANGED = SignalType[str]("cloudflare_access_relay_people_changed")
 
-# Edge identity (see edge_auth.py): the middleware must be installed before the web
-# server starts, so the first setup after installation asks for a restart.
-ISSUE_RESTART_REQUIRED: Final = "restart_required"
+# Edge identity (see edge_auth.py): raised when the running web server cannot take the
+# middleware, which no restart fixes.
+ISSUE_MIDDLEWARE_UNAVAILABLE: Final = "middleware_unavailable"
+# Raised by versions before 0.2.0 after every start; deleted once at setup.
+LEGACY_ISSUE_RESTART_REQUIRED: Final = "restart_required"
 HEADER_JWT: Final = "Cf-Access-Jwt-Assertion"
 HEADER_CF_RAY: Final = "CF-Ray"
 

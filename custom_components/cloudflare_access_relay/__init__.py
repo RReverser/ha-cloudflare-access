@@ -76,8 +76,8 @@ from .const import (
     ISSUE_MCP_AUTH_CONFLICT,
     ISSUE_NO_ALLOWED_USERS,
     ISSUE_NO_EXTERNAL_URL,
-    ISSUE_REVOKE_UNAVAILABLE,
     ISSUE_UPDATE_FAILED,
+    LEGACY_ISSUE_RESTART_REQUIRED,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
@@ -127,6 +127,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     caught here, on the state change and at the next start.
     """
     async_register_project_client(hass)
+    ir.async_delete_issue(hass, DOMAIN, LEGACY_ISSUE_RESTART_REQUIRED)
 
     def _take_down(entry: ConfigEntry) -> None:
         hass.async_create_background_task(
@@ -429,30 +430,22 @@ async def _async_revoke_removed(
     Access re-checks a person against the policy only when their session expires, so
     dropping an address from the rule alone would leave their sessions and their
     clients' refresh tokens valid until then. A credential that cannot revoke (a
-    sign-in granted before the scope existed) raises a repair issue instead.
+    sign-in granted before the scope existed) starts the re-authentication instead.
     """
     removed = sorted(previous - {e.strip().lower() for e in current})
     for email in removed:
         try:
             await api.revoke_user(email)
         except CloudflareAuthError as err:
+            # the credential lacks the permission: signing in again grants it
             _LOGGER.warning(
                 "The Access sessions of %s could not be ended; they last until they expire: %s",
                 email,
                 err,
             )
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                issue_id(entry, ISSUE_REVOKE_UNAVAILABLE),
-                is_fixable=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key=ISSUE_REVOKE_UNAVAILABLE,
-            )
+            entry.async_start_reauth(hass)
             return
         _LOGGER.info("Ended the Access sessions of %s, no longer on the allow list", email)
-    if removed:
-        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_REVOKE_UNAVAILABLE))
 
 
 async def _async_provision_entry(
@@ -622,10 +615,11 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 hass,
                 DOMAIN,
                 issue_id(entry, ISSUE_NO_EXTERNAL_URL),
-                is_fixable=False,
+                is_fixable=True,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_NO_EXTERNAL_URL,
                 translation_placeholders=FORM_PLACEHOLDERS,
+                data={"key": ISSUE_NO_EXTERNAL_URL, "entry_id": entry.entry_id},
             )
             return
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_NO_EXTERNAL_URL))
@@ -694,13 +688,14 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 hass,
                 DOMAIN,
                 issue_id(entry, ISSUE_UPDATE_FAILED),
-                is_fixable=False,
+                is_fixable=True,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=ISSUE_UPDATE_FAILED,
                 translation_placeholders={
                     "hostname": previous_options[CONF_HOSTNAME],
                     "error": str(err),
                 },
+                data={"key": ISSUE_UPDATE_FAILED, "entry_id": entry.entry_id},
             )
             return
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_UPDATE_FAILED))
@@ -789,7 +784,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await async_remove_login_history(hass, entry)
     for key in (
         ISSUE_NO_ALLOWED_USERS,
-        ISSUE_REVOKE_UNAVAILABLE,
         ISSUE_MCP_AUTH_CONFLICT,
         ISSUE_NO_EXTERNAL_URL,
         ISSUE_UPDATE_FAILED,

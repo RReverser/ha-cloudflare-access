@@ -12,6 +12,7 @@
     "http",
     "application_credentials",
     "person",
+    "repairs",
     "webhook"
   ],
   "documentation": "https://github.com/RReverser/ha-cloudflare-access",
