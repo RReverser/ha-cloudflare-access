@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlowResult,
     ConfigSubentryFlow,
@@ -20,6 +21,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.selector import (
     BooleanSelector,
     DurationSelector,
@@ -151,7 +153,7 @@ def _clean_list(values: list[str] | None) -> list[str]:
     return [v.strip() for v in values or [] if v and v.strip()]
 
 
-def _people_section(
+async def _people_section(
     hass: HomeAssistant, extra: Mapping[str, str], defaults: Mapping[str, Any]
 ) -> tuple[dict[Any, Any], dict[str, str]]:
     """Return the People section, one e-mail field per person, and the name-to-user map.
@@ -163,7 +165,7 @@ def _people_section(
     fields: dict[Any, Any] = {}
     names: dict[str, str] = {}
     entered = defaults.get(SECTION_PEOPLE) or {}
-    for user in person_users(hass):
+    for user in await person_users(hass):
         name = user.name or user.id
         if (address := username_address(user)) is not None:
             fields[vol.Optional(name, default=address)] = TextSelector(
@@ -276,12 +278,12 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
     return None
 
 
-def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
+async def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
     """Return a note naming the people who cannot log in, only when there are any.
 
     Shown inside the People section, which renders plain text: no markup here.
     """
-    missing = users_without_address(hass, extra)
+    missing = await users_without_address(hass, extra)
     if not missing:
         return {"no_address_note": ""}
     names = ", ".join(u.name or u.id for u in missing)
@@ -294,6 +296,8 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     DOMAIN = DOMAIN
     VERSION = 1
+    # 2: options and subentries of earlier versions are migrated (`async_migrate_entry`).
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         """Start with no credential."""
@@ -441,9 +445,11 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     # -------------------------------------------------------------------- settings
 
     def _default_hostname(self) -> str:
-        if self.hass.config.external_url:
-            return normalise_hostname(self.hass.config.external_url)
-        return ""
+        """Offer the instance's public URL's hostname, when it has one."""
+        try:
+            return normalise_hostname(get_url(self.hass, allow_internal=False, allow_ip=False))
+        except NoURLAvailableError:
+            return ""
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
@@ -458,7 +464,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             options = _validate_options(user_input, errors)
             options[CONF_HOSTNAME] = hostname
             options[CONF_LOGIN_EMAILS] = emails
-            if not errors and not allowed_emails(self.hass, emails):
+            if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
             if not errors:
                 await self.async_set_unique_id(hostname)
@@ -469,7 +475,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     options={CONF_GATE_ENABLED: DEFAULT_GATE_ENABLED, **options},
                 )
         defaults: dict[str, Any] = dict(user_input or {})
-        people, self._people = _people_section(self.hass, {}, defaults)
+        people, self._people = await _people_section(self.hass, {}, defaults)
         schema = vol.Schema(
             {
                 vol.Required(
@@ -485,7 +491,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 **FORM_PLACEHOLDERS,
-                **_users_placeholders(self.hass, {}),
+                **await _users_placeholders(self.hass, {}),
             },
         )
 
@@ -510,7 +516,10 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 class OptionsFlowHandler(OptionsFlowWithReload):
     """Everything but the credentials; saving reloads and re-provisions."""
 
-    _people: dict[str, str] = {}
+    def __init__(self) -> None:
+        """Start with no people known."""
+        super().__init__()
+        self._people: dict[str, str] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and process the options form."""
@@ -521,12 +530,14 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             options = _validate_options(user_input, errors)
             options[CONF_HOSTNAME] = current[CONF_HOSTNAME]
             options[CONF_LOGIN_EMAILS] = emails
-            if not errors and not allowed_emails(self.hass, emails):
+            if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
             if not errors:
                 return self.async_create_entry(data=options)
             current = {**current, **user_input}
-        people, self._people = _people_section(self.hass, login_emails(self.config_entry), current)
+        people, self._people = await _people_section(
+            self.hass, login_emails(self.config_entry), current
+        )
         schema = vol.Schema(
             {
                 vol.Required(
@@ -544,7 +555,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             description_placeholders={
                 **FORM_PLACEHOLDERS,
                 CONF_HOSTNAME: current.get(CONF_HOSTNAME, ""),
-                **_users_placeholders(self.hass, login_emails(self.config_entry)),
+                **await _users_placeholders(self.hass, login_emails(self.config_entry)),
             },
         )
 
@@ -720,7 +731,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     ) -> dict[str, Any] | None:
         """Create or update the login client's Access application; return the data to store."""
         entry = self._get_entry()
-        emails = allowed_emails(self.hass, login_emails(entry))
+        emails = await allowed_emails(self.hass, login_emails(entry))
         try:
             api = await api_for(self.hass, entry)
             options = await async_provisioning_options(entry, api)
@@ -868,7 +879,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
 
     def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
         """Create or update the subentry; a lost application or token is replaced on reconciliation."""
-        if self.source == "reconfigure":
+        if self.source == SOURCE_RECONFIGURE:
             entry = self._get_entry()
             sub = self._get_reconfigure_subentry()
             if data[CONF_CLIENT_KIND] == CLIENT_KIND_LOGIN and not data[CONF_NEEDS_CREDENTIALS]:

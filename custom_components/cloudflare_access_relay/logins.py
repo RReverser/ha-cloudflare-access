@@ -32,6 +32,7 @@ from .const import (
     LOG_POLL_INTERVAL_SECONDS,
     LOGS_STORE_VERSION,
 )
+from .issues import issue_id
 from .users import async_find_user, login_emails
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,17 @@ class LoginHistory:
         return max(times) if times else None
 
 
+def _store_for(hass: HomeAssistant, entry: ConfigEntry) -> Store[dict[str, Any]]:
+    return Store(hass, LOGS_STORE_VERSION, f"{DOMAIN}.{entry.entry_id}.logins")
+
+
+async def async_remove_login_history(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the stored history and the repair issues of a removed entry."""
+    await _store_for(hass, entry).async_remove()
+    for key in (ISSUE_LOGS_UNAVAILABLE, ISSUE_DENIED_LOGIN):
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
+
+
 class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
     """Polls the authentication logs of this entry's applications."""
 
@@ -83,28 +95,35 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
             update_interval=timedelta(seconds=LOG_POLL_INTERVAL_SECONDS),
         )
         self._api = api
-        self._store: Store[dict[str, Any]] = Store(
-            hass, LOGS_STORE_VERSION, f"{DOMAIN}.{entry.entry_id}.logins"
-        )
+        self._store = _store_for(hass, entry)
         self._loaded = False
         # The applications whose entries count: the gate and the clients' applications.
         self.app_ids: set[str] = set()
 
+    async def async_load(self) -> None:
+        """Load the stored history, before the first read.
+
+        Not the coordinator's `_async_setup`: that only runs from
+        `async_config_entry_first_refresh`, whose failure would fail the entry, while
+        the logs are optional.
+        """
+        if not self._loaded:
+            self.data = LoginHistory.from_dict(await self._store.async_load())
+            self._loaded = True
+
     async def _async_update_data(self) -> LoginHistory:
         history = self.data if self.data is not None else LoginHistory()
-        if not self._loaded:
-            history = LoginHistory.from_dict(await self._store.async_load())
-            self._loaded = True
         since = dt_util.parse_datetime(history.cursor) if history.cursor else None
         if since is None:
             since = dt_util.utcnow() - _FIRST_LOOKBACK
         try:
             entries = await self._api.list_access_logs(since)
         except CloudflareAuthError as err:
+            assert self.config_entry is not None
             ir.async_create_issue(
                 self.hass,
                 DOMAIN,
-                ISSUE_LOGS_UNAVAILABLE,
+                issue_id(self.config_entry, ISSUE_LOGS_UNAVAILABLE),
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
                 translation_key=ISSUE_LOGS_UNAVAILABLE,
@@ -112,7 +131,10 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
             raise UpdateFailed(f"the authentication logs cannot be read: {err}") from err
         except CloudflareError as err:
             raise UpdateFailed(f"the authentication logs were not read: {err}") from err
-        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_LOGS_UNAVAILABLE)
+        assert self.config_entry is not None
+        ir.async_delete_issue(
+            self.hass, DOMAIN, issue_id(self.config_entry, ISSUE_LOGS_UNAVAILABLE)
+        )
         newest = since
         changed = False
         for entry in sorted(entries, key=lambda e: str(e.get("created_at") or "")):
@@ -160,7 +182,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            ISSUE_DENIED_LOGIN,
+            issue_id(self.config_entry, ISSUE_DENIED_LOGIN),
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_DENIED_LOGIN,

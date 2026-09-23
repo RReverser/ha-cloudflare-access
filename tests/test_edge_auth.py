@@ -94,7 +94,7 @@ async def test_identity_is_the_login_username_without_configuration(
             is_new=False,
         ),
     )
-    assert "carol" not in " ".join(allowed_emails(hass, {}))
+    assert "carol" not in " ".join(await allowed_emails(hass, {}))
 
     resp = await client.get(
         "/api/whoami", headers={**FOREIGN, **edge(**{HDR: access.mint(extra={"email": None})})}

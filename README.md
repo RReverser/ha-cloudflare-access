@@ -203,7 +203,7 @@ integration's system options can turn polling off, and the `homeassistant.update
 service forces a read) from a stored cursor, so nothing is replayed after a restart, and turns
 each new entry into:
 
-- a `cloudflare_access_login` event on the bus (`email`, `allowed`, `user_id` when the address
+- a `cloudflare_access_relay_login` event on the bus (`email`, `allowed`, `user_id` when the address
   belongs to a person, `app`, `login_method`, `ip_address`, `when`), for automations;
 - a diagnostic sensor per person, "<name> last login", holding the time of their latest
   allowed login through any of their addresses;

@@ -1,6 +1,9 @@
 {
   "domain": "cloudflare_access_relay",
   "name": "Cloudflare Access",
+  "after_dependencies": [
+    "mobile_app"
+  ],
   "codeowners": [
     "@RReverser"
   ],
@@ -8,7 +11,8 @@
   "dependencies": [
     "http",
     "application_credentials",
-    "person"
+    "person",
+    "webhook"
   ],
   "documentation": "https://github.com/RReverser/ha-cloudflare-access",
   "integration_type": "service",

@@ -68,7 +68,7 @@ async def test_logins_become_events_sensors_and_a_denied_login_issue(
     state = hass.states.get("sensor.ha_example_com_alice_last_login")
     assert state is not None and state.state == stamp(30)
     assert hass.states.get("sensor.ha_example_com_bob_last_login").state == "unknown"
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, "denied_login")
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, f"denied_login_{access.entry.entry_id}")
     assert issue is not None and issue.translation_placeholders["email"] == "eve@example.com"
 
     # nothing new: nothing repeated
@@ -96,8 +96,14 @@ async def test_logs_that_cannot_be_read_raise_an_issue_and_nothing_else(
     cf = access.cloudflare
     cf.fail_status, cf.fail_predicate = 403, lambda _m, path: path.endswith("/access_requests")
     await _poll(hass)
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "logs_unavailable") is not None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"logs_unavailable_{access.entry.entry_id}")
+        is not None
+    )
     assert access.entry.state.value == "loaded"
     cf.fail_status = cf.fail_predicate = None
     await _poll(hass)
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "logs_unavailable") is None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"logs_unavailable_{access.entry.entry_id}")
+        is None
+    )

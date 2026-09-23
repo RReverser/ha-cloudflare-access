@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiohttp import ClientResponseError
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import (
+    OAuth2TokenRequestReauthError,
+    OAuth2TokenRequestTransientError,
+)
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.httpx_client import get_async_client
 
-from .cloudflare_api import CloudflareAccessApi, CloudflareAuthError
+from .cloudflare_api import (
+    CloudflareAccessApi,
+    CloudflareAuthError,
+    CloudflareUnavailableError,
+)
 from .const import (
     APP_TAG_FMT,
     CLIENT_KIND_LOGIN,
@@ -141,12 +148,12 @@ async def api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessAp
     async def access_token() -> str:
         try:
             await session.async_ensure_token_valid()
-        except ClientResponseError as err:
-            if err.status in (400, 401):
-                raise CloudflareAuthError(
-                    f"Cloudflare refused to refresh the sign-in: {err}"
-                ) from err
-            raise
+        except OAuth2TokenRequestReauthError as err:
+            raise CloudflareAuthError(f"Cloudflare refused to refresh the sign-in: {err}") from err
+        except OAuth2TokenRequestTransientError as err:
+            raise CloudflareUnavailableError(
+                f"Cloudflare could not refresh the sign-in right now: {err}"
+            ) from err
         return str(session.token["access_token"])
 
     return CloudflareAccessApi(
