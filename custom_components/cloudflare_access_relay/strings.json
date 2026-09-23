@@ -140,12 +140,11 @@
     },
     "denied_login": {
       "title": "{email} was refused by Cloudflare Access",
-      "description": "Someone logged in as {email} on {when} and was turned away from {app}, because the address is not on the allow list.\n\nIf this is a person of the household, give them the address: the fix below does that, or the integration's options, People. Otherwise nothing is needed; the attempt got nowhere.",
       "fix_flow": {
         "step": {
           "person": {
             "title": "Let {email} in",
-            "description": "Pick the person this address belongs to. It becomes their login e-mail, and the gate lets it in from the next reload.",
+            "description": "Someone logged in as {email} on {when} and was turned away from {app}, because the address is not on the allow list.\n\nIf this is a person of the household, pick them: the address becomes their login e-mail and the gate lets it in from the next reload. Otherwise ignore this issue; the attempt got nowhere.",
             "data": {
               "user_id": "Person"
             }
@@ -159,12 +158,11 @@
     },
     "mcp_auth_conflict": {
       "title": "HA-MCP's login mode does not work behind Cloudflare Access",
-      "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nSet HA-MCP's authentication mode to the secret URL (none): behind Access the person's login is the credential and the URL a second factor. Or list the webhook under Bypass policies, which leaves HA-MCP's own login as the only gate.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Settle HA-MCP's login against the gate",
-            "description": "HA-MCP is in its {mode} mode. Choose which login remains on its webhook.",
+            "description": "HA-MCP is in its {mode} mode, so it asks for its own login on its webhook, while Cloudflare Access asks for a login first. A client can pass only one, so connections fail.\n\nChoose which login remains on the webhook.",
             "menu_options": {
               "secret_url": "Switch HA-MCP to its secret URL mode: the Access login is the credential, the URL a second factor",
               "bypass": "List the webhook under Bypass policies: HA-MCP's own login stays the only gate there"
@@ -178,12 +176,11 @@
     },
     "no_external_url": {
       "title": "Home Assistant's External URL is gone",
-      "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more.\n\nThe applications stay as they were. Set the External URL again under [Settings, System, Network]({docs_external_url}); the gate follows it.",
       "fix_flow": {
         "step": {
           "url": {
             "title": "Set the External URL",
-            "description": "The public https URL of Home Assistant, whose hostname the gate guards. The gate follows it.",
+            "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more. The applications stay as they were.\n\nEnter the public https URL of Home Assistant; the gate follows its hostname. It can also be set under [Settings, System, Network]({docs_external_url}).",
             "data": {
               "external_url": "External URL"
             }
@@ -196,12 +193,11 @@
     },
     "update_failed": {
       "title": "The Cloudflare Access applications could not be updated",
-      "description": "A change of people, clients or the External URL could not be applied to the Access applications, which keep their last state: the gate still guards {hostname}.\n\nCloudflare answered: {error}\n\nThe next change tries again; the fix below tries at once.",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Apply the change again",
-            "description": "Reloads the integration, which applies the change to the Access applications again.\n\nCloudflare's last answer: {error}"
+            "description": "A change of people, clients or the External URL could not be applied to the Access applications, which keep their last state: the gate still guards {hostname}.\n\nCloudflare answered: {error}\n\nSubmitting reloads the integration, which applies the change again; the next change would retry too."
           }
         }
       }
