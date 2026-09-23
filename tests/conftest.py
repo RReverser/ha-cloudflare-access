@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+import socket
 import time
 from typing import Any
 from unittest.mock import patch
@@ -20,9 +21,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from homeassistant.auth.models import Credentials, User
 from homeassistant.core import HomeAssistant
+import httpx
 import jwt
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import pytest_socket
 
 from custom_components.cloudflare_access_relay.const import (
     CONF_ACCOUNT_ID,
@@ -732,3 +735,40 @@ def anyio_backend() -> str:
 @pytest.fixture
 def no_socket_guard() -> Generator[None]:
     yield
+
+
+# ---- talking to a real Cloudflare edge (tests/live, tests/rollout)
+
+
+def is_access_redirect(resp: httpx.Response) -> bool:
+    """Access's answer to an unauthenticated request.
+
+    A redirect to the login page for a browser, or (managed OAuth) a 401 pointing a
+    non-browser client at its OAuth metadata.
+    """
+    if resp.status_code == 401 and "www-authenticate" in resp.headers:
+        return True
+    return resp.status_code in (
+        301,
+        302,
+        303,
+        307,
+    ) and ".cloudflareaccess.com/" in resp.headers.get("location", "")
+
+
+@pytest.fixture
+def internet() -> Generator[None]:
+    """Allow real network access for this test.
+
+    The Home Assistant test plugin blocks sockets, restricts connections to
+    127.0.0.1 and refuses DNS names on every test; `socket_enabled` alone only
+    lifts the first of those.
+    """
+    saved = (socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname)
+    pytest_socket._remove_restrictions()
+    socket.getaddrinfo = pytest_socket._true_getaddrinfo
+    socket.gethostbyname = pytest_socket._true_gethostbyname
+    try:
+        yield
+    finally:
+        socket.socket, socket.socket.connect, socket.getaddrinfo, socket.gethostbyname = saved

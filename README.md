@@ -175,10 +175,11 @@ project's CI: start the flow with the source `api_token`.
 
 ## Rollout
 
-1. Gate off: run `tests/contract/check_edge.sh` with `MODE=off` (the script header lists its
-   inputs) to confirm the hostname behaves as before.
+1. Gate off: run the rollout checks against your hostname with `MODE=off` to confirm it
+   behaves as before (`HA_HOST=… CF_JWT=… HA_TOKEN=… MODE=off uv run pytest tests/rollout`;
+   the module's header lists the inputs).
 2. Enable the gate in the options. **This is the exposure change.** Rollback is the same
-   switch, or removing the integration. Run `check_edge.sh` with `MODE=gated`.
+   switch, or removing the integration. Run the rollout checks again with `MODE=gated`.
 3. Browser: open the hostname, log in to Access, then to Home Assistant.
 4. Android: add the server in the app, log in to Access in the app's WebView when it appears,
    then to Home Assistant. Confirm the dashboard, camera images and notification tap-throughs
