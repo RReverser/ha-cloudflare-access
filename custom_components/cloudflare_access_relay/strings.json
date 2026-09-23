@@ -180,7 +180,7 @@
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
+            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers well-known clients; you can also type any URL, for example {example_console_redirect} for a console client, and {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },
@@ -194,7 +194,7 @@
           },
           "data_description": {
             "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
-            "redirect_uris": "The URL the client returns to after the login.\n\nFor example {example_mcp_redirect} or {example_console_redirect}; {example_wildcard_redirect} covers every path.",
+            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers well-known clients; you can also type any URL, for example {example_console_redirect} for a console client, and {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },
