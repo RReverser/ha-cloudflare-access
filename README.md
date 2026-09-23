@@ -254,23 +254,23 @@ Two MCP servers are common on Home Assistant, and they do different jobs: the bu
 call **as the person who logged in**; the HA-MCP custom component exposes a large
 administrative toolset and performs every call **as its own admin user** in every mode.
 People run either or both. Each has its own authentication settings, so each gets a
-recommended pipeline below: the server's setting, this integration's setting, what to add
-on the Cloudflare side if wanted, why that combination, and the alternatives with their
-trade-offs. Everything was traced from the sources (core 2026.9.2, HA-MCP 2.2.x) and
-Cloudflare's documentation; what was not exercised on a live instance is marked.
+configuration below: what to set on the server, what to add here, what to add on the
+Cloudflare side if wanted, why, and the alternatives with their trade-offs. Everything was
+traced from the sources (core 2026.9.2, HA-MCP 2.2.x) and Cloudflare's documentation; what
+was not exercised on a live instance is marked.
 
-### Pipeline for the built-in `mcp_server`
+### The built-in `mcp_server` integration
 
 Endpoint `POST /api/mcp` (also `/api/mcp/<api>`), stateless streamable HTTP, guarded by
 Home Assistant's own authentication.
 
-| Layer | Setting | Why |
+| Where | Setting | Why |
 |---|---|---|
-| `mcp_server` | Defaults. Home Assistant's External URL = the hostname; the tunnel trusted as a proxy (Options) | The External URL is what its own 401 metadata is built from; the proxy trust keeps `request.remote` real |
-| This integration | Enabled on; the MCP client added as *a client that logs people in* (its callback is in the list; Claude's is `https://claude.ai/api/mcp/auth_callback`); `/api/mcp` **not** an open path | The client's first call gets Access's 401 with OAuth metadata, registers dynamically and completes PKCE against Access; every later call carries an Access token that the origin rule maps to the person, and the server runs the call as that person (admin required outside the Assist API, the person's group policy on every service call, the Assist exposure list on every entity) |
+| `mcp_server` | Defaults. Home Assistant's External URL = the hostname; the tunnel trusted as a proxy (Options) | Its own 401 metadata is built from the External URL; the proxy trust keeps `request.remote` real |
+| Here | The MCP client added as *a client that logs people in* (its callback is in the list; Claude's is `https://claude.ai/api/mcp/auth_callback`); `/api/mcp` **not** an open path | The client's first call gets Access's 401 with OAuth metadata, registers dynamically and completes PKCE against Access; every later call carries an Access token that the origin rule maps to the person, and the server runs the call as that person (admin required outside the Assist API, the person's group policy on every service call, the Assist exposure list on every entity) |
 | Client | `https://<host>/api/mcp`, OAuth client ID and secret left empty | Home Assistant's own OAuth never runs, which sidesteps its two gaps: no dynamic registration and no PKCE |
 
-Options within this pipeline:
+Alternatives:
 
 - **A script or service with no login** (a cron job, a header-only client): a script client
   (Client ID and secret as headers) **plus** a Home Assistant long-lived token as the bearer.
@@ -288,7 +288,7 @@ Not exercised live: claude.ai's hosted connector end to end (a June 2026 report 
 failing against Cloudflare managed OAuth; it blamed a missing `WWW-Authenticate` header,
 which the live test shows present).
 
-### Pipeline for the HA-MCP custom component
+### The HA-MCP custom component
 
 Endpoint `/api/webhook/mcp_<secret>`, an ordinary Home Assistant webhook (no Home Assistant
 authentication of its own), stateless streamable HTTP. Its authentication mode is one of
@@ -298,13 +298,13 @@ administrators only) or `legacy` (its own OAuth with a static client ID and secr
 every mode the component strips the caller's bearer and performs the calls with its own
 provisioned admin user, so its login is a gate, never per-person attribution.
 
-| Layer | Setting | Why |
+| Where | Setting | Why |
 |---|---|---|
 | HA-MCP | Authentication mode `none`; remote access via webhook on; "Network access" set to `127.0.0.1` | Behind the gate the person's Access login is the credential and the secret URL a second factor; `none` is the only mode whose OAuth surface does not fight Access's (see below); the loopback setting closes the LAN port 9584 that the component otherwise opens |
-| This integration | Enabled on; the MCP client added as *a client that logs people in*; the webhook **not** an open path | Same flow as above: the client registers and logs in at Access; the origin rule maps the identity (used for the login history and the events), and the component runs the call as its admin user as it always does |
+| Here | The MCP client added as *a client that logs people in*; the webhook **not** an open path | Same flow as above: the client registers and logs in at Access; the origin rule maps the identity (used for the login history and the events), and the component runs the call as its admin user as it always does |
 | Client | `https://<host>/api/webhook/mcp_<secret>`, OAuth client ID and secret left empty | |
 
-Options within this pipeline:
+Alternatives:
 
 - **A script or service with no login**: a script client alone (Client ID and secret as
   headers); no Home Assistant token is needed since the webhook has no Home Assistant
@@ -322,7 +322,7 @@ Options within this pipeline:
 - The component updates its server package from PyPI on its own every six hours, so its
   behaviour can change without a HACS update.
 
-### Cloudflare's MCP servers and portals on top of either pipeline
+### Cloudflare's MCP servers and portals on top of either
 
 Zero Trust > AI controls can register an MCP server object for either endpoint and put a
 portal in front of it, purely for auditing. What it adds on the Free plan: tool
@@ -334,16 +334,13 @@ new token scope (MCP Portals Write) and zone DNS write for the portal hostname; 
 Access login and seat per person; server state to keep in sync. Direct connections to the
 hostname are invisible to it. The integration does not create these objects.
 
-Recipe behind the gate, per pipeline, with a script client's Client ID and secret:
+Recipe, with a script client's Client ID and secret:
 
 - HA-MCP: server authentication `bearer` with the credentials
   `{"headers":{"cf-access-client-id":"<id>","cf-access-client-secret":"<secret>"}}`, the
   form Cloudflare documents for exactly this.
 - Built-in server: the same headers plus `"Authorization":"Bearer <long-lived token>"`, the
   multi-header form Cloudflare documents; calls run as the token's user.
-
-An object created while Enabled was off keeps working only until Enabled is on; from then
-on its sync and calls need those headers.
 
 ## Verified Cloudflare behaviour
 
