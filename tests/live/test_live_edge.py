@@ -34,6 +34,7 @@ from pathlib import Path
 import socket
 import time
 from typing import Any
+import warnings
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -266,7 +267,7 @@ async def test_live_foreign_hostname_is_refused(
     try:
         with pytest.raises(CloudflareApiError) as refused:
             await api.create_app(body)
-        print(f"== foreign hostname refused: {refused.value}")
+        warnings.warn(f"foreign hostname refused: {refused.value}", stacklevel=1)
     finally:
         await delete_run(api, RUN)
 
