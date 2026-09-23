@@ -137,7 +137,8 @@ and keeps everything else.
    of Home Assistant's External URL (Settings → System → Network); without one the setup
    stops and says so. A later change of the External URL renames the Access applications and
    the service tokens to the new hostname; removing it leaves them as they are and raises a
-   repair issue until it is back.
+   repair issue until it is back. A hostname outside the account's zones is refused by
+   Cloudflare (`domain does not belong to zone`) and the entry shows that error.
    The form shows which users' addresses the gate would let in.
 4. The integration validates the credential by listing the Access applications and reading
    the team domain, and creates nothing yet: the gate starts **off**. Read *Rollout* before
@@ -377,6 +378,7 @@ provisioning code, and re-checked by `tests/live` in CI on every push to `main`.
 | Managed OAuth can be enabled through the API on the gate; Access then serves `/.well-known/oauth-authorization-server` on the hostname itself and answers a non-browser client with 401 + `WWW-Authenticate` | verified 20 Sep 2026 |
 | An Access for SaaS OIDC application can be created through the API with the client secret returned once (a refresh-token lifetime is mandatory), its key endpoint goes live at the team domain within about a minute, and a `linked_app_token` rule naming it is accepted on the gate | verified 20 Sep 2026 |
 | The gate refuses any write that still names a deleted application, so the rule must be dropped before the client's application is deleted | verified 20 Sep 2026 |
+| Cloudflare refuses a self-hosted application for a hostname outside the account's zones with error `12130: access.api.error.invalid_request: domain does not belong to zone`, so a wrong External URL cannot create a gate that guards nothing | verified 23 Sep 2026 |
 | A bearer Access admitted reaches the origin unchanged, with the assertion alongside; the origin rule accepts a real assertion against the real JWKS and refuses a tampered one | verified 20 Sep 2026 |
 | A registered client's token, presented as a bearer on the hostname, passes the gate with an assertion whose audience is the gate's | **still open**: needs a real account-linking login (Google Home or Alexa) |
 | The Android app's WebView completes the Access login and its native client sends the cookie | **still open**: needs a phone. The app's cookie support was added for Cloudflare Access; the origin side is covered by the tests |
