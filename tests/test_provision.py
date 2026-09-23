@@ -848,7 +848,9 @@ async def test_the_gate_sends_people_straight_to_the_only_login_method(
     assert client["allowed_idps"] == ["otp-1"] and client["auto_redirect_to_identity"] is True
 
     # a second login method brings Cloudflare's picker page back
-    cf.identity_providers.append({"id": "google-1", "name": "Google", "type": "google"})
+    cf.identity_providers.append(
+        {"id": "google-1", "name": "Google", "type": "google", "config": {}}
+    )
     assert await hass.config_entries.async_reload(access.entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
     gate = cf.by_name(GATE)
