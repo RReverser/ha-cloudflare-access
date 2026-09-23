@@ -8,6 +8,7 @@ the SDK's exceptions onto three outcomes the integration cares about.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -176,6 +177,32 @@ class CloudflareAccessApi:
             )
         except Exception as err:
             raise _translate(err, f"revoking the sessions of {email}") from err
+
+    async def list_access_logs(self, since: datetime) -> list[dict[str, Any]]:
+        """Return the Access authentication log entries since `since`, oldest first."""
+        entries: list[dict[str, Any]] = []
+        page = 1
+        try:
+            while True:
+                batch = (
+                    _dump(
+                        await (await self._c()).zero_trust.access.logs.access_requests.list(
+                            account_id=self._account_id,
+                            since=since,
+                            direction="asc",
+                            per_page=100,
+                            limit=100,
+                            page=page,
+                        )
+                    )
+                    or []
+                )
+                entries.extend(batch)
+                if len(batch) < 100 or page >= 50:
+                    return entries
+                page += 1
+        except Exception as err:
+            raise _translate(err, "reading the Access authentication logs") from err
 
     async def get_team_domain(self) -> str:
         """Return the team domain, e.g. 'team.cloudflareaccess.com'."""

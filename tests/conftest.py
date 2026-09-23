@@ -202,6 +202,8 @@ class FakeCloudflare:
     )
     # addresses whose sessions were revoked, in order
     revoked: list[str] = field(default_factory=list)
+    # authentication log entries, as Cloudflare would return them
+    access_logs: list[dict[str, Any]] = field(default_factory=list)
     server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
@@ -456,6 +458,18 @@ class FakeCloudflare:
         self.revoked.append(body["email"])
         return self._ok(True)
 
+    async def list_access_logs(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        if fail := self._fail(request.method, request.path):
+            return fail
+        since = request.query.get("since")
+        page = int(request.query.get("page", "1"))
+        entries = sorted(
+            (e for e in self.access_logs if not since or e["created_at"] > since),
+            key=lambda e: e["created_at"],
+        )
+        return self._ok(entries if page == 1 else [])
+
     async def list_tags(self, request: web.Request) -> web.Response:
         await self._record(request)
         return self._ok([{"name": t} for t in sorted(self.tags)])
@@ -563,6 +577,7 @@ async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare
     app.router.add_get(f"{base}/organizations", fake.organizations)
     app.router.add_post(f"{base}/organizations/revoke_user", fake.revoke_user)
     app.router.add_get(f"{base}/identity_providers", fake.list_identity_providers)
+    app.router.add_get(f"{base}/logs/access_requests", fake.list_access_logs)
     app.router.add_get(f"{base}/service_tokens", fake.list_service_tokens)
     app.router.add_post(f"{base}/service_tokens", fake.create_service_token)
     app.router.add_get(f"{base}/service_tokens/{{token_id}}", fake.get_service_token)

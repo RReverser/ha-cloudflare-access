@@ -53,6 +53,7 @@ OAUTH_SCOPES: Final[tuple[str, ...]] = (
     "access-acct.read",
     "access-service-token.write",
     "access-org.revoke",
+    "access-audit-log.read",
     "memberships.read",
     "offline_access",
 )
@@ -64,6 +65,20 @@ OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 ISSUE_NO_ALLOWED_USERS: Final = "no_allowed_users"
 # The credential cannot revoke sessions (a sign-in granted before the scope existed).
 ISSUE_REVOKE_UNAVAILABLE: Final = "revoke_unavailable"
+# Someone logged in at the identity provider but is not on the allow list.
+ISSUE_DENIED_LOGIN: Final = "denied_login"
+# The credential cannot read the authentication logs.
+ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
+
+# Login history: Access's authentication logs are polled (Cloudflare pushes nothing on the
+# Free plan, which keeps them for 24 hours) and turned into an event per login attempt,
+# a "last login" sensor per person, and a repair issue for a denied login. The interval is
+# the coordinator's default; Home Assistant's system options can turn polling off.
+EVENT_LOGIN: Final = "cloudflare_access_login"
+LOG_POLL_INTERVAL_SECONDS: Final = 15 * 60
+LOGS_STORE_VERSION: Final = 1
+# Sent after a reconciliation, when the people may have changed.
+SIGNAL_PEOPLE_CHANGED: Final = "cloudflare_access_relay_people_changed"
 
 # Edge identity (see edge_auth.py): the middleware must be installed before the web
 # server starts, so the first setup after installation asks for a restart.
@@ -110,10 +125,11 @@ OPTION_APP_TAG: Final = "app_tag"
 # The organization's identity providers, read at provisioning time: with exactly one, the
 # gate sends people straight to it instead of showing Cloudflare's picker page.
 OPTION_IDP_IDS: Final = "idp_ids"
-# Shown by Access to a person who logged in but is not on the allow list.
-DENY_MESSAGE_FMT: Final = (
-    "{hostname} is not open to this address. Whoever runs it can add the address under "
-    "the Cloudflare Access integration's options, People, in Home Assistant."
+# Shown by Access to a person who logged in but is not on the allow list. Cloudflare
+# refuses the characters , . ! : @ ? - in it (verified), so no hostname and no full stops.
+DENY_MESSAGE: Final = (
+    "This address is not on the allow list of this Home Assistant; whoever runs it can add "
+    "the address under People in the Cloudflare Access integration options"
 )
 
 # Access application names: readable in the dashboard, and the way an application is

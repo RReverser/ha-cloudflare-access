@@ -141,6 +141,7 @@ consent page, instead of a token you assemble by hand: `access.write` (Access: A
 Policies Write), `access-acct.read` (Access: Organizations, Identity Providers and Groups
 Read), `access-service-token.write` (Access: Service Tokens Write, for script clients),
 `access-org.revoke` (Access: Organizations Revoke, to log removed people out),
+`access-audit-log.read` (Access: Audit Logs Read, for the login history),
 `memberships.read` (Memberships Read, to find the account you granted on the consent page,
 since the token itself does not say) and `offline_access` (a refresh token, so the sign-in
 lasts). The integration ships the
@@ -156,7 +157,8 @@ then takes the project's client's place.
 
 An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
 Identity Providers, and Groups: Read**, **Access: Service Tokens: Edit** for script
-clients, and **Access: Organizations: Revoke** to log removed people out) can replace the sign-in where a browser cannot reach the consent page, as in this
+clients, **Access: Organizations: Revoke** to log removed people out, and **Access: Audit Logs:
+Read** for the login history) can replace the sign-in where a browser cannot reach the consent page, as in this
 project's CI: start the flow with the source `api_token`.
 
 ## Rollout
@@ -192,6 +194,25 @@ hostname is as it was without the integration; enabling it provisions them again
 clients' applications stay through a disable, so their consoles keep their credentials. A
 reload or a restart of Home Assistant leaves the edge alone. An entry disabled while it is in
 an error state, or during a shutdown, is taken down at the next start.
+
+### Login history
+
+Access logs every login attempt at the gate and at the clients' applications. The integration
+reads those logs on Home Assistant's polling schedule (every 15 minutes by default; the
+integration's system options can turn polling off, and the `homeassistant.update_entity`
+service forces a read) from a stored cursor, so nothing is replayed after a restart, and turns
+each new entry into:
+
+- a `cloudflare_access_login` event on the bus (`email`, `allowed`, `user_id` when the address
+  belongs to a person, `app`, `login_method`, `ip_address`, `when`), for automations;
+- a diagnostic sensor per person, "<name> last login", holding the time of their latest
+  allowed login through any of their addresses;
+- a repair issue when someone logged in at the identity provider and was refused because the
+  address is not on the allow list; it names the address and the time, since the usual fix is
+  adding the address under People.
+
+The Free plan keeps these logs for 24 hours, so the first read looks back that far. A
+credential that cannot read them raises a repair issue and everything else keeps working.
 
 Changing the options reloads the entry and re-provisions; so does reloading the integration
 (Settings → Devices & services → Cloudflare Access → Reload), which is the way to repair
