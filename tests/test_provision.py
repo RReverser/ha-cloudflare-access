@@ -936,6 +936,68 @@ async def test_the_gate_follows_a_changed_external_url(hass: HomeAssistant, acce
     assert "External URL" in str(access.entry.reason)
 
 
+async def test_a_hostname_outside_the_account_is_refused(
+    hass: HomeAssistant, access: Access
+) -> None:
+    """Cloudflare refuses a foreign hostname: a repair on change, a clear error at setup."""
+    cf = access.cloudflare
+    gate_id = access.entry.data[DATA_GATE_APP_ID]
+    await hass.config.async_update(external_url="https://ha.elsewhere.net")
+    await _settle(hass)
+    assert cf.apps[gate_id]["domain"] == HOSTNAME, "the gate keeps guarding the last hostname"
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, issue_id(access.entry, "hostname_not_in_account")
+    )
+    assert issue is not None
+    assert issue.translation_placeholders == {
+        **issue.translation_placeholders,
+        "hostname": "ha.elsewhere.net",
+        "previous_hostname": HOSTNAME,
+    }
+
+    # back to a hostname of the account: the gate follows and the repair goes
+    await hass.config.async_update(external_url="https://again.example.com")
+    await _settle(hass)
+    assert cf.apps[gate_id]["domain"] == "again.example.com"
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, issue_id(access.entry, "hostname_not_in_account")
+        )
+        is None
+    )
+
+    # a restart with the foreign hostname refuses to set up, naming the hostname
+    await hass.config.async_update(external_url="https://ha.elsewhere.net")
+    assert not await hass.config_entries.async_reload(access.entry.entry_id)
+    assert access.entry.state is ConfigEntryState.SETUP_ERROR
+    assert "ha.elsewhere.net" in str(access.entry.reason)
+    assert "not in a zone of this Cloudflare account" in str(access.entry.reason)
+
+
+async def test_a_failed_update_raises_a_repair_and_is_retried(
+    hass: HomeAssistant, access: Access
+) -> None:
+    """Any other refusal of an update becomes a repair; the next change retries."""
+    cf = access.cloudflare
+    gate_id = access.entry.data[DATA_GATE_APP_ID]
+    cf.fail_status = 503
+    cf.fail_predicate = lambda method, _path: method == "PUT"
+    await hass.config.async_update(external_url="https://new.example.com")
+    await _settle(hass)
+    assert cf.apps[gate_id]["domain"] == HOSTNAME
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, "update_failed"))
+    assert issue is not None and "error" in issue.translation_placeholders
+
+    cf.fail_status = None
+    cf.fail_predicate = None
+    await hass.config.async_update(external_url="https://newer.example.com")
+    await _settle(hass)
+    assert cf.apps[gate_id]["domain"] == "newer.example.com"
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, issue_id(access.entry, "update_failed")) is None
+    )
+
+
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
     await _save_options(

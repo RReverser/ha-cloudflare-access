@@ -200,6 +200,8 @@ class FakeCloudflare:
     fail_status: int | None = None
     fail_predicate: Callable[[str, str], bool] | None = None
     team_domain: str = TEAM_DOMAIN
+    # zones of the account: a self-hosted application for a hostname outside them is refused
+    zones: list[str] = field(default_factory=lambda: ["example.com"])
     # service tokens by id, without their secrets (which are returned once, at creation)
     service_tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
     identity_providers: list[dict[str, Any]] = field(
@@ -354,6 +356,28 @@ class FakeCloudflare:
             app["saas_app"] = saas
         return app
 
+    def _foreign_domain(self, body: dict[str, Any]) -> web.Response | None:
+        domain = body.get("domain")
+        if domain is None or any(
+            host == zone or host.endswith("." + zone)
+            for host in [domain.split("/", 1)[0]]
+            for zone in self.zones
+        ):
+            return None
+        return web.json_response(
+            {
+                "success": False,
+                "errors": [
+                    {
+                        "code": 12130,
+                        "message": "access.api.error.invalid_request: domain does not belong to zone",
+                    }
+                ],
+                "result": None,
+            },
+            status=400,
+        )
+
     def _unknown_tags(self, body: dict[str, Any]) -> web.Response | None:
         if unknown := set(body.get("tags") or []) - self.tags:
             return web.json_response(
@@ -506,7 +530,7 @@ class FakeCloudflare:
         if fail := self._fail(request.method, request.path):
             return fail
         assert body is not None
-        if bad := self._unknown_tags(body):
+        if bad := self._unknown_tags(body) or self._foreign_domain(body):
             return bad
         app_id = str(uuid.uuid4())
         self.apps[app_id] = self._stored(body, app_id, None)
@@ -550,7 +574,7 @@ class FakeCloudflare:
                 status=404,
             )
         assert body is not None
-        if bad := self._unknown_tags(body):
+        if bad := self._unknown_tags(body) or self._foreign_domain(body):
             return bad
         self.apps[app_id] = self._stored(body, app_id, self.apps[app_id])
         return self._ok(self.apps[app_id])

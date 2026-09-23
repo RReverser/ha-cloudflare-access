@@ -73,10 +73,12 @@ from .const import (
     DOMAIN,
     FORM_PLACEHOLDERS,
     HA_MCP_DOMAIN,
+    ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
     ISSUE_MCP_AUTH_CONFLICT,
     ISSUE_NO_ALLOWED_USERS,
     ISSUE_NO_EXTERNAL_URL,
     ISSUE_REVOKE_UNAVAILABLE,
+    ISSUE_UPDATE_FAILED,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
@@ -515,7 +517,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
             "Home Assistant has no External URL, so there is no hostname to guard. Set it "
             "under Settings, System, Network"
         ) from err
-    ir.async_delete_issue(hass, DOMAIN, issue_id(entry, ISSUE_NO_EXTERNAL_URL))
+    for key in (ISSUE_NO_EXTERNAL_URL, ISSUE_HOSTNAME_NOT_IN_ACCOUNT, ISSUE_UPDATE_FAILED):
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     # Token-bearing clients are authenticated at the origin from the edge assertion; the
     # middleware can only be installed before the web server starts (repair issue otherwise).
     async_install_middleware(hass)
@@ -549,6 +552,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     except CloudflareUnavailableError as err:
         raise ConfigEntryNotReady(str(err)) from err
     except CloudflareApiError as err:
+        if err.hostname_not_in_account:
+            raise ConfigEntryError(
+                f"Cloudflare refuses to guard {options[CONF_HOSTNAME]}: it is not in a zone of "
+                "this Cloudflare account. Home Assistant's External URL (Settings, System, "
+                "Network) must name a hostname served through Cloudflare from this account"
+            ) from err
         if any(e.get("code") == 11010 for e in err.errors):
             raise ConfigEntryError(
                 "An Access application for this hostname already exists but does not carry "
@@ -635,6 +644,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             and options[CONF_SERVICE_TOKEN_IDS] == data.options[CONF_SERVICE_TOKEN_IDS]
         ):
             return
+        previous_options = data.options
         data.options = options
         if not emails:
             _LOGGER.warning(
@@ -658,12 +668,12 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             )
             script_tokens = await _async_reconcile_scripts(hass, entry, data.api, data.options)
             data.options = await async_provisioning_options(hass, entry, data.api)
+            await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             if entry.title != data.options[CONF_HOSTNAME]:
-                # the External URL changed: the applications were renamed above; follow it
+                # the External URL changed and the gate now guards it: follow it
                 hass.config_entries.async_update_entry(
                     entry, title=data.options[CONF_HOSTNAME], unique_id=data.options[CONF_HOSTNAME]
                 )
-            await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             await _async_delete_stale_clients(data.api, data.options, data.client_apps, client_apps)
             await _async_delete_stale_tokens(
                 data.api, data.options, data.script_tokens, script_tokens
@@ -676,11 +686,42 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             data.script_tokens = script_tokens
             _async_set_watched_apps(data)
             async_dispatcher_send(hass, SIGNAL_PEOPLE_CHANGED, entry.entry_id)
-        except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
-            _LOGGER.warning(
-                "Could not update the Access applications; reload the integration to retry: %s",
-                err,
+        except CloudflareAuthError as err:
+            data.options = previous_options
+            _LOGGER.warning("Cloudflare no longer accepts the sign-in: %s", err)
+            entry.async_start_reauth(hass)
+            return
+        except (CloudflareUnavailableError, CloudflareApiError) as err:
+            # the next change tries again from the last state Cloudflare accepted
+            data.options = previous_options
+            _LOGGER.warning("Could not update the Access applications: %s", err)
+            if isinstance(err, CloudflareApiError) and err.hostname_not_in_account:
+                ir.async_create_issue(
+                    hass,
+                    DOMAIN,
+                    issue_id(entry, ISSUE_HOSTNAME_NOT_IN_ACCOUNT),
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.ERROR,
+                    translation_key=ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
+                    translation_placeholders={
+                        **FORM_PLACEHOLDERS,
+                        "hostname": options[CONF_HOSTNAME],
+                        "previous_hostname": previous_options[CONF_HOSTNAME],
+                    },
+                )
+                return
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id(entry, ISSUE_UPDATE_FAILED),
+                is_fixable=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key=ISSUE_UPDATE_FAILED,
+                translation_placeholders={"error": str(err)},
             )
+            return
+        for key in (ISSUE_HOSTNAME_NOT_IN_ACCOUNT, ISSUE_UPDATE_FAILED):
+            ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
 
     debouncer = Debouncer(
         hass,
@@ -769,6 +810,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         ISSUE_REVOKE_UNAVAILABLE,
         ISSUE_MCP_AUTH_CONFLICT,
         ISSUE_NO_EXTERNAL_URL,
+        ISSUE_HOSTNAME_NOT_IN_ACCOUNT,
+        ISSUE_UPDATE_FAILED,
     ):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
     options = effective_options(entry)

@@ -157,6 +157,14 @@
     "no_external_url": {
       "title": "Home Assistant's External URL is gone",
       "description": "The Cloudflare Access gate guards the hostname of Home Assistant's External URL, and there is none any more.\n\nThe applications stay as they were. Set the External URL again under [Settings, System, Network]({docs_external_url}); the gate follows it."
+    },
+    "hostname_not_in_account": {
+      "title": "Cloudflare refuses to guard {hostname}",
+      "description": "Home Assistant's External URL now names {hostname}, which is not in a zone of this Cloudflare account, so Cloudflare Access cannot guard it.\n\nThe gate still guards {previous_hostname}. Point the External URL under [Settings, System, Network]({docs_external_url}) at a hostname served through Cloudflare from this account; the gate follows it."
+    },
+    "update_failed": {
+      "title": "The Cloudflare Access applications could not be updated",
+      "description": "A change of people, clients or the External URL could not be applied to the Access applications, which keep their last state.\n\nCloudflare answered: {error}\n\nThe next change tries again; reloading the integration retries at once."
     }
   },
   "config_subentries": {

@@ -77,6 +77,10 @@ ISSUE_LOGS_UNAVAILABLE: Final = "logs_unavailable"
 ISSUE_MCP_AUTH_CONFLICT: Final = "mcp_auth_conflict"
 # Home Assistant's External URL was removed after setup.
 ISSUE_NO_EXTERNAL_URL: Final = "no_external_url"
+# the External URL names a hostname outside the account's zones: Cloudflare refuses it
+ISSUE_HOSTNAME_NOT_IN_ACCOUNT: Final = "hostname_not_in_account"
+# Cloudflare refused or could not take an update of the applications after a change
+ISSUE_UPDATE_FAILED: Final = "update_failed"
 
 # The HA-MCP custom component, whose login modes clash with the gate (README, "MCP servers
 # behind the gate"): its config entry domain, the option holding the mode and the value

@@ -138,7 +138,9 @@ and keeps everything else.
    stops and says so. A later change of the External URL renames the Access applications and
    the service tokens to the new hostname; removing it leaves them as they are and raises a
    repair issue until it is back. A hostname outside the account's zones is refused by
-   Cloudflare (`domain does not belong to zone`) and the entry shows that error.
+   Cloudflare (`domain does not belong to zone`): at setup the entry shows that error with
+   the hostname; on a later change the gate keeps the last hostname and a repair issue names
+   both.
    The form shows which users' addresses the gate would let in.
 4. The integration validates the credential by listing the Access applications and reading
    the team domain, and creates nothing yet: the gate starts **off**. Read *Rollout* before
@@ -230,7 +232,10 @@ applications edited outside the integration. Unchanged applications are never wr
 
 The integration does not set up, and the options cannot be saved, while no user has an e-mail
 address: nobody could log in. If the last such user goes while the gate is on, the policy keeps
-its last subjects and a repair issue says so.
+its last subjects and a repair issue says so. Any other change Cloudflare refuses or cannot take
+leaves the applications in their last state and raises a repair issue quoting Cloudflare's
+answer; the next change retries, and so does a reload. A sign-in Cloudflare no longer accepts
+starts the re-authentication flow.
 
 Clients are subentries of the integration entry (*Add client*), of two kinds:
 
