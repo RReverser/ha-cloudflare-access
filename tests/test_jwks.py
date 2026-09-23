@@ -13,7 +13,7 @@ from custom_components.cloudflare_access_relay.jwks import (
     unverified_claims,
 )
 
-from .conftest import ALICE, ISSUER, TEAM_DOMAIN, FakeJwks, Minter, RsaKey
+from .conftest import ALICE, ISSUER, TEAM_DOMAIN, FakeInternet, FakeJwks, Minter, RsaKey
 
 AUD = "a" * 64
 
@@ -24,8 +24,8 @@ def mint(rsa_keys: dict[str, RsaKey]) -> Minter:
 
 
 @pytest.fixture
-async def verifier(jwks_server: FakeJwks, socket_enabled: None):
-    async with httpx.AsyncClient() as client:
+async def verifier(jwks_server: FakeJwks, fake_internet: FakeInternet):
+    async with httpx.AsyncClient(transport=fake_internet.transport) as client:
         yield JwksVerifier(client, TEAM_DOMAIN)
 
 

@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import AsyncGenerator, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator
 import contextlib
 from dataclasses import dataclass, field
+import functools
 import hashlib
 import hmac
 import json
+import re
 import socket
 import time
 from typing import Any
 from unittest.mock import patch
 import uuid
 
-from aiohttp import web
-from aiohttp.test_utils import TestServer
+from cloudflare import AsyncCloudflare
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from homeassistant.auth.models import Credentials, User
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.httpx_client import DATA_ASYNC_CLIENT, create_async_httpx_client
+from homeassistant.util.ssl import SSL_ALPN_HTTP11
 import httpx
 import jwt
 import pytest
@@ -39,6 +42,8 @@ TEAM_DOMAIN = "team.cloudflareaccess.com"
 ISSUER = f"https://{TEAM_DOMAIN}"
 HOSTNAME = "ha.example.com"
 ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
+API_HOST = "api.cloudflare.com"
+API_PREFIX = "/client/v4"
 ALICE = "alice@example.com"
 BOB = "bob@example.com"
 CLIENT_ID = "https://ha.example.com/"
@@ -55,6 +60,55 @@ def auto_enable_custom_integrations(request: pytest.FixtureRequest) -> None:
     """Make custom_components discoverable whenever the HA plugin is active."""
     with contextlib.suppress(pytest.FixtureLookupError):
         request.getfixturevalue("enable_custom_integrations")
+
+
+# --------------------------------------------------------------------------- transport
+
+Handler = Callable[[httpx.Request], Awaitable[httpx.Response]]
+
+
+def _json(data: Any, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, json=data)
+
+
+@dataclass
+class FakeInternet:
+    """An httpx transport answering in-process, by host: no sockets, no servers.
+
+    Installed as Home Assistant's shared httpx client, which is what the integration
+    (the Cloudflare SDK through `http_client`, and the JWKS fetch) uses.
+    """
+
+    hosts: dict[str, Handler] = field(default_factory=dict)
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        handler = self.hosts.get(request.url.host)
+        if handler is None:
+            return httpx.Response(502, text=f"no fake for {request.url.host}")
+        return await handler(request)
+
+    @property
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self)
+
+
+@pytest.fixture
+def fake_internet(hass: HomeAssistant) -> FakeInternet:
+    fake = FakeInternet()
+    hass.data[DATA_ASYNC_CLIENT] = {
+        (True, SSL_ALPN_HTTP11): create_async_httpx_client(hass, transport=fake.transport)
+    }
+    return fake
+
+
+def _route(pattern: str) -> re.Pattern[str]:
+    """`/apps/{app_id}` style patterns; `{tail:.*}` matches across slashes."""
+    regex = re.sub(
+        r"{(\w+)(:[^}]*)?}",
+        lambda m: f"(?P<{m[1]}>.*)" if m[2] else f"(?P<{m[1]}>[^/]+)",
+        pattern,
+    )
+    return re.compile(f"^{regex}$")
 
 
 # --------------------------------------------------------------------------- keys
@@ -151,38 +205,22 @@ class FakeJwks:
     published: list[str] = field(default_factory=lambda: ["current", "previous"])
     fetches: int = 0
     status: int = 200
-    server: TestServer | None = None
 
-    @property
-    def url(self) -> str:
-        assert self.server is not None
-        return str(self.server.make_url("/cdn-cgi/access/certs"))
-
-    async def handle(self, _request: web.Request) -> web.Response:
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/cdn-cgi/access/certs", request.url
         self.fetches += 1
         if self.status != 200:
-            return web.Response(status=self.status)
+            return httpx.Response(self.status)
         keys = [self.keys[k].jwk() for k in self.published]
-        return web.json_response({"keys": keys, "public_cert": {}, "public_certs": []})
+        return _json({"keys": keys, "public_cert": {}, "public_certs": []})
 
 
 @pytest.fixture
-async def jwks_server(
-    socket_enabled: None, rsa_keys: dict[str, RsaKey]
-) -> AsyncGenerator[FakeJwks]:
-    """Serve a JWKS document like <team>.cloudflareaccess.com/cdn-cgi/access/certs."""
+def jwks_server(fake_internet: FakeInternet, rsa_keys: dict[str, RsaKey]) -> FakeJwks:
+    """Serve the JWKS document at <team>.cloudflareaccess.com/cdn-cgi/access/certs."""
     fake = FakeJwks(rsa_keys)
-    app = web.Application()
-    app.router.add_get("/cdn-cgi/access/certs", fake.handle)
-    server = TestServer(app)
-    await server.start_server()
-    fake.server = server
-    with patch(
-        "custom_components.cloudflare_access_relay.jwks.CERTS_URL_FMT",
-        fake.url,
-    ):
-        yield fake
-    await server.close()
+    fake_internet.hosts[TEAM_DOMAIN] = fake.handle
+    return fake
 
 
 # --------------------------------------------------------------------------- Cloudflare
@@ -208,13 +246,14 @@ class FakeCloudflare:
     # service tokens by id, without their secrets (which are returned once, at creation)
     service_tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
     identity_providers: list[dict[str, Any]] = field(
-        default_factory=lambda: [{"id": "otp-1", "name": "One-time PIN", "type": "onetimepin"}]
+        default_factory=lambda: [
+            {"id": "otp-1", "name": "One-time PIN", "type": "onetimepin", "config": {}}
+        ]
     )
     # addresses whose sessions were revoked, in order
     revoked: list[str] = field(default_factory=list)
     # authentication log entries, as Cloudflare would return them
     access_logs: list[dict[str, Any]] = field(default_factory=list)
-    server: TestServer | None = None
 
     def writes(self, method: str | None = None) -> list[tuple[str, str, dict[str, Any] | None]]:
         """Application writes; the entry's tag (created once, never an edge change) is not one."""
@@ -230,14 +269,9 @@ class FakeCloudflare:
     def by_name(self, name: str) -> dict[str, Any] | None:
         return next((a for a in self.apps.values() if a["name"] == name), None)
 
-    @property
-    def base_url(self) -> str:
-        assert self.server is not None
-        return str(self.server.make_url("")).rstrip("/")
-
-    def _fail(self, method: str, path: str) -> web.Response | None:
+    def _fail(self, method: str, path: str) -> httpx.Response | None:
         if self.auth_fail:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 10000, "message": "Authentication error"}],
@@ -246,31 +280,79 @@ class FakeCloudflare:
                 status=403,
             )
         if self.fail_status and (self.fail_predicate is None or self.fail_predicate(method, path)):
-            return web.Response(status=self.fail_status, text="upstream error")
+            return httpx.Response(self.fail_status, text="upstream error")
         return None
 
-    def _ok(self, result: Any, status: int = 200, **extra: Any) -> web.Response:
-        return web.json_response(
+    def _ok(self, result: Any, status: int = 200, **extra: Any) -> httpx.Response:
+        return _json(
             {"success": True, "errors": [], "messages": [], "result": result, **extra},
             status=status,
         )
 
-    async def _record(self, request: web.Request) -> dict[str, Any] | None:
-        body = await request.json() if request.can_read_body else None
-        self.requests.append((request.method, request.path, body))
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        """Dispatch like the API's router; paths are recorded without the /client/v4 prefix."""
+        path = request.url.path.removeprefix(API_PREFIX)
+        for method, pattern, handler in self.routes:
+            if method == request.method and (match := pattern.match(path)):
+                return await handler(request, **match.groupdict())
+        return _json(
+            {
+                "success": False,
+                "errors": [{"code": 7003, "message": f"no route for {request.method} {path}"}],
+                "result": None,
+            },
+            status=404,
+        )
+
+    @functools.cached_property
+    def routes(
+        self,
+    ) -> list[tuple[str, re.Pattern[str], Callable[..., Awaitable[httpx.Response]]]]:
+        base = f"/accounts/{ACCOUNT_ID}/access"
+        table: list[tuple[str, str, Callable[..., Awaitable[httpx.Response]]]] = [
+            ("GET", "/memberships", self.list_memberships),
+            ("GET", f"{base}/organizations", self.organizations),
+            ("POST", f"{base}/organizations/revoke_user", self.revoke_user),
+            ("GET", f"{base}/identity_providers", self.list_identity_providers),
+            ("GET", f"{base}/logs/access_requests", self.list_access_logs),
+            ("GET", f"{base}/service_tokens", self.list_service_tokens),
+            ("POST", f"{base}/service_tokens", self.create_service_token),
+            ("GET", f"{base}/service_tokens/{{token_id}}", self.get_service_token),
+            ("PUT", f"{base}/service_tokens/{{token_id}}", self.update_service_token),
+            ("DELETE", f"{base}/service_tokens/{{token_id}}", self.delete_service_token),
+            ("POST", f"{base}/service_tokens/{{token_id}}/refresh", self.refresh_service_token),
+            ("GET", f"{base}/tags", self.list_tags),
+            ("POST", f"{base}/tags", self.create_tag),
+            ("GET", f"{base}/tags/{{tag_name}}", self.get_tag),
+            ("GET", f"{base}/apps", self.list_apps),
+            ("POST", f"{base}/apps", self.create_app),
+            ("GET", f"{base}/apps/{{app_id}}", self.get_app),
+            ("PUT", f"{base}/apps/{{app_id}}", self.update_app),
+            ("DELETE", f"{base}/apps/{{app_id}}", self.delete_app),
+            ("GET", "/accounts/{account_id}/access/{tail:.*}", self.other_account),
+        ]
+        return [(m, _route(p), h) for m, p, h in table]
+
+    def _record(self, request: httpx.Request) -> dict[str, Any] | None:
+        body = json.loads(request.content) if request.content else None
+        self.requests.append((request.method, request.url.path.removeprefix(API_PREFIX), body))
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             self.tokens_seen.add(auth.removeprefix("Bearer "))
         return body
 
-    async def list_memberships(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def list_memberships(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        page = int(request.query.get("page", "1"))
-        per_page = int(request.query.get("per_page", "20"))
+        page = int(request.url.params.get("page", "1"))
+        per_page = int(request.url.params.get("per_page", "20"))
         rows = [
-            {"id": f"m-{a}", "status": "accepted", "account": {"id": a, "name": n}}
+            {
+                "id": f"m-{a}",
+                "status": "accepted",
+                "account": {"id": a, "name": n, "type": "standard"},
+            }
             for a, n in self.accounts.items()
         ]
         return self._ok(
@@ -284,10 +366,12 @@ class FakeCloudflare:
             },
         )
 
-    async def other_account(self, request: web.Request) -> web.Response:
+    async def other_account(
+        self, request: httpx.Request, account_id: str, tail: str
+    ) -> httpx.Response:
         """Any account but the one the fake serves: the credential is not granted there."""
-        await self._record(request)
-        return web.json_response(
+        self._record(request)
+        return _json(
             {
                 "success": False,
                 "errors": [{"code": 10000, "message": "Authentication error"}],
@@ -296,12 +380,12 @@ class FakeCloudflare:
             status=403,
         )
 
-    async def organizations(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def organizations(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         if self.org_auth_fail:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 10000, "message": "Authentication error"}],
@@ -311,13 +395,13 @@ class FakeCloudflare:
             )
         return self._ok({"auth_domain": self.team_domain, "name": "Team"})
 
-    async def list_apps(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def list_apps(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         # honour paging: the SDK keeps asking for the next page until one comes back empty
-        page = int(request.query.get("page", "1"))
-        per_page = int(request.query.get("per_page", "20"))
+        page = int(request.url.params.get("page", "1"))
+        per_page = int(request.url.params.get("per_page", "20"))
         apps = list(self.apps.values())[(page - 1) * per_page : page * per_page]
         return self._ok(
             apps,
@@ -359,7 +443,7 @@ class FakeCloudflare:
             app["saas_app"] = saas
         return app
 
-    def _foreign_domain(self, body: dict[str, Any]) -> web.Response | None:
+    def _foreign_domain(self, body: dict[str, Any]) -> httpx.Response | None:
         domain = body.get("domain")
         if domain is None or any(
             host == zone or host.endswith("." + zone)
@@ -367,7 +451,7 @@ class FakeCloudflare:
             for zone in self.zones
         ):
             return None
-        return web.json_response(
+        return _json(
             {
                 "success": False,
                 "errors": [
@@ -381,9 +465,9 @@ class FakeCloudflare:
             status=400,
         )
 
-    def _unknown_tags(self, body: dict[str, Any]) -> web.Response | None:
+    def _unknown_tags(self, body: dict[str, Any]) -> httpx.Response | None:
         if unknown := set(body.get("tags") or []) - self.tags:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12132, "message": f"unknown tag {sorted(unknown)}"}],
@@ -393,22 +477,22 @@ class FakeCloudflare:
             )
         return None
 
-    def _token_not_found(self) -> web.Response:
-        return web.json_response(
+    def _token_not_found(self) -> httpx.Response:
+        return _json(
             {"success": False, "errors": [{"code": 12130, "message": "not found"}], "result": None},
             status=404,
         )
 
-    async def list_service_tokens(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def list_service_tokens(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        page = int(request.query.get("page", "1"))
+        page = int(request.url.params.get("page", "1"))
         return self._ok(list(self.service_tokens.values()) if page == 1 else [])
 
-    async def create_service_token(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def create_service_token(self, request: httpx.Request) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         assert body is not None
         token_id = str(uuid.uuid4())
@@ -423,40 +507,40 @@ class FakeCloudflare:
         secret = uuid.uuid4().hex
         return self._ok({**self.service_tokens[token_id], "client_secret": secret}, status=201)
 
-    async def get_service_token(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def get_service_token(self, request: httpx.Request, token_id: str) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        token = self.service_tokens.get(request.match_info["token_id"])
+        token = self.service_tokens.get(token_id)
         return self._ok(token) if token else self._token_not_found()
 
-    async def update_service_token(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def update_service_token(self, request: httpx.Request, token_id: str) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        token = self.service_tokens.get(request.match_info["token_id"])
+        token = self.service_tokens.get(token_id)
         if token is None:
             return self._token_not_found()
         assert body is not None
         token.update({k: v for k, v in body.items() if k in ("name", "duration")})
         return self._ok(token)
 
-    async def refresh_service_token(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def refresh_service_token(self, request: httpx.Request, token_id: str) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        token = self.service_tokens.get(request.match_info["token_id"])
+        token = self.service_tokens.get(token_id)
         if token is None:
             return self._token_not_found()
         year = int(token["expires_at"][:4]) + 1
         token["expires_at"] = f"{year}{token['expires_at'][4:]}"
         return self._ok(token)
 
-    async def delete_service_token(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def delete_service_token(self, request: httpx.Request, token_id: str) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        token_id = request.match_info["token_id"]
+        token_id = token_id
         if token_id not in self.service_tokens:
             return self._token_not_found()
         if any(
@@ -465,7 +549,7 @@ class FakeCloudflare:
             for pol in app.get("policies") or []
             for r in pol.get("include") or []
         ):
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12132, "message": "service token in use by a policy"}],
@@ -475,42 +559,42 @@ class FakeCloudflare:
             )
         return self._ok(self.service_tokens.pop(token_id))
 
-    async def list_identity_providers(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def list_identity_providers(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        page = int(request.query.get("page", "1"))
+        page = int(request.url.params.get("page", "1"))
         return self._ok(self.identity_providers if page == 1 else [])
 
-    async def revoke_user(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def revoke_user(self, request: httpx.Request) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         assert body is not None and body.get("email")
         self.revoked.append(body["email"])
         return self._ok(True)
 
-    async def list_access_logs(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def list_access_logs(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        since = request.query.get("since")
-        page = int(request.query.get("page", "1"))
+        since = request.url.params.get("since")
+        page = int(request.url.params.get("page", "1"))
         entries = sorted(
             (e for e in self.access_logs if not since or e["created_at"] > since),
             key=lambda e: e["created_at"],
         )
         return self._ok(entries if page == 1 else [])
 
-    async def list_tags(self, request: web.Request) -> web.Response:
-        await self._record(request)
+    async def list_tags(self, request: httpx.Request) -> httpx.Response:
+        self._record(request)
         return self._ok([{"name": t} for t in sorted(self.tags)])
 
-    async def get_tag(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        name = request.match_info["tag_name"]
+    async def get_tag(self, request: httpx.Request, tag_name: str) -> httpx.Response:
+        self._record(request)
+        name = tag_name
         if name not in self.tags:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12130, "message": "not found"}],
@@ -520,17 +604,17 @@ class FakeCloudflare:
             )
         return self._ok({"name": name})
 
-    async def create_tag(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def create_tag(self, request: httpx.Request) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         assert body is not None
         self.tags.add(body["name"])
         return self._ok({"name": body["name"]}, status=201)
 
-    async def create_app(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def create_app(self, request: httpx.Request) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
         assert body is not None
         if bad := self._unknown_tags(body) or self._foreign_domain(body):
@@ -546,13 +630,13 @@ class FakeCloudflare:
             }
         return self._ok(created, status=201)
 
-    async def get_app(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def get_app(self, request: httpx.Request, app_id: str) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        app = self.apps.get(request.match_info["app_id"])
+        app = self.apps.get(app_id)
         if app is None:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12130, "message": "not found"}],
@@ -562,13 +646,13 @@ class FakeCloudflare:
             )
         return self._ok(app)
 
-    async def update_app(self, request: web.Request) -> web.Response:
-        body = await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def update_app(self, request: httpx.Request, app_id: str) -> httpx.Response:
+        body = self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        app_id = request.match_info["app_id"]
+        app_id = app_id
         if app_id not in self.apps:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12130, "message": "not found"}],
@@ -582,13 +666,13 @@ class FakeCloudflare:
         self.apps[app_id] = self._stored(body, app_id, self.apps[app_id])
         return self._ok(self.apps[app_id])
 
-    async def delete_app(self, request: web.Request) -> web.Response:
-        await self._record(request)
-        if fail := self._fail(request.method, request.path):
+    async def delete_app(self, request: httpx.Request, app_id: str) -> httpx.Response:
+        self._record(request)
+        if fail := self._fail(request.method, request.url.path.removeprefix(API_PREFIX)):
             return fail
-        app_id = request.match_info["app_id"]
+        app_id = app_id
         if app_id not in self.apps:
-            return web.json_response(
+            return _json(
                 {
                     "success": False,
                     "errors": [{"code": 12130, "message": "not found"}],
@@ -601,39 +685,20 @@ class FakeCloudflare:
 
 
 @pytest.fixture
-async def fake_cloudflare(socket_enabled: None) -> AsyncGenerator[FakeCloudflare]:
+def fake_cloudflare(fake_internet: FakeInternet) -> Generator[FakeCloudflare]:
+    """The Cloudflare API at its real address, answered by the fake.
+
+    The SDK validates every response against its own types (strict mode), so a shape
+    the fake gets wrong fails the test instead of passing silently.
+    """
     fake = FakeCloudflare()
-    app = web.Application()
-    base = f"/accounts/{ACCOUNT_ID}/access"
-    app.router.add_get("/memberships", fake.list_memberships)
-    app.router.add_get(f"{base}/organizations", fake.organizations)
-    app.router.add_post(f"{base}/organizations/revoke_user", fake.revoke_user)
-    app.router.add_get(f"{base}/identity_providers", fake.list_identity_providers)
-    app.router.add_get(f"{base}/logs/access_requests", fake.list_access_logs)
-    app.router.add_get(f"{base}/service_tokens", fake.list_service_tokens)
-    app.router.add_post(f"{base}/service_tokens", fake.create_service_token)
-    app.router.add_get(f"{base}/service_tokens/{{token_id}}", fake.get_service_token)
-    app.router.add_put(f"{base}/service_tokens/{{token_id}}", fake.update_service_token)
-    app.router.add_delete(f"{base}/service_tokens/{{token_id}}", fake.delete_service_token)
-    app.router.add_post(f"{base}/service_tokens/{{token_id}}/refresh", fake.refresh_service_token)
-    app.router.add_get(f"{base}/tags", fake.list_tags)
-    app.router.add_post(f"{base}/tags", fake.create_tag)
-    app.router.add_get(f"{base}/tags/{{tag_name}}", fake.get_tag)
-    app.router.add_get(f"{base}/apps", fake.list_apps)
-    app.router.add_post(f"{base}/apps", fake.create_app)
-    app.router.add_get(f"{base}/apps/{{app_id}}", fake.get_app)
-    app.router.add_put(f"{base}/apps/{{app_id}}", fake.update_app)
-    app.router.add_delete(f"{base}/apps/{{app_id}}", fake.delete_app)
-    app.router.add_get("/accounts/{account_id}/access/{tail:.*}", fake.other_account)
-    server = TestServer(app)
-    await server.start_server()
-    fake.server = server
+    fake_internet.hosts[API_HOST] = fake.handle
+    strict = functools.partial(AsyncCloudflare, _strict_response_validation=True)
     with (
-        patch("custom_components.cloudflare_access_relay.cloudflare_api.API_URL", fake.base_url),
+        patch("custom_components.cloudflare_access_relay.cloudflare_api.AsyncCloudflare", strict),
         patch("custom_components.cloudflare_access_relay.cloudflare_api.MAX_RETRIES", 0),
     ):
         yield fake
-    await server.close()
 
 
 # --------------------------------------------------------------------------- HA entry
