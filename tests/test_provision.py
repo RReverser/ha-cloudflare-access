@@ -834,7 +834,7 @@ async def test_the_gate_sends_people_straight_to_the_only_login_method(
     gate = cf.by_name(GATE)
     assert gate["allowed_idps"] == ["otp-1"] and gate["auto_redirect_to_identity"] is True
     assert "People" in gate["custom_deny_message"]
-    assert not set(",.!:@?-") & set(gate["custom_deny_message"]), "Cloudflare refuses these"
+    assert gate["custom_deny_message"].replace(" ", "").isalnum(), "Cloudflare refuses punctuation"
     await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
     client = cf.by_name(f"ha-access: client {HOSTNAME} Google Home")
     assert client["allowed_idps"] == ["otp-1"] and client["auto_redirect_to_identity"] is True
