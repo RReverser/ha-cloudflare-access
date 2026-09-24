@@ -116,9 +116,18 @@ def credentialed_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
 
 
 def client_redirect_uris(entry: ConfigEntry) -> list[str]:
-    """Return every login client's redirect URLs: what the gate lets register itself."""
+    """Return the callbacks the gate lets a self-registering client use.
+
+    Only the clients without credentials: a client with credentials never registers
+    itself, its callback lives on its own Access application (`desired_client_app`).
+    """
     return sorted(
-        {uri for sub in login_clients(entry).values() for uri in sub.data[CONF_REDIRECT_URIS]}
+        {
+            uri
+            for sub in login_clients(entry).values()
+            if not sub.data.get(CONF_NEEDS_CREDENTIALS)
+            for uri in sub.data[CONF_REDIRECT_URIS]
+        }
     )
 
 

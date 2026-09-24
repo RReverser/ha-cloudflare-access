@@ -82,7 +82,9 @@ kinds, one mechanism behind both:
   non-browser request gets a 401 pointing at Access's discovery document at
   `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
   person through the Access login, and receives a token. Access accepts a dynamic registration
-  only for a callback URL of a listed client (Claude: `https://claude.ai/api/mcp/auth_callback`).
+  only for a callback URL of a listed client without credentials (Claude:
+  `https://claude.ai/api/mcp/auth_callback`); a client with credentials keeps its callback
+  on its own application and is never allowed to register itself.
 - **Clients with a console that asks for a client id and secret** (Google Home account
   linking, an Alexa skill): the same entry with *The client asks for a client ID and secret*
   switched on. The integration creates an Access for SaaS OIDC application, which is that

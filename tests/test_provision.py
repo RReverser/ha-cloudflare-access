@@ -668,7 +668,10 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
     assert result["type"] is FlowResultType.ABORT, result
     await _settle(hass)
     app = cf.by_name(f"ha-access: client {HOSTNAME} Claude")
-    assert app is not None and dcr()["allowed_uris"] == ["https://claude.ai/*"]
+    assert app is not None and app["saas_app"]["redirect_uris"] == ["https://claude.ai/*"]
+    assert dcr()["allowed_uris"] == [], (
+        "a client with an application of its own never registers itself at the gate"
+    )
     assert cf.by_name(GATE)["policies"][-1]["include"] == [
         {"linked_app_token": {"app_uid": app["id"]}}
     ]
