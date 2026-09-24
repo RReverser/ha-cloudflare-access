@@ -230,7 +230,7 @@
             "needs_credentials": "The client asks for a client ID and secret"
           },
           "data_description": {
-            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers well-known clients; you can also type any URL, for example {example_console_redirect} for a console client, and {example_wildcard_redirect} covers every path.",
+            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers the agent apps that register themselves. A console client shows its own exact callback, for example {example_console_redirect} for Google Home: type that one. {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
           }
         },

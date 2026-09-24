@@ -72,8 +72,9 @@ who may link, and revoking a person in Access ends their clients at the next tok
 Every such client is added under *Add client* on the integration entry as *a client that
 logs people in*, with a name and the callback URL(s) the client's own side shows; the
 callback belongs to the client and cannot be derived, but the form offers the published
-callbacks of the usual clients (Claude, ChatGPT, Google Home and Alexa account linking) as
-choices. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call back
+callbacks of the agent apps that register themselves (Claude, ChatGPT) as choices; a console
+client (Google Home, Alexa) shows its own exact callback, with your project or vendor id in
+it, which is typed in. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call back
 on localhost, which Access does not take as a list entry; they are not supported yet. Two
 kinds, one mechanism behind both:
 

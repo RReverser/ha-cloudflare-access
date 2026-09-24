@@ -161,29 +161,18 @@ BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 # Entry changes (client subentries) come in bursts; reconciliation runs once they settle.
 RECONCILE_COOLDOWN_SECONDS: Final = 5
 
-# Callback URLs of well-known clients, offered as choices for a login client's redirect
-# URLs (any URL can still be typed): the agent apps people connect to Home Assistant over
-# MCP, and the two voice assistants that link an account through OAuth. Only URLs the
-# vendor publishes are listed, with the page they come from. Google and Amazon append a
-# project or vendor id, so those entries end in the `/*` wildcard Access accepts. Tools
-# that run on a person's own computer (Claude Code, Cursor, VS Code) call back on
-# localhost, which is not a list entry at Access, and are not listed.
+# Callback URLs of the agent apps that register themselves at the gate, offered as choices
+# for a login client's redirect URLs (any URL can still be typed). Only fixed URLs the
+# vendor publishes are listed, with the page they come from. A console client (Google
+# Home, Alexa) shows its own exact callback, with a project or vendor id in it, which is
+# typed rather than picked. Tools that run on a person's own computer (Claude Code,
+# Cursor, VS Code) call back on localhost, which is not a list entry at Access.
 KNOWN_REDIRECT_URIS: Final[tuple[tuple[str, str], ...]] = (
     # https://claude.com/docs/connectors/building/authentication
     ("https://claude.ai/api/mcp/auth_callback", "Claude"),
     # https://developers.openai.com/apps-sdk/build/auth
     ("https://chatgpt.com/connector_platform_oauth_redirect", "ChatGPT"),
     ("https://chatgpt.com/connector/oauth/*", "ChatGPT (per-connection callbacks)"),
-    # https://developers.home.google.com/cloud-to-cloud/project/authorization
-    ("https://oauth-redirect.googleusercontent.com/r/*", "Google Home (account linking)"),
-    (
-        "https://oauth-redirect-sandbox.googleusercontent.com/r/*",
-        "Google Home (account linking, sandbox)",
-    ),
-    # https://developer.amazon.com/en-US/docs/alexa/account-linking/requirements-account-linking.html
-    ("https://pitangui.amazon.com/api/skill/link/*", "Alexa (account linking, US)"),
-    ("https://layla.amazon.com/api/skill/link/*", "Alexa (account linking, EU)"),
-    ("https://alexa.amazon.co.jp/api/skill/link/*", "Alexa (account linking, JP)"),
 )
 
 # Links and example URLs shown in the forms. Home Assistant forbids URLs inside the
