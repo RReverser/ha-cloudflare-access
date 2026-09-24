@@ -162,30 +162,28 @@ BYPASS_POLICY_NAME: Final = APP_NAME_PREFIX + " bypass everyone"
 RECONCILE_COOLDOWN_SECONDS: Final = 5
 
 # Callback URLs of well-known clients, offered as choices for a login client's redirect
-# URLs (any URL can still be typed). Only URLs published by the vendor are listed, with
-# the page they come from; hosted callbacks only, since Access takes https URLs and a
-# trailing /* wildcard. Clients that run on a person's own computer (Claude Code, Cursor,
-# VS Code, Gemini CLI) call back on localhost, which is not a list entry at Access.
+# URLs (any URL can still be typed): the agent apps people connect to Home Assistant over
+# MCP, and the two voice assistants that link an account through OAuth. Only URLs the
+# vendor publishes are listed, with the page they come from. Google and Amazon append a
+# project or vendor id, so those entries end in the `/*` wildcard Access accepts. Tools
+# that run on a person's own computer (Claude Code, Cursor, VS Code) call back on
+# localhost, which is not a list entry at Access, and are not listed.
 KNOWN_REDIRECT_URIS: Final[tuple[tuple[str, str], ...]] = (
     # https://claude.com/docs/connectors/building/authentication
-    ("https://claude.ai/api/mcp/auth_callback", "Claude (web, desktop, mobile)"),
+    ("https://claude.ai/api/mcp/auth_callback", "Claude"),
     # https://developers.openai.com/apps-sdk/build/auth
     ("https://chatgpt.com/connector_platform_oauth_redirect", "ChatGPT"),
     ("https://chatgpt.com/connector/oauth/*", "ChatGPT (per-connection callbacks)"),
-    # https://cursor.com/docs/mcp
-    ("https://www.cursor.com/agents/mcp/oauth/callback", "Cursor (web and cloud agents)"),
-    # https://code.visualstudio.com/api/extension-guides/ai/mcp
-    ("https://vscode.dev/redirect", "VS Code"),
-    ("https://insiders.vscode.dev/redirect", "VS Code Insiders"),
-    # https://support.google.com/g/answer/17106276
-    ("https://vertexaisearch.cloud.google.com/oauth-redirect", "Gemini Enterprise"),
-    # https://developers.google.com/workspace/guides/configure-mcp-servers
-    ("https://antigravity.google/oauth-callback", "Google Antigravity"),
-    # https://www.perplexity.ai/help-center/en/articles/13915507-adding-custom-remote-connectors
-    ("https://www.perplexity.ai/rest/connections/oauth_callback", "Perplexity"),
-    ("https://enterprise.perplexity.ai/rest/connections/oauth_callback", "Perplexity Enterprise"),
-    # https://learn.microsoft.com/en-us/connectors/custom-connectors/
-    ("https://global.consent.azure-apim.net/redirect/*", "Microsoft Copilot Studio"),
+    # https://developers.home.google.com/cloud-to-cloud/project/authorization
+    ("https://oauth-redirect.googleusercontent.com/r/*", "Google Home (account linking)"),
+    (
+        "https://oauth-redirect-sandbox.googleusercontent.com/r/*",
+        "Google Home (account linking, sandbox)",
+    ),
+    # https://developer.amazon.com/en-US/docs/alexa/account-linking/requirements-account-linking.html
+    ("https://pitangui.amazon.com/api/skill/link/*", "Alexa (account linking, US)"),
+    ("https://layla.amazon.com/api/skill/link/*", "Alexa (account linking, EU)"),
+    ("https://alexa.amazon.co.jp/api/skill/link/*", "Alexa (account linking, JP)"),
 )
 
 # Links and example URLs shown in the forms. Home Assistant forbids URLs inside the
