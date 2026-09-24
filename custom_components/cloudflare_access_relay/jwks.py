@@ -54,6 +54,8 @@ class JwksVerifier:
         _LOGGER.debug("Loaded %d signing keys from %s", len(keys), self.certs_url)
 
     async def _key_for(self, kid: str) -> Any:
+        # An unknown kid usually means the team rotated its keys: fetch once more
+        # before refusing, so a rotation needs no restart.
         if kid not in self._keys:
             await self.refresh()
         if kid not in self._keys:
@@ -67,6 +69,7 @@ class JwksVerifier:
         except jwt.PyJWTError as err:
             raise JwtVerifyError(f"malformed token header: {err}") from err
         kid = header.get("kid")
+        # Before the key lookup: a token with another alg must not cost a JWKS fetch.
         if header.get("alg") != ALGORITHM:
             raise JwtVerifyError(f"unsupported alg {header.get('alg')!r}", kid)
         if not isinstance(kid, str) or not kid:
@@ -79,6 +82,8 @@ class JwksVerifier:
                 algorithms=[ALGORITHM],
                 audience=audience,
                 issuer=self.issuer,
+                # PyJWT checks `exp` only when the token carries one; without `require`
+                # a token that omits it would never expire. Five seconds of clock skew.
                 options={"require": ["exp", "iat", "aud", "iss"]},
                 leeway=5,
             )

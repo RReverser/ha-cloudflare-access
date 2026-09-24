@@ -32,6 +32,7 @@ from .issues import issue_id
 
 
 def _open(path: str, open_paths: list[str]) -> bool:
+    # Open paths are prefixes; a trailing `*` someone typed means the same thing.
     return any(path == prefix or path.startswith(prefix.rstrip("*")) for prefix in open_paths)
 
 
@@ -46,6 +47,8 @@ def async_check_mcp_login_conflict(
         for mcp in hass.config_entries.async_entries(HA_MCP_DOMAIN):
             mode = str(mcp.options.get(HA_MCP_OPT_AUTH, HA_MCP_AUTH_NONE))
             webhook_id = mcp.data.get(HA_MCP_DATA_WEBHOOK_ID)
+            # Mode `none` works behind the gate. A webhook that is off leaves HA-MCP on
+            # its own port, which the gate does not cover (README: the HA-MCP component).
             if (
                 mode == HA_MCP_AUTH_NONE
                 or not mcp.options.get(HA_MCP_OPT_WEBHOOK_ENABLED, True)
@@ -69,7 +72,8 @@ def async_check_mcp_login_conflict(
         data={
             "key": ISSUE_MCP_AUTH_CONFLICT,
             "entry_id": entry.entry_id,
-            # issue data holds scalars only: the lists travel as JSON
+            # Issue data holds scalars only (homeassistant/helpers/issue_registry.py);
+            # repairs.py parses the lists back.
             "mcp_entry_ids": json.dumps([c[1] for c in conflicts]),
             "webhook_paths": json.dumps([c[2] for c in conflicts]),
         },

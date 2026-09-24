@@ -1,12 +1,9 @@
 """Paths a caller may need open, derived from what Home Assistant serves without a login.
 
 Nothing is opened by itself: the options form offers these as choices, and only what
-the person picks (or types) is bypassed. Two sources: the webhooks integrations have
-registered, each with its concrete path, and the resource routes Home Assistant serves
-under /api/ to anyone who knows the URL (camera and image proxies, text-to-speech
-audio, map tiles), as path prefixes. Sibling prefixes are combined into their parent when
-nothing else lives under it (all four map-tile routes become one entry). Each is
-labelled with the integration it belongs to.
+the person picks (or types) is bypassed. The sources are the registered webhooks and the
+routes under /api/ that Home Assistant serves to anyone who knows the URL (camera and
+image proxies, text-to-speech audio, map tiles).
 """
 
 from __future__ import annotations
@@ -20,14 +17,19 @@ from homeassistant.helpers.selector import SelectOptionDict
 from homeassistant.loader import async_get_integrations
 
 API_PREFIX = "/api/"
-# Where the mobile app keeps the webhook ids of deleted registrations (its const.py:
-# DOMAIN and DATA_DELETED_IDS); importing that package pulls in half of Home Assistant.
+# Copied from homeassistant.components.mobile_app.const (DOMAIN, DATA_DELETED_IDS):
+# importing that package pulls in half of Home Assistant.
 MOBILE_APP = "mobile_app"
 DATA_DELETED_IDS = "deleted_ids"
 
 
 def _view_of(handler: Any) -> HomeAssistantView | None:
-    """Return the view behind a registered route handler (kept in its closure)."""
+    """Return the view behind a registered route handler.
+
+    Home Assistant registers a wrapper, not the view's method, and the wrapper keeps the
+    view in its closure (homeassistant.helpers.http.request_handler_factory); there is
+    no public way from a route back to its view.
+    """
     for cell in getattr(handler, "__closure__", None) or ():
         try:
             value = cell.cell_contents
@@ -51,8 +53,9 @@ def _domain_of(view: HomeAssistantView) -> str | None:
 def _widen(prefix: str, domain: str | None, routes: list[tuple[str, bool, str | None]]) -> str:
     """Climb to the parent directory while everything under it is open and the same source.
 
-    Sibling routes then become one entry; a parent that also serves something that needs
-    a login, or another integration, stops the climb. /api/ itself is never offered.
+    Sibling routes then become one entry (the four map-tile routes are one choice). A
+    parent that also serves something that needs a login, or another integration, stops
+    the climb, and /api/ itself is never offered.
     """
     while True:
         parent = prefix[: prefix.rstrip("/").rfind("/") + 1]
@@ -67,7 +70,8 @@ def _widen(prefix: str, domain: str | None, routes: list[tuple[str, bool, str | 
 
 async def async_bypass_candidates(hass: HomeAssistant) -> list[SelectOptionDict]:
     """Return the paths worth offering, webhooks first, then resource prefixes."""
-    # The mobile app keeps the ids of deleted registrations to answer them 410 Gone.
+    # The mobile app keeps the webhooks of deleted registrations, only to answer them
+    # 410 Gone (homeassistant.components.mobile_app.webhook); they are not worth opening.
     dead = set(hass.data.get(MOBILE_APP, {}).get(DATA_DELETED_IDS) or ())
     handlers: dict[str, webhook.WebhookData] = hass.data.get(webhook.DOMAIN) or {}
     hooks = [
@@ -78,14 +82,15 @@ async def async_bypass_candidates(hass: HomeAssistant) -> list[SelectOptionDict]
     routes: list[tuple[str, bool, str | None]] = []  # path, needs a login, integration
     for resource in hass.http.app.router.resources():
         info = resource.get_info()
+        # aiohttp describes a parameterised resource by "formatter" and a plain one by "path".
         path = info.get("formatter") or info.get("path") or ""
         if not path.startswith(API_PREFIX):
             continue
         for route in resource:
             if route.method == "OPTIONS":
-                continue  # the CORS preflight that aiohttp adds next to every view
+                continue  # the CORS preflight aiohttp_cors adds (homeassistant.components.http.cors)
             view = _view_of(route.handler)
-            # a route without a recognisable view is treated as one that needs a login
+            # Fail closed: a route whose view cannot be found counts as one that needs a login.
             routes.append(
                 (
                     path,
@@ -111,6 +116,7 @@ async def async_bypass_candidates(hass: HomeAssistant) -> list[SelectOptionDict]
     options: list[SelectOptionDict] = []
     for webhook_id, data in sorted(hooks, key=lambda kv: (kv[1].name.casefold(), kv[0])):
         source = names[data.domain]
+        # Many webhook names already start with the integration's name.
         label = (
             data.name
             if data.name.casefold().startswith(source.casefold())

@@ -71,9 +71,10 @@ def normalise_hostname(raw: str) -> str:
 def external_hostname(hass: HomeAssistant) -> str:
     """Return the hostname of Home Assistant's External URL, the hostname the gate guards.
 
-    Raises NoURLAvailableError when no External URL is configured (an IP or an internal
-    address is not one).
+    Raises NoURLAvailableError when no External URL is configured.
     """
+    # An internal address or a bare IP is not a hostname Cloudflare serves, and get_url
+    # allows both by default (homeassistant.helpers.network.get_url).
     hostname = normalise_hostname(get_url(hass, allow_internal=False, allow_ip=False))
     if not hostname:
         raise NoURLAvailableError
@@ -159,8 +160,8 @@ async def async_provisioning_options(
 async def api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessApi:
     """Return the Cloudflare API client for the entry's credentials.
 
-    An entry created by signing in with Cloudflare holds an OAuth token set, refreshed
-    before every call; one created with an API token holds the token.
+    An entry created by signing in with Cloudflare holds an OAuth token set; one created
+    with an API token holds the token.
     """
     if DATA_TOKEN not in entry.data:
         return CloudflareAccessApi(
@@ -174,6 +175,8 @@ async def api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessAp
     session = config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
 
     async def access_token() -> str:
+        # Only the errors are mapped: a refused refresh already starts the reauth flow in
+        # OAuth2Session.async_ensure_token_valid (homeassistant.helpers.config_entry_oauth2_flow).
         try:
             await session.async_ensure_token_valid()
         except OAuth2TokenRequestReauthError as err:
@@ -184,6 +187,8 @@ async def api_for(hass: HomeAssistant, entry: ConfigEntry) -> CloudflareAccessAp
             ) from err
         return str(session.token["access_token"])
 
+    # The client refreshes through token_source before every call; the first argument
+    # only seeds it.
     return CloudflareAccessApi(
         str(session.token["access_token"]),
         entry.data[CONF_ACCOUNT_ID],

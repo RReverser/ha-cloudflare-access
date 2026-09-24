@@ -121,10 +121,9 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Offer the project's public OAuth client; take the gate down for disabled entries.
 
-    Disabling a loaded entry unloads it, and the unload takes the gate down. An entry
-    that is disabled while it is not loaded (in an error state) is never unloaded, and
-    one disabled during a shutdown is unloaded too late to talk to Cloudflare; both are
-    caught here, on the state change and at the next start.
+    Disabling a loaded entry unloads it, and the unload takes the gate down. The two
+    cases the unload cannot cover are caught here, on the state change and at the next
+    start.
     """
     async_register_project_client(hass)
     ir.async_delete_issue(hass, DOMAIN, LEGACY_ISSUE_RESTART_REQUIRED)
@@ -136,6 +135,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     @callback
     def _entry_changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        # An entry disabled while not loaded (an error state) goes straight to NOT_LOADED
+        # without `async_unload_entry` (config_entries.ConfigEntry.async_unload), so its
+        # gate would stay up. A disable during shutdown waits for the next start.
         if (
             change is ConfigEntryChange.UPDATED
             and entry.domain == DOMAIN
@@ -147,6 +149,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             _take_down(entry)
 
     async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
+    # disabled entries are never set up, so this is their only chance after a restart
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.disabled_by is not None and _has_gate(entry):
             _take_down(entry)
@@ -174,7 +177,6 @@ class EntryData:
     client_apps: dict[str, str]
     # Script clients' service tokens, by subentry id, as last reconciled.
     script_tokens: dict[str, str]
-    # The login history coordinator.
     logins: LoginCoordinator
 
 
@@ -245,9 +247,7 @@ async def _async_migrate_service_token_option(
 ) -> None:
     """Turn the former service token option into script clients, one per token.
 
-    The token's name and Client ID are read from Cloudflare; its secret was never known
-    to the integration, so the client's page shows it as unknown until the token is
-    replaced. A token that no longer exists is dropped.
+    Needs Cloudflare, so it runs at setup rather than in `async_migrate_entry`.
     """
     if CONF_SERVICE_TOKEN_IDS not in entry.options:
         return
@@ -268,6 +268,9 @@ async def _async_migrate_service_token_option(
                         CONF_CLIENT_KIND: CLIENT_KIND_SCRIPT,
                         DATA_TOKEN_ID: token_id,
                         DATA_CLIENT_ID: token.get("client_id"),
+                        # the earlier version never stored the secret and Cloudflare
+                        # cannot return it, so the client shows it as unknown until
+                        # the token is replaced
                         DATA_CLIENT_SECRET: None,
                         DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
                     }
@@ -290,10 +293,8 @@ async def _async_reconcile_scripts(
 ) -> dict[str, str]:
     """Bring the script clients' service tokens in line with the subentries.
 
-    A client whose token was deleted outside the integration gets a new one, with a
-    new Client ID and secret that the script must be given again (the subentry is
-    updated and a warning logged). Tokens of removed clients are deleted by
-    `_async_delete_stale_tokens`, once the gate no longer refers to them.
+    Tokens of removed clients are left to `_async_delete_stale_tokens`, which runs
+    once the gate no longer names them.
     """
     tokens: dict[str, str] = {}
     for sid, sub in script_clients(entry).items():
@@ -333,9 +334,8 @@ async def _async_delete_stale_tokens(
 ) -> None:
     """Delete the service tokens of removed script clients.
 
-    Runs after the gate was written without their rules, as Cloudflare refuses to
-    delete a token a policy still names. `previous` is None at setup, when a client
-    removed while Home Assistant was down is found by its token's name instead.
+    Runs after the gate was written without their rules: Cloudflare refuses to delete
+    a token a policy still names.
     """
     if previous is not None:
         for sid, token_id in previous.items():
@@ -343,6 +343,8 @@ async def _async_delete_stale_tokens(
                 _LOGGER.info("Deleting the service token of removed client %s", sid)
                 await api.delete_service_token(token_id)
         return
+    # At setup there is no previous state: a client removed while Home Assistant was
+    # down is found by the name pattern the integration gives its tokens.
     prefix = _token_name(options, "")
     for token in await api.list_service_tokens():
         if token.get("name", "").startswith(prefix) and token["id"] not in current.values():
@@ -359,10 +361,8 @@ async def _async_reconcile_clients(
 ) -> dict[str, str]:
     """Bring the registered clients' applications in line with the subentries.
 
-    A client whose application was lost outside the integration gets a new one,
-    with new credentials that its console must be given again (the subentry is
-    updated and a warning logged). Applications of removed clients are deleted by
-    `_async_delete_stale_clients`, once the gate no longer refers to them.
+    Applications of removed clients are left to `_async_delete_stale_clients`, which
+    runs once the gate no longer names them.
     """
     apps: dict[str, str] = {}
     for sid, sub in credentialed_clients(entry).items():
@@ -374,6 +374,8 @@ async def _async_reconcile_clients(
         apps[sid] = app["id"]
         saas = app.get("saas_app") or {}
         derived = {DATA_CLIENT_APP_ID: app["id"], DATA_CLIENT_ID: saas.get("client_id")}
+        # Cloudflare returns the secret only in the create response (README, "Verified
+        # Cloudflare behaviour"), so its presence means the application was recreated.
         if saas.get("client_secret"):
             derived[DATA_CLIENT_SECRET] = saas["client_secret"]
             _LOGGER.warning(
@@ -398,8 +400,7 @@ async def _async_delete_stale_clients(
 
     Runs after the gate was written without their rules: Cloudflare accepts the
     deletion of a still-referenced application but refuses every later write of the
-    gate that carries the stale rule. `previous` is None at setup, when a client
-    removed while Home Assistant was down is found by its application name instead.
+    gate that carries the stale rule (README, "Verified Cloudflare behaviour").
     """
     if previous is not None:
         for sid, app_id in previous.items():
@@ -407,6 +408,8 @@ async def _async_delete_stale_clients(
                 _LOGGER.info("Deleting the Access application of removed client %s", sid)
                 await api.delete_app(app_id)
         return
+    # At setup there is no previous state: a client removed while Home Assistant was
+    # down is found by the tag and the name pattern the integration gives its apps.
     prefix = CLIENT_APP_NAME_FMT.format(hostname=options[CONF_HOSTNAME], name="")
     for app in await api.list_apps():
         if (
@@ -427,17 +430,17 @@ async def _async_revoke_removed(
 ) -> None:
     """End the Access sessions of the addresses that just left the allow list.
 
-    Access re-checks a person against the policy only when their session expires, so
-    dropping an address from the rule alone would leave their sessions and their
-    clients' refresh tokens valid until then. A credential that cannot revoke (a
-    sign-in granted before the scope existed) starts the re-authentication instead.
+    Access re-checks a person against the policy only when their session expires
+    (README, "Security properties"), so dropping an address from the rule alone would
+    leave their sessions and their clients' refresh tokens valid until then.
     """
     removed = sorted(previous - {e.strip().lower() for e in current})
     for email in removed:
         try:
             await api.revoke_user(email)
         except CloudflareAuthError as err:
-            # the credential lacks the permission: signing in again grants it
+            # A sign-in granted before the revoke scope existed lacks the permission;
+            # signing in again grants it. The rest would fail the same way, so stop.
             _LOGGER.warning(
                 "The Access sessions of %s could not be ended; they last until they expire: %s",
                 email,
@@ -480,12 +483,13 @@ async def _async_provision_entry(
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Bring an entry of an earlier version up to date (minor version 2).
+    """Bring an entry of an earlier version up to date.
 
-    Home Assistant calls this once, before setup, when the stored version is behind the
-    flow's. The service token option of an earlier version needs Cloudflare and is
-    migrated at setup instead, where a failure is retried like any other.
+    The service token option of an earlier version needs Cloudflare and is migrated at
+    setup instead (`_async_migrate_service_token_option`), where a failure is retried
+    like any other.
     """
+    # a newer major version: refusing keeps Home Assistant from loading it
     if entry.version > 1:
         return False
     if entry.minor_version < 2:
@@ -511,8 +515,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         ) from err
     for key in (ISSUE_NO_EXTERNAL_URL, ISSUE_UPDATE_FAILED):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry, key))
-    # Token-bearing clients are authenticated at the origin from the edge assertion; the
-    # middleware can only be installed before the web server starts (repair issue otherwise).
+    # The web server is already running by now, so the origin hook goes into aiohttp's
+    # prepared chain (see edge_auth.async_install_middleware); a repair issue reports an
+    # aiohttp that moved it, and the entry still loads.
     async_install_middleware(hass)
     emails = await allowed_emails(hass, login_emails(entry))
     if not emails:
@@ -523,6 +528,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         )
     try:
         api = await api_for(hass, entry)
+        # here rather than in async_migrate_entry: it needs Cloudflare
         await _async_migrate_service_token_option(hass, entry, api)
         options = await async_provisioning_options(hass, entry, api)
         await api.ensure_tag(options[OPTION_APP_TAG])
@@ -532,10 +538,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
         )
         client_apps = await _async_reconcile_clients(hass, entry, api, options, emails)
         script_tokens = await _async_reconcile_scripts(hass, entry, api, options)
-        options = await async_provisioning_options(
-            hass, entry, api
-        )  # a replaced token has a new id
+        # reread: a replaced token has a new id, which the gate's Service Auth rule names
+        options = await async_provisioning_options(hass, entry, api)
         result = await _async_provision_entry(hass, entry, api, options, emails, client_apps)
+        # only after the gate write: Cloudflare refuses later writes that name deleted objects
         await _async_delete_stale_clients(api, options, None, client_apps)
         await _async_delete_stale_tokens(api, options, None, script_tokens)
         await _async_revoke_removed(hass, entry, api, previous, emails)
@@ -570,9 +576,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     async_check_mcp_login_conflict(hass, entry, options)
     entry.runtime_data = data
     _async_track_changes(hass, entry, data)
-    # The logs are a convenience: `async_refresh` rather than
-    # `async_config_entry_first_refresh`, so a failure is logged by the coordinator and
-    # does not fail the setup.
+    # `async_refresh`, not `async_config_entry_first_refresh`: the latter raises
+    # ConfigEntryNotReady on failure (helpers.update_coordinator), and the login history
+    # is a convenience that must not hold up the gate.
     await data.logins.async_load()
     await data.logins.async_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -594,16 +600,16 @@ def _async_set_watched_apps(data: EntryData) -> None:
 
 @callback
 def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryData) -> None:
-    """Keep the applications in step with the users and the registered clients.
+    """Keep the applications in step with the users, the clients and the External URL.
 
-    Users come and go, and clients are registered and removed through subentries at
-    any time; every such change schedules a debounced reconciliation, which rewrites
-    an application only when its desired content changed.
+    Every such change schedules one debounced reconciliation.
     """
 
     async def _refresh() -> None:
         emails = await allowed_emails(hass, login_emails(entry))
         try:
+            # the last known login methods are enough to tell whether anything changed;
+            # Cloudflare is asked again only when a write follows
             options = {
                 **provisioning_options(hass, entry),
                 OPTION_IDP_IDS: data.options[OPTION_IDP_IDS],
@@ -656,10 +662,12 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
                 hass, entry, data.api, data.options, emails
             )
             script_tokens = await _async_reconcile_scripts(hass, entry, data.api, data.options)
+            # reread: a replaced token has a new id, and the login methods may have changed
             data.options = await async_provisioning_options(hass, entry, data.api)
             await _async_provision_entry(hass, entry, data.api, data.options, emails, client_apps)
             if entry.title != data.options[CONF_HOSTNAME]:
-                # the External URL changed and the gate now guards it: follow it
+                # the External URL changed and the gate now guards it; the unique id
+                # follows too, so a second entry for the old hostname is not refused
                 hass.config_entries.async_update_entry(
                     entry, title=data.options[CONF_HOSTNAME], unique_id=data.options[CONF_HOSTNAME]
                 )
@@ -706,6 +714,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
         cooldown=RECONCILE_COOLDOWN_SECONDS,
         immediate=False,
         function=_refresh,
+        # a reconciliation in flight must not hold up startup or shutdown
         background=True,
     )
 
@@ -729,21 +738,24 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
     )
     for event in (EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED):
         entry.async_on_unload(hass.bus.async_listen(event, _schedule))
-    # the External URL is the hostname: follow a change of it
+    # the External URL is the hostname; core_config.Config.async_update fires this on a change
     entry.async_on_unload(hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, _schedule))
+    # entries are not unloaded at shutdown (config_entries.ConfigEntries._async_shutdown
+    # only cancels setup retries), so the on_unload above does not stop the debouncer then
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
-    """Unload the entry; the middleware stays but no longer finds it.
+    """Unload the entry; a disabled entry also takes the gate down.
 
-    A disabled entry also takes the gate down: with the integration off, the hostname
-    goes back to how it was without it, and the origin no longer recognises Access
-    identities anyway. Re-enabling provisions everything again. Registered clients'
-    applications stay, so their consoles keep their credentials. A plain unload (a
-    reload, a restart) leaves the edge alone.
+    With the integration off the origin no longer recognises Access identities, so the
+    hostname goes back to how it was without it. Registered clients' applications stay,
+    so their consoles keep their credentials. A plain unload (a reload, a restart)
+    leaves the edge alone.
     """
     await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    # a disable during shutdown is too late to talk to Cloudflare; async_setup catches
+    # it at the next start
     if entry.disabled_by is not None and not hass.is_stopping:
         await _async_take_gate_down(hass, entry)
     return True

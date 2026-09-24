@@ -46,11 +46,13 @@ async def async_setup_entry(
         ]
         for sensor in new:
             sensors[sensor.user.id] = sensor
+        # Existing sensors take the fresh user object: its credentials feed `native_value`.
         for user_id, user in people.items():
             sensors[user_id].user = user
         if new:
             async_add_entities(new)
-        # people who are gone, including those removed while Home Assistant was down
+        # Drop the sensors of people who are gone. The registry pass also catches those
+        # removed while Home Assistant was down, which no signal announced.
         wanted = {_unique_id(entry, user_id) for user_id in people}
         for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
             if reg_entry.domain == "sensor" and reg_entry.unique_id not in wanted:
@@ -61,6 +63,8 @@ async def async_setup_entry(
 
     @callback
     def _people_changed(_entry_id: str) -> None:
+        # The dispatcher calls back synchronously. A task owned by the entry is waited
+        # for on unload (ConfigEntry.async_create_task, homeassistant/config_entries.py).
         entry.async_create_task(hass, _async_sync())
 
     await _async_sync()

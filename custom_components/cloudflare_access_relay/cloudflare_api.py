@@ -27,6 +27,7 @@ from pydantic import BaseModel
 _LOGGER = logging.getLogger(__name__)
 
 API_URL = "https://api.cloudflare.com/client/v4"
+# Same as the SDK default (cloudflare/_constants.py, DEFAULT_MAX_RETRIES).
 MAX_RETRIES = 2
 
 
@@ -66,6 +67,8 @@ def _translate(err: Exception, what: str) -> CloudflareError:
     """Map an SDK exception onto the integration's error classes."""
     if isinstance(err, CloudflareError):
         return err  # raised by the token source (an OAuth refresh that was refused)
+    # Both subclass APIStatusError (cloudflare/_exceptions.py), so they go before the
+    # generic status split.
     if isinstance(err, AuthenticationError | PermissionDeniedError):
         detail = "; ".join(f"{e.get('code')}: {e.get('message')}" for e in _errors_of(err))
         return CloudflareAuthError(
@@ -85,6 +88,8 @@ def _translate(err: Exception, what: str) -> CloudflareError:
 def _dump(obj: Any) -> Any:
     """Return the SDK's response model as plain JSON-compatible data."""
     if isinstance(obj, BaseModel):
+        # exclude_none: the provisioning code diffs these dicts against request bodies,
+        # and a field the API left unset must not read as a change.
         return obj.model_dump(mode="json", exclude_none=True)
     if isinstance(obj, list):
         return [_dump(o) for o in obj]
@@ -120,6 +125,8 @@ class CloudflareAccessApi:
 
     async def _c(self) -> AsyncCloudflare:
         if self._token_source is not None:
+            # The SDK builds the Authorization header from `api_token` on every request
+            # (AsyncCloudflare._api_token), so assigning it is enough to rotate the bearer.
             self._client.api_token = await self._token_source()
         return self._client
 
@@ -151,6 +158,8 @@ class CloudflareAccessApi:
     async def get_organization(self) -> dict[str, Any]:
         """Return the Zero Trust organization (holds auth_domain)."""
         try:
+            # Despite its name, `organizations.list` returns the account's one organization
+            # (the SDK types it Optional[Organization]).
             org = await (await self._c()).zero_trust.organizations.list(account_id=self._account_id)
         except Exception as err:
             raise _translate(err, "reading the Zero Trust organization") from err
@@ -183,6 +192,8 @@ class CloudflareAccessApi:
         entries: list[dict[str, Any]] = []
         page = 1
         try:
+            # The SDK returns one page here (Optional[AccessRequestListResponse]) rather
+            # than a paginator, so pages are walked by hand; 50 pages caps one poll.
             while True:
                 batch = (
                     _dump(
@@ -209,6 +220,8 @@ class CloudflareAccessApi:
         org = await self.get_organization()
         auth_domain = org.get("auth_domain")
         if not isinstance(auth_domain, str) or not auth_domain:
+            # Cloudflare answered, but without a team domain: raised as an API error so
+            # config_flow and provision handle it on the same path as a rejected request.
             raise CloudflareApiError(200, [{"code": 0, "message": "no auth_domain"}])
         return auth_domain
 
@@ -308,6 +321,8 @@ class CloudflareAccessApi:
         """
         try:
             tokens = (await self._c()).zero_trust.access.service_tokens
+            # Two calls rather than duration=None: the SDK leaves out only its `omit`
+            # sentinel (cloudflare/_utils/_utils.py, is_given) and would send None as null.
             tok = await (
                 tokens.create(account_id=self._account_id, name=name, duration=duration)
                 if duration

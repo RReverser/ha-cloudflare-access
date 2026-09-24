@@ -136,6 +136,8 @@ def _duration_from_form(value: Any) -> str | None:
         return value.strip() if _DURATION_RE.fullmatch(value.strip()) else None
     if not isinstance(value, dict):
         return None
+    # The selector validates with `cv.positive_time_period_dict`, which lets `seconds`
+    # through even with the seconds field off; Access takes whole minutes.
     minutes = round(
         value.get("days", 0) * 24 * 60
         + value.get("hours", 0) * 60
@@ -147,8 +149,8 @@ def _duration_from_form(value: Any) -> str | None:
     return f"{minutes // 60}h" if minutes % 60 == 0 else f"{minutes}m"
 
 
-# Started with this source (tests, automation) instead of the sign-in; also the reauth
-# path of an entry created with a token.
+# A flow started with this source (tests, CI) goes to `async_step_api_token` instead of
+# the sign-in; it is also the reauth path of an entry created with a token.
 SOURCE_API_TOKEN = "api_token"
 
 
@@ -159,18 +161,15 @@ def _clean_list(values: list[str] | None) -> list[str]:
 async def _people_section(
     hass: HomeAssistant, extra: Mapping[str, str], defaults: Mapping[str, Any]
 ) -> tuple[dict[Any, Any], dict[str, str]]:
-    """Return the People section, one e-mail field per person, and the name-to-user map.
-
-    A field carries no translation and is labelled with its name, the person's name.
-    A person whose username is an address gets a read-only field showing it; the
-    frontend drops read-only values on submit. Everyone else gets an editable field.
-    """
+    """Return the People section, one e-mail field per person, and the name-to-user map."""
     fields: dict[Any, Any] = {}
     names: dict[str, str] = {}
     entered = defaults.get(SECTION_PEOPLE) or {}
     for user in await person_users(hass):
+        # The key is the label: these fields have no translation, so the frontend shows it.
         name = user.name or user.id
         if (address := username_address(user)) is not None:
+            # Read-only: the frontend drops the value on submit, so no name-to-user entry.
             fields[vol.Optional(name, default=address)] = TextSelector(
                 TextSelectorConfig(type=TextSelectorType.EMAIL, read_only=True)
             )
@@ -202,6 +201,7 @@ def _parse_people(
 
 
 async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict[Any, Any]:
+    # Defaults are flat (stored options) or nested (a submitted form shown again).
     bypass = defaults.get(SECTION_BYPASS) or {}
     return {
         vol.Optional(
@@ -240,8 +240,9 @@ async def _advanced_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> 
 
 
 def _validate_options(user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
-    """Normalise option values and record validation errors; the section is flattened."""
+    """Normalise the option values and record validation errors."""
     out = dict(user_input)
+    # Options are stored flat; the People section becomes `CONF_LOGIN_EMAILS` (`_parse_people`).
     out.update(out.pop(SECTION_BYPASS, None) or {})
     out.pop(SECTION_PEOPLE, None)
     out[CONF_EXTRA_BYPASS_PATHS] = _clean_list(out.get(CONF_EXTRA_BYPASS_PATHS))
@@ -282,15 +283,14 @@ async def _validate_credential(api: CloudflareAccessApi, errors: dict[str, str])
 
 
 async def _users_placeholders(hass: HomeAssistant, extra: Mapping[str, str]) -> dict[str, str]:
-    """Return a note naming the people who cannot log in, only when there are any.
-
-    Shown inside the People section, which renders plain text: no markup here.
-    """
+    """Return a note naming the people who cannot log in, empty when there are none."""
     missing = await users_without_address(hass, extra)
     if not missing:
         return {"no_address_note": ""}
     names = ", ".join(u.name or u.id for u in missing)
     verb = "has" if len(missing) == 1 else "have"
+    # Appended to the section's description, which renders as plain text: a leading
+    # space and no markup.
     return {"no_address_note": f" {names} {verb} none yet."}
 
 
@@ -338,12 +338,16 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Sign in with Cloudflare: the consent page asks for the integration's scopes."""
+        # A flow can start before the integration's setup registered the project's client,
+        # and `async_step_pick_implementation` only offers what is registered by then.
         async_register_project_client(self.hass)
         return await self.async_step_pick_implementation()
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
         """Signed in: pick the account (or verify the re-authenticated one)."""
         self._credential = data
+        # The base method (`AbstractOAuth2FlowHandler.async_oauth_create_entry`) would create
+        # a second entry on reauth; update the existing one once the new token is checked.
         if self.source == SOURCE_REAUTH:
             entry = self._get_reauth_entry()
             errors: dict[str, str] = {}
@@ -370,6 +374,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         errors: dict[str, str] = {}
         if not self._accounts:
             try:
+                # memberships are a user-level listing: no account id yet
                 memberships = await self._api("").list_memberships()
             except CloudflareAuthError:
                 return self.async_abort(reason="invalid_auth")
@@ -381,6 +386,8 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             for account in memberships:
                 probe: dict[str, str] = {}
                 team_domain = await _validate_credential(self._api(account["id"]), probe)
+                # An auth error only means the grant does not cover this account; an
+                # outage is the one failure that aborts.
                 if probe.get("base") == "cannot_connect":
                     return self.async_abort(reason="cannot_connect")
                 if team_domain:
@@ -451,12 +458,10 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the people's addresses and the advanced options; the gate starts off.
-
-        The hostname is Home Assistant's External URL; without one there is nothing to
-        guard, so the flow stops and says where to set it.
-        """
+        """Ask for the people's addresses and the advanced options, then create the entry."""
         errors: dict[str, str] = {}
+        # The hostname is Home Assistant's External URL; without one there is nothing to
+        # guard, so the flow stops and says where to set it.
         try:
             hostname = external_hostname(self.hass)
         except NoURLAvailableError:
@@ -470,8 +475,11 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
             if not errors:
+                # one entry per hostname: two would fight over the same gate
                 await self.async_set_unique_id(hostname)
                 self._abort_if_unique_id_configured()
+                # The gate starts off: turning it on is the exposure change, done in the
+                # options after the rollout checks (README, Rollout).
                 return self.async_create_entry(
                     title=hostname,
                     data=self._credential,
@@ -495,6 +503,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         """Credential rejected: sign in again, or enter a new API token."""
+        # only an entry created by signing in holds a token set
         if DATA_TOKEN in entry_data:
             return await self.async_step_reauth_confirm()
         return await self.async_step_api_token()
@@ -505,6 +514,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         """Confirm before the browser is sent to Cloudflare again."""
         if user_input is None:
             return self.async_show_form(step_id="reauth_confirm", data_schema=vol.Schema({}))
+        # as in `async_step_user`: register before the implementations are gathered
         async_register_project_client(self.hass)
         return await self.async_step_pick_implementation()
 
@@ -570,13 +580,11 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
 class ClientSubentryFlow(ConfigSubentryFlow):
     """A client: something that calls Home Assistant through the gate.
 
-    A login client logs people in through Access and calls Home Assistant with the
-    token; its redirect URLs are what the gate lets a self-registering client (an MCP
-    client) use, and one whose console asks for a client id and secret (Google Home,
-    the Alexa developer console) gets an Access for SaaS application as well. A script
-    client is a machine with nobody behind it: it gets an Access service token, and
-    sends its Client ID and secret as request headers. Either way the credentials are
-    shown once here and again on reconfiguration.
+    A login client logs people in through Access; its redirect URLs are what the gate
+    lets a self-registering client (an MCP client) use, and one whose console asks for a
+    client id and secret (Google Home, the Alexa developer console) gets an Access for
+    SaaS application as well. A script client is a machine with nobody behind it: it
+    gets an Access service token and sends its Client ID and secret as request headers.
     """
 
     _data: dict[str, Any]
@@ -733,6 +741,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             desired = desired_client_app(
                 options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
             )
+            # ordering: the tag exists before the application that carries it is written
             await api.ensure_tag(options[OPTION_APP_TAG])
             app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
         except CloudflareAuthError:
@@ -744,6 +753,8 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors["base"] = "api_error"
         else:
             saas = app.get("saas_app") or {}
+            # The secret comes back only when the application is created (README, Verified
+            # Cloudflare behaviour); after an update it is None here.
             return {
                 **data,
                 DATA_CLIENT_APP_ID: app["id"],
@@ -760,6 +771,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             description_placeholders={
                 CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
                 DATA_CLIENT_ID: data[DATA_CLIENT_ID] or "",
+                # None after an update: Cloudflare returns the secret once, at creation
                 DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unchanged)",
                 **_client_endpoints(team_domain, data[DATA_CLIENT_ID] or ""),
             },
@@ -780,6 +792,8 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         except CloudflareAuthError as err:
             _LOGGER.warning("The credential cannot manage service tokens: %s", err)
             errors["base"] = "missing_service_tokens_edit"
+            # The credential lacks the Service Tokens permission (README, Sign-in); only a
+            # new one can fix that, so the entry's reauth is started from here.
             entry.async_start_reauth(self.hass)
         except CloudflareUnavailableError:
             errors["base"] = "cannot_connect"
@@ -823,6 +837,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         )
         try:
             api = await api_for(self.hass, entry)
+            # a token deleted on Cloudflare is replaced, and the new secret shown
             if token_id and await api.get_service_token(token_id) is not None:
                 await api.rename_service_token(token_id, name)
                 token = await api.refresh_service_token(token_id)
@@ -840,6 +855,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         except CloudflareAuthError as err:
             _LOGGER.warning("The credential cannot manage service tokens: %s", err)
             errors["base"] = "missing_service_tokens_edit"
+            # as in `_async_create_token`: a new credential is needed
             entry.async_start_reauth(self.hass)
         except CloudflareUnavailableError:
             errors["base"] = "cannot_connect"
@@ -873,12 +889,13 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     # ------------------------------------------------------------------ storage
 
     def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
-        """Create or update the subentry; a lost application or token is replaced on reconciliation."""
+        """Create or update the subentry."""
         if self.source == SOURCE_RECONFIGURE:
             entry = self._get_entry()
             sub = self._get_reconfigure_subentry()
             if data[CONF_CLIENT_KIND] == CLIENT_KIND_LOGIN and not data[CONF_NEEDS_CREDENTIALS]:
-                # the application, if any, is deleted by the entry's reconciliation
+                # Replace the data whole so the application keys go: the entry's
+                # reconciliation then deletes the application (`_async_delete_stale_clients`).
                 data = {
                     k: v
                     for k, v in data.items()
@@ -887,6 +904,8 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 return self.async_update_and_abort(
                     entry, sub, title=data[CONF_CLIENT_NAME], data=data
                 )
+            # Merge, skipping None: an updated login client's secret is not returned again
+            # and the stored one must stay.
             return self.async_update_and_abort(
                 entry,
                 sub,

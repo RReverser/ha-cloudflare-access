@@ -127,16 +127,18 @@ async def _middleware(request: web.Request, handler: Handler) -> web.StreamRespo
 
 @callback
 def async_install_middleware(hass: HomeAssistant) -> bool:
-    """Install the middleware once per run; False when the web server cannot take it.
-
-    Home Assistant starts its web server as soon as the frontend is up, before any
-    config entry loads, and aiohttp freezes an application's middleware list when the
-    server starts. So the list is always frozen here, and the middleware goes into the
-    chain aiohttp prepared instead (`_inject`).
-    """
+    """Install the middleware once per run; False when the web server cannot take it."""
     if hass.data.get(_MIDDLEWARE_INSTALLED):
         return True
     app = hass.http.app
+    # Core starts the web server as soon as the frontend is set up, before any config
+    # entry loads (http.async_setup: async_when_setup_or_start(hass, "frontend", ...)), and
+    # aiohttp freezes the middleware list with the application. So the public list is
+    # closed by the time an integration runs, and the middleware has to go into the
+    # chain aiohttp already prepared. Core itself unfreezes the router for late views
+    # (HomeAssistantHTTP.start), and hass-auth-header edits the frozen router's private
+    # tables the same way to replace the login view:
+    # https://github.com/BeryJu/hass-auth-header/blob/73c5432bd8975b2bc8875fa89795ca7b622d842e/custom_components/auth_header/__init__.py#L45-L50
     if not app.frozen:
         app.middlewares.append(_middleware)
     elif not _inject(app):
@@ -155,18 +157,16 @@ def async_install_middleware(hass: HomeAssistant) -> bool:
 
 
 def _inject(app: web.Application) -> bool:
-    """Add the middleware to a started application's prepared chain.
-
-    aiohttp keeps the chain in the application's `_middlewares_handlers`, innermost
-    first, and caches the chain it builds per handler; both are private, so they are
-    checked before use and the tests install into a started server, where an aiohttp
-    that moved them fails the suite. Innermost is the right place: Home Assistant's
-    own authentication has run by then, and the rule only acts where it declined.
-    """
+    """Add the middleware to a started application's prepared chain; False if aiohttp moved it."""
+    # `_middlewares_handlers` is the prepared chain, innermost first (aiohttp
+    # web_app.Application.pre_freeze); `_cached_build_middleware` caches the chain built
+    # per handler, so handlers already served would keep the old one without the clear.
     handlers = getattr(app, "_middlewares_handlers", None)
     cache_clear = getattr(getattr(web_app, "_cached_build_middleware", None), "cache_clear", None)
     if not isinstance(handlers, tuple) or not callable(cache_clear):
         return False
+    # innermost: Home Assistant's own authentication has run, and the rule only acts
+    # where it declined
     app._middlewares_handlers = ((_middleware, True), *handlers)
     app._run_middlewares = True
     cache_clear()

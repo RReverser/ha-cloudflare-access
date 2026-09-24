@@ -85,7 +85,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
     """Polls the authentication logs of this entry's applications."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, api: CloudflareAccessApi) -> None:
-        """Set up the coordinator; the first refresh loads the stored history."""
+        """Set up the coordinator; `async_load` must run before the first refresh."""
         super().__init__(
             hass,
             _LOGGER,
@@ -102,9 +102,9 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
     async def async_load(self) -> None:
         """Load the stored history, before the first read.
 
-        Not the coordinator's `_async_setup`: that only runs from
-        `async_config_entry_first_refresh`, whose failure would fail the entry, while
-        the logs are optional.
+        Not the coordinator's `_async_setup`: core runs that only from
+        `async_config_entry_first_refresh` (homeassistant/helpers/update_coordinator.py),
+        whose failure fails the entry, and the logs are optional.
         """
         if not self._loaded:
             self.data = LoginHistory.from_dict(await self._store.async_load())
@@ -118,15 +118,19 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         try:
             entries = await self._api.list_access_logs(since)
         except CloudflareAuthError as err:
-            # the credential lacks the permission: signing in again grants it
+            # The credential lacks the log permission; a new sign-in asks for it.
             raise ConfigEntryAuthFailed(f"the authentication logs cannot be read: {err}") from err
         except CloudflareError as err:
             raise UpdateFailed(f"the authentication logs were not read: {err}") from err
         assert self.config_entry is not None
         newest = since
         changed = False
+        # Oldest first, whatever order the API used: `last_logins` keeps the last write,
+        # and the events should fire in the order the logins happened.
         for entry in sorted(entries, key=lambda e: str(e.get("created_at") or "")):
             when = dt_util.parse_datetime(str(entry.get("created_at") or ""))
+            # An entry stamped on the cursor was handled last time. The logs are
+            # account-wide, so other applications' entries are skipped too.
             if when is None or when <= since or entry.get("app_uid") not in self.app_ids:
                 continue
             newest = max(newest, when)
@@ -159,6 +163,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
                 "when": when.isoformat(),
             },
         )
+        # No address (a service-token login, say): the event is all there is to record.
         if not email:
             return
         if allowed:
@@ -167,6 +172,8 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         _LOGGER.warning(
             "Access refused %s at %s: the address is not on the allow list", email, when
         )
+        # One issue per entry, not per address: a newer refusal replaces the older one
+        # instead of piling up. Its data is what `repairs.async_create_fix_flow` reads.
         ir.async_create_issue(
             self.hass,
             DOMAIN,

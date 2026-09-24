@@ -45,11 +45,8 @@ DEFAULT_DELETE_OBJECTS_ON_REMOVE: Final = True
 CLAIM_EMAIL: Final = "email"
 CLAIM_COMMON_NAME: Final = "common_name"
 
-# Signing in with Cloudflare: a self-managed Cloudflare OAuth client with PKCE (no
-# secret), asking for exactly what the integration does. `access.write` creates and
-# maintains the Access applications, `access-acct.read` reads the team domain,
-# `memberships.read` finds the account the consent page granted, `offline_access` gives
-# a refresh token so the sign-in lasts.
+# Signing in with Cloudflare: a self-managed OAuth client with PKCE and no secret, asking
+# for exactly what the integration does (README, "Sign-in", explains each scope).
 OAUTH_AUTHORIZE_URL: Final = "https://dash.cloudflare.com/oauth2/auth"
 OAUTH_TOKEN_URL: Final = "https://dash.cloudflare.com/oauth2/token"
 OAUTH_SCOPES: Final[tuple[str, ...]] = (
@@ -62,7 +59,7 @@ OAUTH_SCOPES: Final[tuple[str, ...]] = (
     "offline_access",
 )
 # The project's public OAuth client (PKCE, no secret), maintained by scripts/oauth_client.py.
-# A credential added under Settings → Application credentials takes its place.
+# A credential added under Settings → Application credentials is offered next to it.
 OAUTH_CLIENT_ID: Final = "2743d292a690169c8ed4dc4473382227"
 
 # Repair issues. Each one whose remedy is an action offers it as a fix flow (repairs.py);
@@ -76,7 +73,7 @@ ISSUE_DENIED_LOGIN: Final = "denied_login"
 ISSUE_MCP_AUTH_CONFLICT: Final = "mcp_auth_conflict"
 # Home Assistant's External URL was removed after setup.
 ISSUE_NO_EXTERNAL_URL: Final = "no_external_url"
-# Cloudflare refused or could not take an update of the applications after a change
+# Cloudflare refused or could not take an update of the applications after a change.
 ISSUE_UPDATE_FAILED: Final = "update_failed"
 
 # The HA-MCP custom component, whose login modes clash with the gate (README, "MCP servers

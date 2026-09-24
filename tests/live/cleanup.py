@@ -67,6 +67,8 @@ async def sweep_stale(api: CloudflareAccessApi) -> list[str]:
     deleted: list[str] = []
     for app in await api.list_apps():
         name = app.get("name") or ""
+        # `ha-relay:` named the applications before the run marker existed; nothing
+        # matches them to a run, so every one of them goes
         if name.startswith("ha-relay:") or (
             f" {RUN_PREFIX}-" in name and _older_than(app.get("created_at"), STALE_AGE)
         ):
