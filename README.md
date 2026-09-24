@@ -217,14 +217,12 @@ an error state, or during a shutdown, is taken down at the next start.
 
 Access logs every login attempt at the gate and at the clients' applications. The integration
 reads those logs on Home Assistant's polling schedule (every 15 minutes by default; the
-integration's system options can turn polling off, and the `homeassistant.update_entity`
-service forces a read) from a stored cursor, so nothing is replayed after a restart, and turns
-each new entry into:
+integration's system options can turn polling off, and a reload forces a read) from a stored
+cursor, so nothing is replayed after a restart, and turns each new entry into:
 
 - a `cloudflare_access_relay_login` event on the bus (`email`, `allowed`, `user_id` when the address
-  belongs to a person, `app`, `login_method`, `ip_address`, `when`), for automations;
-- a diagnostic sensor per person, "<name> last login", holding the time of their latest
-  allowed login through any of their addresses;
+  belongs to a person, `app`, `login_method`, `ip_address`, `when`), for automations and the
+  logbook;
 - a repair issue when someone logged in at the identity provider and was refused because the
   address is not on the allow list; it names the address and the time, and its fix gives the
   address to a person of your choice as their login e-mail.

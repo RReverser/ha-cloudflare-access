@@ -990,6 +990,26 @@ async def test_a_failed_update_raises_a_repair_and_is_retried(
     )
 
 
+async def test_the_sensors_of_an_earlier_version_are_removed_from_the_registries(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(entry, minor_version=3)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)}, name=HOSTNAME
+    )
+    er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, f"{entry.entry_id}-alice", config_entry=entry, device_id=device.id
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.minor_version == 4
+    assert er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id) == []
+    assert dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id) == []
+
+
 async def test_remove_entry_deletes_every_application(hass: HomeAssistant, access: Access) -> None:
     cf = access.cloudflare
     await _save_options(

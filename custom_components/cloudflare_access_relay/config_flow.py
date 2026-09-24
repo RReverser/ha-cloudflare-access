@@ -301,7 +301,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     VERSION = 1
     # 2: options and subentries of earlier versions are migrated; 3: the hostname is the
     # External URL, no longer an option (`async_migrate_entry`).
-    MINOR_VERSION = 3
+    MINOR_VERSION = 4
 
     def __init__(self) -> None:
         """Start with no credential."""

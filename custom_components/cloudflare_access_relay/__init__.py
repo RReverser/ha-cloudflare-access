@@ -23,17 +23,17 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigSubentry,
 )
-from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
     ConfigEntryNotReady,
 )
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import device_registry as dr, entity_registry as er, issue_registry as ir
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.typing import ConfigType
@@ -82,7 +82,6 @@ from .const import (
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
     SERVICE_TOKEN_NAME_FMT,
-    SIGNAL_PEOPLE_CHANGED,
     SUBENTRY_TYPE_CLIENT,
     SUBENTRY_TYPE_LOGIN_EMAIL,
 )
@@ -501,6 +500,16 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # the hostname is Home Assistant's External URL now, not an option
         options = {k: v for k, v in entry.options.items() if k != CONF_HOSTNAME}
         hass.config_entries.async_update_entry(entry, options=options, minor_version=3)
+    if entry.minor_version < 4:
+        # 0.2.0 created a "last login" sensor per person on a service device; the
+        # registries keep both until they are removed here
+        ent_reg = er.async_get(hass)
+        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+            ent_reg.async_remove(entity.entity_id)
+        dev_reg = dr.async_get(hass)
+        for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+            dev_reg.async_remove_device(device.id)
+        hass.config_entries.async_update_entry(entry, minor_version=4)
     return True
 
 
@@ -581,11 +590,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bo
     # is a convenience that must not hold up the gate.
     await data.logins.async_load()
     await data.logins.async_refresh()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # A coordinator schedules its next poll only while it has a listener
+    # (helpers.update_coordinator), and nothing subscribes to this one: no entity is
+    # built from the logs, only events and repair issues.
+    entry.async_on_unload(data.logins.async_add_listener(lambda: None))
     return True
-
-
-PLATFORMS = [Platform.SENSOR]
 
 
 @callback
@@ -682,7 +691,6 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
             data.client_apps = client_apps
             data.script_tokens = script_tokens
             _async_set_watched_apps(data)
-            async_dispatcher_send(hass, SIGNAL_PEOPLE_CHANGED, entry.entry_id)
         except CloudflareAuthError as err:
             data.options = previous_options
             _LOGGER.warning("Cloudflare no longer accepts the sign-in: %s", err)
@@ -753,7 +761,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> b
     so their consoles keep their credentials. A plain unload (a reload, a restart)
     leaves the edge alone.
     """
-    await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     # a disable during shutdown is too late to talk to Cloudflare; async_setup catches
     # it at the next start
     if entry.disabled_by is not None and not hass.is_stopping:

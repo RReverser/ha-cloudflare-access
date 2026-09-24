@@ -44,7 +44,7 @@ async def _poll(hass: HomeAssistant) -> None:
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
-async def test_logins_become_events_sensors_and_a_denied_login_issue(
+async def test_logins_become_events_and_a_denied_login_issue(
     hass: HomeAssistant, access: Access
 ) -> None:
     cf = access.cloudflare
@@ -65,9 +65,6 @@ async def test_logins_become_events_sensors_and_a_denied_login_issue(
     ], "only this entry's applications count"
     alice = next(u for u in await hass.auth.async_get_users() if u.name == "Alice")
     assert events[0].data["user_id"] == alice.id and events[1].data["user_id"] is None
-    state = hass.states.get("sensor.ha_example_com_alice_last_login")
-    assert state is not None and state.state == stamp(30)
-    assert hass.states.get("sensor.ha_example_com_bob_last_login").state == "unknown"
     issue = ir.async_get(hass).async_get_issue(DOMAIN, f"denied_login_{access.entry.entry_id}")
     assert issue is not None and issue.translation_placeholders["email"] == "eve@example.com"
 
@@ -75,19 +72,17 @@ async def test_logins_become_events_sensors_and_a_denied_login_issue(
     await _poll(hass)
     assert len(events) == 2
 
-    # a newer login moves the sensor; a person who arrives later gets a sensor too
+    # a person who arrives later is matched too
     carol = await add_user(hass, "carol@example.com", name="Carol")
     cf.access_logs.append(_entry(gate, ALICE, True, stamp(5)))
     cf.access_logs.append(_entry(gate, "carol@example.com", True, stamp(4)))
     await _poll(hass)
-    assert hass.states.get("sensor.ha_example_com_alice_last_login").state == stamp(5)
     assert events[-1].data["user_id"] == carol.id
 
     # the cursor survives a reload: the old entries are not replayed
     assert await hass.config_entries.async_reload(access.entry.entry_id)
     await hass.async_block_till_done()
     assert len(events) == 4
-    assert hass.states.get("sensor.ha_example_com_alice_last_login").state == stamp(5)
 
 
 async def test_logs_that_cannot_be_read_start_the_sign_in_again(

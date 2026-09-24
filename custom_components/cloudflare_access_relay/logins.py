@@ -11,7 +11,7 @@ address, since the usual fix is adding it under People.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -47,28 +47,15 @@ class LoginHistory:
 
     # ISO timestamp of the newest entry seen; the next poll starts after it.
     cursor: str | None = None
-    # Latest allowed login per address (lower-cased), as ISO timestamps.
-    last_logins: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the storable form."""
-        return {"cursor": self.cursor, "last_logins": dict(self.last_logins)}
+        return {"cursor": self.cursor}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> LoginHistory:
         """Rebuild from storage."""
-        data = data or {}
-        return cls(cursor=data.get("cursor"), last_logins=dict(data.get("last_logins") or {}))
-
-    def last_login(self, addresses: set[str]) -> datetime | None:
-        """Return the latest allowed login of any of the addresses."""
-        times = [
-            parsed
-            for address in addresses
-            if (stamp := self.last_logins.get(address))
-            and (parsed := dt_util.parse_datetime(stamp)) is not None
-        ]
-        return max(times) if times else None
+        return cls(cursor=(data or {}).get("cursor"))
 
 
 def _store_for(hass: HomeAssistant, entry: ConfigEntry) -> Store[dict[str, Any]]:
@@ -125,8 +112,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         assert self.config_entry is not None
         newest = since
         changed = False
-        # Oldest first, whatever order the API used: `last_logins` keeps the last write,
-        # and the events should fire in the order the logins happened.
+        # Oldest first, whatever order the API used, so the events fire in order.
         for entry in sorted(entries, key=lambda e: str(e.get("created_at") or "")):
             when = dt_util.parse_datetime(str(entry.get("created_at") or ""))
             # An entry stamped on the cursor was handled last time. The logs are
@@ -164,10 +150,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
             },
         )
         # No address (a service-token login, say): the event is all there is to record.
-        if not email:
-            return
-        if allowed:
-            history.last_logins[email] = when.isoformat()
+        if not email or allowed:
             return
         _LOGGER.warning(
             "Access refused %s at %s: the address is not on the allow list", email, when
