@@ -33,7 +33,6 @@ import os
 from pathlib import Path
 import time
 from typing import Any
-import warnings
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -493,12 +492,12 @@ async def _lifecycle(
 
     assert await _until(gate_links_client, "linked client rule on the gate", 60)
 
-    print("== which client ids the gate's own OAuth endpoints recognise")
+    print("== the gate's own OAuth endpoints know self-registered clients, not the application")
     metadata = (await edge.get("/.well-known/oauth-authorization-server")).json()
     callback = "https://example.com/oauth/callback"
 
-    async def authorize(client_id: str) -> tuple[int, str, str]:
-        resp = await edge.http.get(
+    async def authorize(client_id: str) -> httpx.Response:
+        return await edge.http.get(
             metadata["authorization_endpoint"],
             params={
                 "response_type": "code",
@@ -511,7 +510,6 @@ async def _lifecycle(
             },
             follow_redirects=False,
         )
-        return resp.status_code, resp.headers.get("location", "")[:120], resp.text[:160]
 
     registration = await edge.http.post(
         metadata["registration_endpoint"],
@@ -523,30 +521,23 @@ async def _lifecycle(
             "response_types": ["code"],
         },
     )
-    dcr_client = registration.json().get("client_id") if registration.status_code < 300 else None
-    probes = {
-        "registration": (registration.status_code, registration.text[:160]),
-        "self-registered": await authorize(dcr_client) if dcr_client else None,
-        "application": await authorize(shown["client_id"]),
-        "bogus": await authorize("not-a-client"),
-    }
-    warnings.warn(f"authorize probes: {probes}", stacklevel=1)
-    # does the account's OAuth-clients listing (the Cloudflare API clients) show it?
+    assert registration.status_code == 201, registration.text
+    dcr_client = registration.json()["client_id"]
+    # a known client id is sent on to its callback (here with an error about the missing
+    # `resource` parameter); an unknown one gets Access's error page
+    resp = await authorize(dcr_client)
+    assert resp.status_code == 302 and resp.headers["location"].startswith(callback), resp.text
+    resp = await authorize(shown["client_id"])
+    assert resp.status_code == 400, "the application's client id is not one of the gate's"
+    assert (await authorize("not-a-client")).status_code == 400
+    # nothing in the account lists a self-registered client: not the OAuth-clients listing
+    # (the Cloudflare API clients) either
     listing = await edge.http.get(
         f"https://api.cloudflare.com/client/v4/accounts/{os.environ['CF_ACCOUNT_ID']}/oauth_clients",
         headers={"Authorization": f"Bearer {os.environ['CF_API_TOKEN']}"},
     )
-    body = (
-        listing.json()
-        if listing.headers.get("content-type", "").startswith("application/json")
-        else {}
-    )
-    ids = [c.get("client_id") for c in (body.get("result") or [])] if isinstance(body, dict) else []
-    warnings.warn(
-        f"oauth_clients listing: status {listing.status_code}, {len(ids)} clients, "
-        f"self-registered present: {dcr_client in ids}, errors: {str(body.get('errors'))[:200] if isinstance(body, dict) else listing.text[:200]}",
-        stacklevel=1,
-    )
+    assert listing.status_code == 200, listing.text
+    assert dcr_client not in [c.get("client_id") for c in listing.json()["result"]]
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
 
     async def client_gone() -> bool:

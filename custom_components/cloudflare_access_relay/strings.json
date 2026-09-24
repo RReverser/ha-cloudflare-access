@@ -260,7 +260,7 @@
         },
         "credentials": {
           "title": "Credentials for {name}",
-          "description": "Only a console that asks you for these needs them (e.g. Google Home, Alexa). An app that registers itself (e.g. Claude, ChatGPT) connects without; Claude also takes them under its advanced settings.\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+          "description": "Only a console that asks you for these needs them (e.g. Google Home, Alexa). An app that registers itself (e.g. Claude, ChatGPT) connects without them and cannot use them: the gate's login only knows the clients that registered with it.\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
         },
         "script_credentials": {
           "title": "Credentials for {name}",
