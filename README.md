@@ -221,8 +221,9 @@ integration's system options can turn polling off, and a reload forces a read) f
 cursor, so nothing is replayed after a restart, and turns each new entry into:
 
 - a `cloudflare_access_relay_login` event on the bus (`email`, `allowed`, `user_id` when the address
-  belongs to a person, `app`, `login_method`, `ip_address`, `when`), for automations and the
-  logbook;
+  belongs to a person, `app`, `login_method`, `ip_address`, `when`), fired at the time of the
+  login rather than of the poll, for automations, and a logbook entry on the person when the
+  address is theirs;
 - a repair issue when someone logged in at the identity provider and was refused because the
   address is not on the allow list; it names the address and the time, and its fix gives the
   address to a person of your choice as their login e-mail.

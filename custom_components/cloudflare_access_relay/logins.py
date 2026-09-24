@@ -135,6 +135,8 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
         allowed = bool(entry.get("allowed"))
         extra = login_emails(self.config_entry)
         user = await async_find_user(self.hass, extra, email) if email else None
+        # Fired at the time of the login, not of the poll, so the logbook and the recorder
+        # place it where it happened.
         self.hass.bus.async_fire(
             EVENT_LOGIN,
             {
@@ -148,6 +150,7 @@ class LoginCoordinator(DataUpdateCoordinator[LoginHistory]):
                 "ip_address": entry.get("ip_address"),
                 "when": when.isoformat(),
             },
+            time_fired=when.timestamp(),
         )
         # No address (a service-token login, say): the event is all there is to record.
         if not email or allowed:
