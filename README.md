@@ -90,10 +90,11 @@ kinds, one mechanism behind both:
   at `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
   person through the Access login, and receives a token. Access accepts a dynamic
   registration only for a callback URL of a listed client (Claude:
-  `https://claude.ai/api/mcp/auth_callback`). Claude's custom-connector dialog also takes the
-  client id and secret under its advanced settings, in which case it uses the application
-  instead of registering itself. The unused application of a self-registering client costs
-  nothing but an entry in the account.
+  `https://claude.ai/api/mcp/auth_callback`). Such a client cannot use the application's
+  credentials instead: it finds the login endpoints by discovery on the hostname, and those
+  are the gate's, which know only the clients that registered with them (verified below).
+  The unused application of a self-registering client costs nothing but an entry in the
+  account.
 
 **Bypassed paths.** Callers that can hold neither a cookie nor a bearer, such as a third-party
 service posting to a webhook or a media player fetching audio by signed URL from the public
@@ -397,6 +398,8 @@ provisioning code, and re-checked by `tests/live` in CI on every push to `main`.
 | Managed OAuth can be enabled through the API on the gate; Access then serves `/.well-known/oauth-authorization-server` on the hostname itself and answers a non-browser client with 401 + `WWW-Authenticate` | verified 20 Sep 2026 |
 | An Access for SaaS OIDC application can be created through the API with the client secret returned once (a refresh-token lifetime is mandatory), its key endpoint goes live at the team domain within about a minute, and a `linked_app_token` rule naming it is accepted on the gate | verified 20 Sep 2026 |
 | The gate refuses any write that still names a deleted application, so the rule must be dropped before the client's application is deleted | verified 20 Sep 2026 |
+| The gate's managed-OAuth authorization endpoint accepts a client id obtained by dynamic registration and refuses the client id of an Access for SaaS application, so a self-registering client cannot be pointed at the application's credentials | verified 24 Sep 2026 |
+| A self-registered client appears nowhere the API lists: not on the gate, not in the login logs or sessions, and not in the account's OAuth-clients listing, so it cannot be enumerated or revoked on its own | verified 24 Sep 2026 |
 | Cloudflare refuses a self-hosted application for a hostname outside the account's zones (`12130: access.api.error.invalid_request: domain does not belong to zone`), so a wrong External URL cannot create a gate that guards nothing | verified 23 Sep 2026 |
 | A bearer Access admitted reaches the origin unchanged, with the assertion alongside; the origin rule accepts a real assertion against the real JWKS and refuses a tampered one | verified 20 Sep 2026 |
 | A registered client's token, presented as a bearer on the hostname, passes the gate with an assertion whose audience is the gate's | **still open**: needs a real account-linking login (Google Home or Alexa) |
