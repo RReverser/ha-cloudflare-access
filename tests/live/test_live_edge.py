@@ -276,8 +276,10 @@ async def _register_script(hass: HomeAssistant, entry: ConfigEntry, name: str) -
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "kind": "script"}
+        flow["flow_id"], {"next_step_id": "script"}
     )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script", result
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {"name": name})
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials", (
         result
     )
@@ -450,12 +452,16 @@ async def _lifecycle(
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": "Live client", "kind": "login"}
+        flow["flow_id"], {"next_step_id": "login"}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"],
-        {"redirect_uris": ["https://example.com/oauth/callback"], "needs_credentials": True},
+        {
+            "name": "Live client",
+            "redirect_uris": ["https://example.com/oauth/callback"],
+            "needs_credentials": True,
+        },
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     shown = result["description_placeholders"]

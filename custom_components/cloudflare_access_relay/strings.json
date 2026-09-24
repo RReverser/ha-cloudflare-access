@@ -121,14 +121,6 @@
       "invalid_email": "Enter an e-mail address."
     }
   },
-  "selector": {
-    "client_kind": {
-      "options": {
-        "login": "A client that logs people in (e.g. Claude, Google Home)",
-        "script": "A script or service with its own credentials (e.g. a backup job)"
-      }
-    }
-  },
   "issues": {
     "middleware_unavailable": {
       "title": "Clients authenticated by Cloudflare Access cannot be recognised",
@@ -212,26 +204,38 @@
       "step": {
         "user": {
           "title": "Client",
-          "description": "Something that calls Home Assistant through the gate.\n\nThe next page asks for what the chosen kind needs.",
-          "data": {
-            "name": "Name",
-            "kind": "Kind of client"
+          "description": "Something that calls Home Assistant through the gate.",
+          "menu_options": {
+            "login": "A client that logs people in",
+            "script": "A script or service with its own credentials"
           },
-          "data_description": {
-            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
-            "kind": "A client that logs people in (e.g. Claude, ChatGPT, Google Home, Alexa) gets [an Access login]({docs_saas_apps}) and the person's own token.\n\nA script or service with its own credentials (e.g. a backup job, a monitoring probe on another machine) runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request."
+          "menu_option_descriptions": {
+            "login": "e.g. Claude, ChatGPT, Google Home, Alexa. It gets [an Access login]({docs_saas_apps}); each person logs in as themselves.",
+            "script": "e.g. a backup job, a monitoring probe on another machine. It runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request."
           }
         },
         "login": {
-          "title": "Where the client returns to",
-          "description": "Enter the callback URL that the client's side shows.\n\nAn agent app that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks you for a client ID and secret, the next page shows them, from [an Access application created for it]({docs_saas_apps}).",
+          "title": "A client that logs people in",
+          "description": "Enter the callback URL that the client's side shows.",
           "data": {
+            "name": "Name",
             "redirect_uris": "Callback URLs",
             "needs_credentials": "The client's console asks you for a client ID and secret"
           },
           "data_description": {
+            "name": "A name that identifies the client to you. e.g. Claude, Google Home.",
             "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on when the client's console wants a client ID and secret from you (e.g. Google Home, Alexa): the next page shows them, minted for it by Access.\n\nLeave off for an agent app that registers itself (e.g. Claude, ChatGPT)."
+          }
+        },
+        "script": {
+          "title": "A script or service with its own credentials",
+          "description": "The next page shows the credentials the script sends with every request.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "A name that identifies the client to you. e.g. Backup job."
           }
         },
         "reconfigure": {
@@ -243,7 +247,7 @@
             "needs_credentials": "The client's console asks you for a client ID and secret"
           },
           "data_description": {
-            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
+            "name": "A name that identifies the client to you. e.g. Claude, Google Home.",
             "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path.",
             "needs_credentials": "Turn on when the client's console wants a client ID and secret from you (e.g. Google Home, Alexa): the next page shows them, minted for it by Access.\n\nLeave off for an agent app that registers itself (e.g. Claude, ChatGPT)."
           }
@@ -255,7 +259,7 @@
             "name": "Name"
           },
           "data_description": {
-            "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script."
+            "name": "A name that identifies the client to you. e.g. Backup job."
           }
         },
         "credentials": {

@@ -106,13 +106,6 @@ _REDIRECT_URIS = SelectSelector(
         mode=SelectSelectorMode.DROPDOWN,
     )
 )
-_CLIENT_KIND = SelectSelector(
-    SelectSelectorConfig(
-        options=[CLIENT_KIND_LOGIN, CLIENT_KIND_SCRIPT],
-        mode=SelectSelectorMode.LIST,
-        translation_key="client_kind",
-    )
-)
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 # Access takes `<n>h` or `<n>m`; the form shows days, hours and minutes.
 _SESSION_DURATION = DurationSelector(DurationSelectorConfig(enable_day=True, enable_second=False))
@@ -592,40 +585,40 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     # ------------------------------------------------------------------- steps
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Name and kind; the next step depends on the kind."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            else:
-                self._data = {
-                    CONF_CLIENT_NAME: name,
-                    CONF_CLIENT_KIND: user_input[CONF_CLIENT_KIND],
-                }
-                if self._data[CONF_CLIENT_KIND] == CLIENT_KIND_SCRIPT:
-                    return await self._async_create_token(errors)
-                return await self.async_step_login()
-        defaults = user_input or {}
-        return self.async_show_form(
+        """Pick the kind: a menu, so each choice carries its own description."""
+        return self.async_show_menu(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
-                    vol.Required(
-                        CONF_CLIENT_KIND, default=defaults.get(CONF_CLIENT_KIND, CLIENT_KIND_LOGIN)
-                    ): _CLIENT_KIND,
-                }
-            ),
-            errors=errors,
+            menu_options=[CLIENT_KIND_LOGIN, CLIENT_KIND_SCRIPT],
             description_placeholders=FORM_PLACEHOLDERS,
         )
 
     async def async_step_login(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Ask for a login client's redirect URLs and whether its console needs credentials."""
-        return await self._async_handle_login("login", user_input, self._data)
+        """Ask for a login client: name, callback URLs, whether its console needs credentials."""
+        return await self._async_handle_login("login", user_input, {})
+
+    async def async_step_script(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Ask for a script client's name, then create its token and show the credentials."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                self._data = {CONF_CLIENT_NAME: name, CONF_CLIENT_KIND: CLIENT_KIND_SCRIPT}
+                return await self._async_create_token(errors)
+        return self._script_form("script", (user_input or {}).get(CONF_CLIENT_NAME, ""), errors)
+
+    def _script_form(self, step_id: str, name: str, errors: dict[str, str]) -> SubentryFlowResult:
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema({vol.Required(CONF_CLIENT_NAME, default=name): str}),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
@@ -650,14 +643,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 self._data = {**current, CONF_CLIENT_NAME: name}
                 return await self._async_renew_token(errors)
         defaults = user_input or current
-        return self.async_show_form(
-            step_id="reconfigure_script",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str}
-            ),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
+        return self._script_form("reconfigure_script", defaults.get(CONF_CLIENT_NAME, ""), errors)
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
@@ -698,11 +684,10 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 CONF_CLIENT_KIND: CLIENT_KIND_LOGIN,
                 **self._validate_login(user_input, errors),
             }
-            if step_id == "reconfigure":
-                name = user_input.get(CONF_CLIENT_NAME, "").strip()
-                if not name:
-                    errors[CONF_CLIENT_NAME] = "required"
-                data[CONF_CLIENT_NAME] = name
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            data[CONF_CLIENT_NAME] = name
             if not errors and not data[CONF_NEEDS_CREDENTIALS]:
                 return self._store(data)
             if not errors:
@@ -714,8 +699,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                     return self._login_credentials(registered)
         defaults = user_input or current
         fields: dict[Any, Any] = {}
-        if step_id == "reconfigure":
-            fields[vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, ""))] = str
+        fields[vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, ""))] = str
         fields[
             vol.Required(CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or []))
         ] = _REDIRECT_URIS
@@ -810,22 +794,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 }
             )
             return self._script_credentials(self._data)
-        return self._user_form_again(errors)
-
-    def _user_form_again(self, errors: dict[str, str]) -> SubentryFlowResult:
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_CLIENT_NAME, default=self._data[CONF_CLIENT_NAME]): str,
-                    vol.Required(
-                        CONF_CLIENT_KIND, default=self._data[CONF_CLIENT_KIND]
-                    ): _CLIENT_KIND,
-                }
-            ),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
+        return self._script_form("script", self._data[CONF_CLIENT_NAME], errors)
 
     async def _async_renew_token(self, errors: dict[str, str]) -> SubentryFlowResult:
         """Rename the token and extend its validity, then show the credentials again."""
@@ -864,14 +833,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors["base"] = "api_error"
         else:
             return self._script_credentials(self._data)
-        return self.async_show_form(
-            step_id="reconfigure_script",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_CLIENT_NAME, default=self._data[CONF_CLIENT_NAME]): str}
-            ),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
+        return self._script_form("reconfigure_script", self._data[CONF_CLIENT_NAME], errors)
 
     def _script_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         return self.async_show_form(
