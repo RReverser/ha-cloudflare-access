@@ -508,13 +508,13 @@ async def _register_client(
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
-    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user"
+    assert flow["type"] is FlowResultType.MENU and flow["step_id"] == "user"
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "kind": "login"}
+        flow["flow_id"], {"next_step_id": "login"}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"redirect_uris": uris, "needs_credentials": True}
+        flow["flow_id"], {"name": name, "redirect_uris": uris, "needs_credentials": True}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     placeholders = dict(result["description_placeholders"])
@@ -532,8 +532,10 @@ async def _register_script(
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "kind": "script"}
+        flow["flow_id"], {"next_step_id": "script"}
     )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script", result
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {"name": name})
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials", (
         result
     )
@@ -640,11 +642,12 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
         (access.entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": "Claude", "kind": "login"}
+        flow["flow_id"], {"next_step_id": "login"}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}
+        flow["flow_id"],
+        {"name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await _settle(hass)
