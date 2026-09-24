@@ -63,6 +63,9 @@ async def test_logins_become_events_and_a_denied_login_issue(
         ("alice@example.com", True),
         ("eve@example.com", False),
     ], "only this entry's applications count"
+    assert [e.time_fired.isoformat() for e in events] == [stamp(30), stamp(10)], (
+        "fired at the time of the login, not of the poll"
+    )
     alice = next(u for u in await hass.auth.async_get_users() if u.name == "Alice")
     assert events[0].data["user_id"] == alice.id and events[1].data["user_id"] is None
     issue = ir.async_get(hass).async_get_issue(DOMAIN, f"denied_login_{access.entry.entry_id}")
