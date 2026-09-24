@@ -531,6 +531,22 @@ async def _lifecycle(
         "bogus": await authorize("not-a-client"),
     }
     warnings.warn(f"authorize probes: {probes}", stacklevel=1)
+    # does the account's OAuth-clients listing (the Cloudflare API clients) show it?
+    listing = await edge.http.get(
+        f"https://api.cloudflare.com/client/v4/accounts/{os.environ['CF_ACCOUNT_ID']}/oauth_clients",
+        headers={"Authorization": f"Bearer {os.environ['CF_API_TOKEN']}"},
+    )
+    body = (
+        listing.json()
+        if listing.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    ids = [c.get("client_id") for c in (body.get("result") or [])] if isinstance(body, dict) else []
+    warnings.warn(
+        f"oauth_clients listing: status {listing.status_code}, {len(ids)} clients, "
+        f"self-registered present: {dcr_client in ids}, errors: {str(body.get('errors'))[:200] if isinstance(body, dict) else listing.text[:200]}",
+        stacklevel=1,
+    )
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
 
     async def client_gone() -> bool:
