@@ -108,6 +108,8 @@ async def test_open_paths_are_offered_from_what_home_assistant_serves(
     webhook.async_register(hass, "local", "LAN only", "hook-2", lambda *_: None, local_only=True)
     webhook.async_register(hass, "mobile_app", "Mobile App: Old phone", "hook-3", lambda *_: None)
     webhook.async_register(hass, "mobile_app", "Deleted Webhook", "hook-4", lambda *_: None)
+    # where the mobile_app component keeps the ids of deleted registrations; there is
+    # no API to add one
     hass.data["mobile_app"] = {"deleted_ids": ["hook-4"]}
 
     result = await _start(hass, "api_token")
@@ -231,7 +233,6 @@ async def test_token_flow_creates_entry(
     assert entry.state is config_entries.ConfigEntryState.LOADED
     assert fake_cloudflare.apps == {}, "gate disabled: nothing at the edge yet"
 
-    # second entry for the same hostname aborts
     result = await _start(hass, "api_token")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], TOKEN_INPUT)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], SETTINGS_INPUT)
@@ -327,6 +328,9 @@ async def _sign_in(
 ) -> dict[str, Any]:
     """Play Cloudflare's side of the authorization code flow."""
     assert result["type"] is FlowResultType.EXTERNAL_STEP, result
+    # the callback accepts only a state Home Assistant signed itself, and the helper
+    # offers no public way to make one; example.com is the frontend base the plugin's
+    # `current_request_with_host` reports
     state = config_entry_oauth2_flow._encode_jwt(
         hass,
         {
@@ -342,6 +346,8 @@ async def _sign_in(
     client = await hass_client_no_auth()
     resp = await client.get(f"/auth/external/callback?code=abcd&state={state}")
     assert resp.status == 200
+    # the token exchange goes through Home Assistant's aiohttp session, not through
+    # the httpx fake that answers the Cloudflare API
     aioclient_mock.post(OAUTH_TOKEN_URL, json=OAUTH_TOKEN)
     return await hass.config_entries.flow.async_configure(result["flow_id"])
 
@@ -449,6 +455,7 @@ async def test_sign_in_reauth_flow(
         unique_id=HOSTNAME,
         data={
             "auth_implementation": DOMAIN,
+            # not expired: the helper would refresh before the first call otherwise
             DATA_TOKEN: {**OAUTH_TOKEN, "access_token": "old", "expires_at": 4102444800},
             CONF_ACCOUNT_ID: ACCOUNT_ID,
             DATA_TEAM_DOMAIN: TEAM_DOMAIN,

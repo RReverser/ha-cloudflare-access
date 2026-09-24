@@ -106,6 +106,7 @@ async def test_access_serves_the_oauth_discovery_document(edge: httpx.AsyncClien
 
 @pytest.mark.skipif(not GATED, reason="MODE=off")
 async def test_websocket_upgrade_with_the_cookie(internet: None) -> None:
+    # aiohttp rather than the httpx client: httpx does not speak WebSocket
     async with (
         aiohttp.ClientSession(cookies=COOKIE) as session,
         session.ws_connect(f"wss://{HOST}/api/websocket", timeout=TIMEOUT) as ws,

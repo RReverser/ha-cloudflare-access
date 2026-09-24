@@ -39,6 +39,7 @@ async def _submit(hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] 
     manager = repairs_flow_manager(hass)
     assert manager is not None
     result = await manager.async_configure(flow_id, user_input)
+    # a fix that reloads the entry schedules the reload as a background task
     await hass.async_block_till_done(wait_background_tasks=True)
     return result
 

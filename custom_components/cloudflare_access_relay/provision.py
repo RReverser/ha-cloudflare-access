@@ -89,15 +89,11 @@ def desired_gate_app(
 ) -> dict[str, Any] | None:
     """Return the desired gate application body, or None while the gate is disabled.
 
-    The gate covers the whole hostname. People pass its allow policy in a browser
-    (the companion app included: it shares the cookie with its native requests);
-    `emails` are the Home Assistant users' addresses, so whoever has an account
-    here may log in and nobody else.
-    Token-bearing clients are admitted by Access itself: managed OAuth makes the
-    gate an OAuth server for clients that discover and register themselves (MCP
-    clients), for the redirect URIs listed in the options; clients registered
-    through the integration (`desired_client_app`) are admitted by a Service Auth
-    policy that accepts their applications' tokens (`linked_app_ids`).
+    The gate covers the whole hostname. `emails` are the Home Assistant users'
+    addresses: whoever has an account here may log in and nobody else. Token-bearing
+    clients never see the allow policy; managed OAuth admits the ones that register
+    themselves (MCP clients), and `linked_app_ids` names the applications of the
+    clients registered through the integration (`desired_client_app`).
     """
     if not options.get(CONF_GATE_ENABLED, DEFAULT_GATE_ENABLED):
         return None
@@ -111,8 +107,9 @@ def desired_gate_app(
         }
     ]
     if token_ids := _clean(options.get(CONF_SERVICE_TOKEN_IDS)):
-        # Service Auth: machine callers present CF-Access-Client-Id/Secret headers
-        # and receive an application token like a user would.
+        # Service tokens pass a Service Auth ("non_identity") policy, not an allow policy.
+        # The login answers with an application token like a user's, so the caller reaches
+        # the origin with an assertion (README, Verified Cloudflare behaviour).
         policies.append(
             {
                 "name": GATE_SERVICE_POLICY_NAME,
@@ -139,8 +136,9 @@ def desired_gate_app(
         "domain": hostname,
         "destinations": [{"type": "public", "uri": hostname}],
         "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
-        # The companion app's native client reuses the cookie its WebView obtained; a
-        # binding cookie would tie the token to the WebView alone.
+        # The companion app's native client reuses the cookie its WebView obtained; with
+        # a binding cookie Access refuses a copied cookie (README, Verified Cloudflare
+        # behaviour).
         "enable_binding_cookie": False,
         "path_cookie_attribute": False,
         "http_only_cookie_attribute": True,
@@ -151,6 +149,8 @@ def desired_gate_app(
             "enabled": True,
             "dynamic_client_registration": {
                 "enabled": True,
+                # Clients that call back on localhost (Claude Code, VS Code) are not
+                # supported yet; only the listed callbacks may register.
                 "allow_any_on_localhost": False,
                 "allow_any_on_loopback": False,
                 "allowed_uris": sorted(_clean(options.get(CONF_CLIENT_REDIRECT_URIS))),
@@ -162,9 +162,11 @@ def desired_gate_app(
 def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
     """Return the desired bypass application body, or None when nothing is bypassed.
 
-    Only the paths listed in the options are bypassed, each a prefix (Access
-    inherits a path rule to everything below it). Nothing is bypassed by default.
+    Each listed path is a prefix: Access applies a path rule to everything below it,
+    and the path-specific application wins over the hostname-wide gate (README,
+    Verified Cloudflare behaviour). Nothing is bypassed by default.
     """
+    # "/" would open the whole hostname, so it is never bypassed.
     paths = sorted(
         {normalise_path(p) for p in _clean(options.get(CONF_EXTRA_BYPASS_PATHS))} - {"/"}
     )
@@ -195,11 +197,9 @@ def desired_client_app(
 ) -> dict[str, Any]:
     """Return the desired application body for a client registered by hand.
 
-    An Access for SaaS OIDC application: it is the client's registration with
-    Access, with the client id and secret its console wants and Access's own
-    authorization and token endpoints. Who may link the client is the gate's own
-    allow rule, and the client's refresh token lives as long as an Access session
-    of the gate. The tokens it issues are accepted by the gate (`desired_gate_app`).
+    An Access for SaaS OIDC application gives the client the client id, secret and
+    endpoints its console wants. It carries the gate's allow rule so the same people
+    may link it, and the gate accepts the tokens it issues (`desired_gate_app`).
     """
     hostname = options[CONF_HOSTNAME]
     return {
@@ -211,7 +211,10 @@ def desired_client_app(
         "saas_app": {
             "auth_type": "oidc",
             "redirect_uris": sorted(_clean(redirect_uris)),
+            # Cloudflare's spelling of the refresh_token grant.
             "grant_types": ["authorization_code", "refresh_tokens"],
+            # Cloudflare refuses the application without a refresh-token lifetime
+            # (README, Verified Cloudflare behaviour); the gate's session length fits.
             "refresh_token_options": {
                 "lifetime": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
             },
@@ -244,7 +247,8 @@ _COMPARED_FIELDS = (
 )
 
 
-# Cloudflare omits some fields from GET responses when they hold the default.
+# Cloudflare omits these fields from GET responses when they hold the default, so a
+# missing field must read as the default rather than as a difference.
 _CF_DEFAULTS: dict[str, Any] = {
     "enable_binding_cookie": False,
     "path_cookie_attribute": False,
@@ -317,6 +321,7 @@ def app_matches(existing: dict[str, Any], desired: dict[str, Any]) -> bool:
         desired["saas_app"]
     ):
         return False
+    # Compared in order: the precedence field is not compared, the order stands in for it.
     have_pol = [_norm_policy(p) for p in existing.get("policies") or []]
     want_pol = [_norm_policy(p) for p in desired["policies"]]
     return have_pol == want_pol
@@ -383,7 +388,8 @@ async def reconcile_app(
         return existing
     _LOGGER.info("Updating Access application %s", desired["name"])
     body = dict(desired)
-    # Reusing inline policy ids keeps Cloudflare from creating duplicates.
+    # An update whose policies carry no id makes Cloudflare create new ones next to
+    # the old; reusing the ids of the same-named policies updates them in place.
     existing_policies = {p.get("name"): p.get("id") for p in existing.get("policies") or []}
     body["policies"] = [
         {**p, "id": existing_policies[p["name"]]}
@@ -444,6 +450,8 @@ async def async_provision(
         app = await reconcile_app(api, gate_app_id, gate, writes)
         gate_id = app["id"]
         aud = app.get("aud")
+        # The origin verifies assertions against this audience, so a create or update
+        # response without it is not trusted: read the application back before giving up.
         if not isinstance(aud, str) or not aud:
             full = await api.get_app(gate_id)
             aud = (full or {}).get("aud")

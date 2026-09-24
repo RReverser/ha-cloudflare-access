@@ -58,17 +58,25 @@ async def async_create_fix_flow(
             [str(i) for i in json.loads(str(data.get("mcp_entry_ids") or "[]"))],
             [str(p) for p in json.loads(str(data.get("webhook_paths") or "[]"))],
         )
+    # A key with no flow of its own: confirming still clears the issue.
     return ConfirmRepairFlow()
 
 
 class _EntryFlow(RepairsFlow):
-    """A fix flow acting on one config entry."""
+    """A fix flow acting on one config entry.
+
+    The subclasses' `async_step_init` skip straight to their real step: the first
+    step of a repair flow receives the flow's init data, the issue id, as its
+    `user_input` (homeassistant/data_entry_flow.py, `FlowManager.async_init`), so it
+    cannot tell a submitted form from the start of the flow.
+    """
 
     def __init__(self, entry_id: str) -> None:
         """Remember the entry."""
         self._entry_id = entry_id
 
     def _placeholders(self) -> dict[str, str] | None:
+        # The forms repeat the issue's own text, so one set of placeholders serves both.
         issue = ir.async_get(self.hass).async_get_issue(self.handler, self.issue_id)
         return issue.translation_placeholders if issue else None
 
@@ -83,7 +91,7 @@ class ReloadFlow(_EntryFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> data_entry_flow.FlowResult:
-        """Start with the real step: the first step receives the issue id as input."""
+        """Skip to the real step; `_EntryFlow` says why."""
         return await self.async_step_confirm()
 
     async def async_step_confirm(
@@ -106,7 +114,7 @@ class ExternalUrlFlow(_EntryFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> data_entry_flow.FlowResult:
-        """Start with the real step: the first step receives the issue id as input."""
+        """Skip to the real step; `_EntryFlow` says why."""
         return await self.async_step_url()
 
     async def async_step_url(
@@ -148,7 +156,7 @@ class DeniedLoginFlow(_EntryFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> data_entry_flow.FlowResult:
-        """Start with the real step: the first step receives the issue id as input."""
+        """Skip to the real step; `_EntryFlow` says why."""
         return await self.async_step_person()
 
     async def async_step_person(

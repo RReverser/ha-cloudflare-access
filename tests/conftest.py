@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from homeassistant.auth.models import Credentials, User
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.httpx_client import DATA_ASYNC_CLIENT, create_async_httpx_client
+from homeassistant.setup import async_setup_component
 from homeassistant.util.ssl import SSL_ALPN_HTTP11
 import httpx
 import jwt
@@ -53,6 +54,24 @@ CLIENT_ID = "https://ha.example.com/"
 def external_url(hass: HomeAssistant) -> None:
     """The instance's External URL: the hostname the gate guards."""
     hass.config.external_url = f"https://{HOSTNAME}"
+
+
+@pytest.fixture(autouse=True)
+async def web_server_started(
+    hass: HomeAssistant, aiohttp_server: Any, socket_enabled: None
+) -> None:
+    """Production order: Home Assistant's web server runs before any config entry loads.
+
+    Core starts the server as soon as the frontend is set up (`http.async_setup`:
+    `async_when_setup_or_start(hass, "frontend", start_server)`), which freezes the
+    aiohttp application and its middleware list. A test that set an entry up before the
+    server would allow what production never does; this fixture makes every test start
+    in the frozen state. Core keeps the router mutable so views can still be registered
+    afterwards (`HomeAssistantHTTP.start`); the same line is repeated here.
+    """
+    assert await async_setup_component(hass, "http", {})
+    hass.http.app._router.freeze = lambda: None
+    await aiohttp_server(hass.http.app)
 
 
 @pytest.fixture(autouse=True)

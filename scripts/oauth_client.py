@@ -9,10 +9,11 @@ token, or locally with CF_API_TOKEN and CF_ACCOUNT_ID set:
 
 `grant` gives the token itself the permissions the other commands need (OAuth
 Clients Write on the account, DNS Write on the client URL's zone) and the Access
-permissions the live tests exercise; it needs the token to carry "API Tokens Edit". `create` creates the client, or updates it when
-one with the same name exists. `verify` adds the domain-verification TXT record
-Cloudflare asks for and waits until Cloudflare has seen it. `publish` makes the
-client public, which is permanent; it needs --yes.
+permissions the live tests exercise; it needs the token to carry "API Tokens
+Edit". `create` creates the client, or updates it when one with the same name
+exists. `verify` adds the domain-verification TXT record Cloudflare asks for and
+waits until Cloudflare has seen it. `publish` makes the client public, which is
+permanent; it needs --yes.
 """
 
 from __future__ import annotations
@@ -89,6 +90,7 @@ def find_client(api: Api) -> dict[str, Any] | None:
 
 def permission_group(groups: list[dict[str, Any]], pattern: str, scope: str) -> dict[str, Any]:
     """Return the permission group whose name matches `pattern` for the resource scope."""
+    # a group listed without scopes is taken to apply to any scope
     found = [
         g
         for g in groups
@@ -148,6 +150,7 @@ def cmd_grant(api: Api, args: argparse.Namespace) -> None:
         policies.append(
             {"effect": "allow", "permission_groups": [{"id": group["id"]}], "resources": resources}
         )
+    # PUT replaces the whole token: carry its other fields over unchanged
     body = {k: token[k] for k in ("name", "status", "condition", "expires_on") if k in token}
     body["policies"] = policies
     api.call("PUT", f"/user/tokens/{me['id']}", json=body)
@@ -171,6 +174,8 @@ def client_body(args: argparse.Namespace) -> dict[str, Any]:
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "redirect_uris": [REDIRECT_URI],
+        # a public client: an installation cannot keep a secret, so PKCE instead
+        # (custom_components/cloudflare_access_relay/application_credentials.py)
         "token_endpoint_auth_method": "none",
         "scopes": CLIENT_SCOPES,
     }
@@ -210,6 +215,7 @@ def cmd_verify(api: Api, args: argparse.Namespace) -> None:
     if verification.get("status") == "verified":
         print("already verified")
         return
+    # sending the client URL again starts a new verification, with a new text
     if verification.get("status") == "failed" or not verification.get("text"):
         client = api.call("PATCH", path, json={"client_uri": args.client_uri})
         verification = client.get("client_uri_verification") or {}

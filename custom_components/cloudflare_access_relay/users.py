@@ -50,6 +50,8 @@ def identity_values(user: User, extra: Mapping[str, str]) -> set[str]:
 
 
 def _allowed(user: User) -> bool:
+    # System-generated users (AuthManager.async_create_system_user in
+    # homeassistant/auth/__init__.py, the Supervisor's) have no login of their own.
     return user.is_active and not user.system_generated
 
 
@@ -86,6 +88,7 @@ async def person_users(hass: HomeAssistant) -> list[User]:
 
 def username_address(user: User) -> str | None:
     """Return the user's login username when it is an e-mail address."""
+    # Sorted: a user with several address credentials always yields the same one.
     return next((v for v in sorted(identity_values(user, {})) if "@" in v), None)
 
 

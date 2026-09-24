@@ -71,7 +71,11 @@ def _client_sub(entry: MockConfigEntry) -> Any:
 
 
 async def _settle(hass: HomeAssistant, rounds: int = 1) -> None:
-    """Let the debounced reconciliation run."""
+    """Let the debounced reconciliation run.
+
+    A reconciliation that writes the entry (subentry data, title) schedules another
+    one; `rounds=2` lets that one run too.
+    """
     async_fire_time_changed(
         hass, utcnow() + timedelta(seconds=rounds * (RECONCILE_COOLDOWN_SECONDS + 1))
     )
@@ -245,7 +249,6 @@ async def test_a_lost_service_token_is_replaced_and_an_orphan_deleted(
         {"service_token": {"token_id": sub.data["token_id"]}}
     ]
 
-    # removing the entry deletes the token with the applications
     await hass.config_entries.async_remove(access.entry.entry_id)
     await hass.async_block_till_done()
     assert set(cf.service_tokens) == {"theirs"} and cf.apps == {}
@@ -621,7 +624,6 @@ async def test_only_applications_tagged_for_this_entry_are_touched(
     assert cf.apps["foreign"] == foreign
     assert entry.data[DATA_GATE_APP_ID] == ours[0]["id"], "found again by name and tag"
 
-    # removal deletes ours and leaves theirs
     await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
     assert list(cf.apps) == ["foreign"]
@@ -819,7 +821,8 @@ async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
     gate_id = entry.data[DATA_GATE_APP_ID]
-    # disabled while Home Assistant was shutting down: the gate stayed up
+    # disabled while Home Assistant was shutting down: the integration leaves the gate
+    # up when `hass.is_stopping`
     hass.set_state(CoreState.stopping)
     await hass.config_entries.async_set_disabled_by(entry.entry_id, ConfigEntryDisabler.USER)
     await hass.async_block_till_done(wait_background_tasks=True)
@@ -827,6 +830,8 @@ async def test_an_entry_disabled_before_a_restart_is_taken_down_at_start(
 
     # the next start finds the disabled entry and takes the gate down
     hass.set_state(CoreState.running)
+    # async_setup_component skips a domain already in hass.config.components; forget
+    # the integration so its async_setup runs again as it would after a restart
     hass.data.pop(DOMAIN, None)
     hass.config.components.remove(DOMAIN)
     assert await async_setup_component(hass, DOMAIN, {})

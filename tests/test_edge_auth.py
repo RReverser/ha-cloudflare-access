@@ -185,7 +185,11 @@ async def test_setup_after_server_start_still_recognises_access_identities(
     alice: User,
     hass_client_no_auth: Any,
 ) -> None:
-    """Home Assistant's web server starts before any config entry loads (production)."""
+    """The server is up and its middleware list frozen before the entry loads, as in production.
+
+    Every test runs in that state (conftest); this one asserts it, and that a handler
+    already served before the entry loaded gets the rule too.
+    """
     from .conftest import Minter
 
     ir.async_create_issue(  # what versions before 0.2.0 left behind on every start
@@ -198,7 +202,7 @@ async def test_setup_after_server_start_still_recognises_access_identities(
     )
     assert await async_setup_component(hass, "api", {})
     hass.http.register_view(WhoAmI())
-    client = await hass_client_no_auth()  # starts the server: the app is frozen from here on
+    client = await hass_client_no_auth()
     assert hass.http.app.frozen
     resp = await client.get("/api/whoami", headers=FOREIGN)
     assert resp.status == 401, "the chain for this handler is built and cached before setup"

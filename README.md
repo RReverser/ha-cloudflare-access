@@ -169,8 +169,8 @@ it, the integration asks to sign in again.
 To sign in through a client of your own instead, create one in the Cloudflare dashboard
 (*Manage Account* → *OAuth clients*: redirect URL `https://my.home-assistant.io/redirect/oauth`,
 grant types *authorization code* and *refresh token*, token endpoint authentication *none*,
-the scopes above) and add its client ID under Home Assistant's *Application credentials*; it
-then takes the project's client's place.
+the scopes above) and add its client ID under Home Assistant's *Application credentials*; the
+sign-in then asks which client to use.
 
 An API token (permissions **Access: Apps and Policies: Edit** and **Access: Organizations,
 Identity Providers, and Groups: Read**, **Access: Service Tokens: Edit** for script
