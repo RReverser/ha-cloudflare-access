@@ -33,6 +33,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+import warnings
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -491,6 +492,45 @@ async def _lifecycle(
         )
 
     assert await _until(gate_links_client, "linked client rule on the gate", 60)
+
+    print("== which client ids the gate's own OAuth endpoints recognise")
+    metadata = (await edge.get("/.well-known/oauth-authorization-server")).json()
+    callback = "https://example.com/oauth/callback"
+
+    async def authorize(client_id: str) -> tuple[int, str, str]:
+        resp = await edge.http.get(
+            metadata["authorization_endpoint"],
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": callback,
+                "state": "probe",
+                "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                "code_challenge_method": "S256",
+                "scope": "openid email profile",
+            },
+            follow_redirects=False,
+        )
+        return resp.status_code, resp.headers.get("location", "")[:120], resp.text[:160]
+
+    registration = await edge.http.post(
+        metadata["registration_endpoint"],
+        json={
+            "client_name": "probe",
+            "redirect_uris": [callback],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+    dcr_client = registration.json().get("client_id") if registration.status_code < 300 else None
+    probes = {
+        "registration": (registration.status_code, registration.text[:160]),
+        "self-registered": await authorize(dcr_client) if dcr_client else None,
+        "application": await authorize(shown["client_id"]),
+        "bogus": await authorize("not-a-client"),
+    }
+    warnings.warn(f"authorize probes: {probes}", stacklevel=1)
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
 
     async def client_gone() -> bool:
