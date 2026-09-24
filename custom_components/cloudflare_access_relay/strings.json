@@ -124,8 +124,8 @@
   "selector": {
     "client_kind": {
       "options": {
-        "login": "A client that logs people in",
-        "script": "A script or service with its own credentials"
+        "login": "A client that logs people in (e.g. Claude, Google Home)",
+        "script": "A script or service with its own credentials (e.g. a backup job)"
       }
     }
   },
@@ -215,23 +215,23 @@
           "description": "Something that calls Home Assistant through the gate.\n\nThe next page asks for what the chosen kind needs.",
           "data": {
             "name": "Name",
-            "kind": "What is it"
+            "kind": "Kind of client"
           },
           "data_description": {
             "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
-            "kind": "A client that logs people in is a voice assistant, an MCP client such as Claude, or any app with a login page; it gets [an Access login]({docs_saas_apps}) and the person's own token.\n\nA script or service runs with nobody behind it, for example a backup job or a monitoring probe on another machine; it gets [an Access service token]({docs_service_tokens}) to send with every request."
+            "kind": "A client that logs people in (e.g. Claude, ChatGPT, Google Home, Alexa) gets [an Access login]({docs_saas_apps}) and the person's own token.\n\nA script or service with its own credentials (e.g. a backup job, a monitoring probe on another machine) runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request."
           }
         },
         "login": {
           "title": "Where the client returns to",
-          "description": "Enter the callback URL that the client's side shows.\n\nA client that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks for a client ID and secret, you get them on the next page from [an Access application created for it]({docs_saas_apps}).",
+          "description": "Enter the callback URL that the client's side shows.\n\nAn agent app that [registers itself]({docs_managed_oauth}) needs nothing more. If the client's console asks you for a client ID and secret, the next page shows them, from [an Access application created for it]({docs_saas_apps}).",
           "data": {
-            "redirect_uris": "Redirect URLs",
-            "needs_credentials": "The client asks for a client ID and secret"
+            "redirect_uris": "Callback URLs",
+            "needs_credentials": "The client's console asks you for a client ID and secret"
           },
           "data_description": {
-            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers the agent apps that register themselves. A console client shows its own exact callback, for example {example_console_redirect} for Google Home: type that one. {example_wildcard_redirect} covers every path.",
-            "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
+            "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path.",
+            "needs_credentials": "Turn on when the client's console wants a client ID and secret from you (e.g. Google Home, Alexa): the next page shows them, minted for it by Access.\n\nLeave off for an agent app that registers itself (e.g. Claude, ChatGPT)."
           }
         },
         "reconfigure": {
@@ -239,13 +239,13 @@
           "description": "Saving updates the client.\n\nFor a console client, its application and credentials are updated too.",
           "data": {
             "name": "Name",
-            "redirect_uris": "Redirect URLs",
-            "needs_credentials": "The client asks for a client ID and secret"
+            "redirect_uris": "Callback URLs",
+            "needs_credentials": "The client's console asks you for a client ID and secret"
           },
           "data_description": {
             "name": "A name that identifies the client to you.\n\nFor example Claude, Google Home or Backup script.",
-            "redirect_uris": "The URL the client returns to after the login.\n\nThe list offers well-known clients; you can also type any URL, for example {example_console_redirect} for a console client, and {example_wildcard_redirect} covers every path.",
-            "needs_credentials": "Turn on for a console that asks for a client ID and secret.\n\nGoogle Home and Alexa do; a client that registers itself (MCP) does not."
+            "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path.",
+            "needs_credentials": "Turn on when the client's console wants a client ID and secret from you (e.g. Google Home, Alexa): the next page shows them, minted for it by Access.\n\nLeave off for an agent app that registers itself (e.g. Claude, ChatGPT)."
           }
         },
         "reconfigure_script": {
