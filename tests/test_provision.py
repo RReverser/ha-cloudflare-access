@@ -514,7 +514,7 @@ async def _register_client(
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"name": name, "redirect_uris": uris, "needs_credentials": True}
+        flow["flow_id"], {"name": name, "redirect_uris": uris}
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     placeholders = dict(result["description_placeholders"])
@@ -649,49 +649,43 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
         flow["flow_id"],
         {"name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
     )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+    shown = dict(result["description_placeholders"])
+    assert shown["client_id"] and shown["client_secret"] not in ("", "(unchanged)")
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await _settle(hass)
+    # the callback is allowed for self-registration, and the application exists for a
+    # console that would rather take the credentials
     assert dcr()["allowed_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
-    assert [a["name"] for a in cf.apps.values()] == [GATE], "no application of its own"
-    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
-
-    # a changed URL follows; the client can also turn into a console client, and back
-    sub = _client_sub(access.entry)
-    assert sub.title == "Claude" and sub.data["needs_credentials"] is False
-    flow = await hass.config_entries.subentries.async_init(
-        (access.entry.entry_id, "oauth_client"),
-        context={"source": "reconfigure", "subentry_id": sub.subentry_id},
-    )
-    result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"],
-        {"name": "Claude", "redirect_uris": ["https://claude.ai/*"], "needs_credentials": True},
-    )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
-    assert result["type"] is FlowResultType.ABORT, result
-    await _settle(hass)
     app = cf.by_name(f"ha-access: client {HOSTNAME} Claude")
-    assert app is not None and app["saas_app"]["redirect_uris"] == ["https://claude.ai/*"]
-    assert dcr()["allowed_uris"] == [], (
-        "a client with an application of its own never registers itself at the gate"
-    )
+    assert app is not None and app["saas_app"]["redirect_uris"] == [
+        "https://claude.ai/api/mcp/auth_callback"
+    ]
     assert cf.by_name(GATE)["policies"][-1]["include"] == [
         {"linked_app_token": {"app_uid": app["id"]}}
     ]
 
+    # a changed URL follows on both, and the secret is not minted again
+    sub = _client_sub(access.entry)
+    assert sub.title == "Claude" and sub.data["client_secret"] == shown["client_secret"]
     flow = await hass.config_entries.subentries.async_init(
         (access.entry.entry_id, "oauth_client"),
         context={"source": "reconfigure", "subentry_id": sub.subentry_id},
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"],
-        {"name": "Claude", "redirect_uris": ["https://claude.ai/*"], "needs_credentials": False},
+        flow["flow_id"], {"name": "Claude", "redirect_uris": ["https://claude.ai/*"]}
     )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
+    assert result["description_placeholders"]["client_secret"] == "(unchanged)"
+    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.ABORT, result
-    await _settle(hass, 2)
-    assert cf.by_name(f"ha-access: client {HOSTNAME} Claude") is None, "the application goes"
-    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
-    assert "app_id" not in access.entry.subentries[sub.subentry_id].data
+    await _settle(hass)
+    assert dcr()["allowed_uris"] == ["https://claude.ai/*"]
+    assert cf.by_name(f"ha-access: client {HOSTNAME} Claude")["saas_app"]["redirect_uris"] == [
+        "https://claude.ai/*"
+    ]
+    assert access.entry.subentries[sub.subentry_id].data["client_secret"] == shown["client_secret"]
 
     hass.config_entries.async_remove_subentry(access.entry, sub.subentry_id)
     await _settle(hass)
@@ -711,10 +705,9 @@ async def test_legacy_redirect_url_option_becomes_clients(
     assert await hass.config_entries.async_setup(entry.entry_id)
     assert "client_redirect_uris" not in entry.options
     subs = [s for s in entry.subentries.values() if s.subentry_type == "oauth_client"]
-    assert [
-        (s.title, s.data["kind"], s.data["redirect_uris"], s.data["needs_credentials"])
-        for s in subs
-    ] == [("claude.ai", "login", ["https://claude.ai/api/mcp/auth_callback"], False)]
+    assert [(s.title, s.data["kind"], s.data["redirect_uris"]) for s in subs] == [
+        ("claude.ai", "login", ["https://claude.ai/api/mcp/auth_callback"])
+    ]
     gate = fake_cloudflare.by_name(GATE)
     assert gate["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] == [
         "https://claude.ai/api/mcp/auth_callback"

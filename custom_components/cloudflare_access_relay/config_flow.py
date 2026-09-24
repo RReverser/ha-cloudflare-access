@@ -55,7 +55,6 @@ from .const import (
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
-    CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_SESSION_DURATION,
     DATA_CLIENT_APP_ID,
@@ -573,11 +572,11 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
 class ClientSubentryFlow(ConfigSubentryFlow):
     """A client: something that calls Home Assistant through the gate.
 
-    A login client logs people in through Access; its redirect URLs are what the gate
-    lets a self-registering client (an MCP client) use, and one whose console asks for a
-    client id and secret (Google Home, the Alexa developer console) gets an Access for
-    SaaS application as well. A script client is a machine with nobody behind it: it
-    gets an Access service token and sends its Client ID and secret as request headers.
+    A login client logs people in through Access: its callbacks are what the gate lets a
+    self-registering client (an MCP client) use, and it gets an Access for SaaS
+    application whose client id and secret a console (Google Home, the Alexa developer
+    console) can take. A script client is a machine with nobody behind it: it gets an
+    Access service token and sends its Client ID and secret as request headers.
     """
 
     _data: dict[str, Any]
@@ -669,10 +668,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors[CONF_REDIRECT_URIS] = "required"
         elif any(not u.startswith("https://") for u in uris):
             errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
-        return {
-            CONF_REDIRECT_URIS: uris,
-            CONF_NEEDS_CREDENTIALS: bool(user_input.get(CONF_NEEDS_CREDENTIALS)),
-        }
+        return {CONF_REDIRECT_URIS: uris}
 
     async def _async_handle_login(
         self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
@@ -688,8 +684,6 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             if not name:
                 errors[CONF_CLIENT_NAME] = "required"
             data[CONF_CLIENT_NAME] = name
-            if not errors and not data[CONF_NEEDS_CREDENTIALS]:
-                return self._store(data)
             if not errors:
                 registered = await self._async_register(
                     data, errors, current.get(DATA_CLIENT_APP_ID)
@@ -703,9 +697,6 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         fields[
             vol.Required(CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or []))
         ] = _REDIRECT_URIS
-        fields[
-            vol.Required(CONF_NEEDS_CREDENTIALS, default=bool(defaults.get(CONF_NEEDS_CREDENTIALS)))
-        ] = BooleanSelector()
         return self.async_show_form(
             step_id=step_id,
             data_schema=vol.Schema(fields),
@@ -855,17 +846,6 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         if self.source == SOURCE_RECONFIGURE:
             entry = self._get_entry()
             sub = self._get_reconfigure_subentry()
-            if data[CONF_CLIENT_KIND] == CLIENT_KIND_LOGIN and not data[CONF_NEEDS_CREDENTIALS]:
-                # Replace the data whole so the application keys go: the entry's
-                # reconciliation then deletes the application (`_async_delete_stale_clients`).
-                data = {
-                    k: v
-                    for k, v in data.items()
-                    if k not in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET)
-                }
-                return self.async_update_and_abort(
-                    entry, sub, title=data[CONF_CLIENT_NAME], data=data
-                )
             # Merge, skipping None: an updated login client's secret is not returned again
             # and the stored one must stay.
             return self.async_update_and_abort(

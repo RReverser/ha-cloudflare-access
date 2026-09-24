@@ -57,7 +57,6 @@ from .const import (
     CONF_EMAIL,
     CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
-    CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_USER_ID,
@@ -96,8 +95,8 @@ from .options import (
     async_provisioning_options,
     client_redirect_uris,
     client_subentries,
-    credentialed_clients,
     effective_options,
+    login_clients,
     provisioning_options,
     script_clients,
 )
@@ -219,7 +218,6 @@ def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> Non
                     {
                         CONF_CLIENT_NAME: urlparse(uri).hostname or uri,
                         CONF_REDIRECT_URIS: [uri],
-                        CONF_NEEDS_CREDENTIALS: False,
                     }
                 ),
                 subentry_type=SUBENTRY_TYPE_CLIENT,
@@ -364,7 +362,7 @@ async def _async_reconcile_clients(
     runs once the gate no longer names them.
     """
     apps: dict[str, str] = {}
-    for sid, sub in credentialed_clients(entry).items():
+    for sid, sub in login_clients(entry).items():
         desired = desired_client_app(
             options, emails, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
         )
@@ -374,14 +372,15 @@ async def _async_reconcile_clients(
         saas = app.get("saas_app") or {}
         derived = {DATA_CLIENT_APP_ID: app["id"], DATA_CLIENT_ID: saas.get("client_id")}
         # Cloudflare returns the secret only in the create response (README, "Verified
-        # Cloudflare behaviour"), so its presence means the application was recreated.
+        # Cloudflare behaviour"), so its presence means the application was (re)created.
         if saas.get("client_secret"):
             derived[DATA_CLIENT_SECRET] = saas["client_secret"]
-            _LOGGER.warning(
-                "The Access application of client %s was recreated; give its console the new "
-                "client id and secret shown in the client's settings",
-                sub.title,
-            )
+            if sub.data.get(DATA_CLIENT_APP_ID):
+                _LOGGER.warning(
+                    "The Access application of client %s was recreated; give its console the "
+                    "new client id and secret shown in the client's settings",
+                    sub.title,
+                )
         if any(sub.data.get(k) != v for k, v in derived.items()):
             hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, **derived})
         if writes:
@@ -642,7 +641,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
         if (
             emails == data.emails
             and options[CONF_HOSTNAME] == data.options[CONF_HOSTNAME]
-            and set(credentialed_clients(entry)) == set(data.client_apps)
+            and set(login_clients(entry)) == set(data.client_apps)
             and set(script_clients(entry)) == set(data.script_tokens)
             and options[CONF_CLIENT_REDIRECT_URIS] == data.options[CONF_CLIENT_REDIRECT_URIS]
             and options[CONF_SERVICE_TOKEN_IDS] == data.options[CONF_SERVICE_TOKEN_IDS]
@@ -818,7 +817,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             app_tag(entry),
             entry.data.get(DATA_GATE_APP_ID),
             entry.data.get(DATA_BYPASS_APP_ID),
-            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in credentialed_clients(entry).values()),
+            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in login_clients(entry).values()),
         )
         for sub in script_clients(entry).values():
             if sub.data.get(DATA_TOKEN_ID):

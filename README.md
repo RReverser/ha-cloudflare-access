@@ -78,21 +78,22 @@ it, which is typed in. Tools that run on a person's own computer (Claude Code, C
 on localhost, which Access does not take as a list entry; they are not supported yet. Two
 kinds, one mechanism behind both:
 
-- **Clients that discover and register themselves** (MCP clients): the gate has *managed
-  OAuth* enabled, which makes Access the OAuth server for the hostname. An unauthenticated
-  non-browser request gets a 401 pointing at Access's discovery document at
-  `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
-  person through the Access login, and receives a token. Access accepts a dynamic registration
-  only for a callback URL of a listed client without credentials (Claude:
-  `https://claude.ai/api/mcp/auth_callback`); a client with credentials keeps its callback
-  on its own application and is never allowed to register itself.
-- **Clients with a console that asks for a client id and secret** (Google Home account
-  linking, an Alexa skill): the same entry with *The client asks for a client ID and secret*
-  switched on. The integration creates an Access for SaaS OIDC application, which is that
-  client's registration with Access, shows the client id, secret, authorization, token and
-  user-info URLs to paste into the console, and adds a rule to the gate accepting that
-  application's tokens. Google Home and Alexa need the same four values they need today when
-  linked to Home Assistant directly, only now those values are Access's.
+- **Every login client gets an Access for SaaS OIDC application**: its registration with
+  Access, carrying the gate's allow rule, whose tokens the gate accepts through a rule of
+  its own. The page after the callbacks shows the application's client id, secret,
+  authorization, token and user-info URLs. A console that asks for them (Google Home
+  account linking, an Alexa skill) takes exactly those four values, as it would from Home
+  Assistant's own OAuth today.
+- **Clients that discover and register themselves** (MCP clients) ignore that page: the
+  gate has *managed OAuth* enabled, which makes Access the OAuth server for the hostname.
+  An unauthenticated non-browser request gets a 401 pointing at Access's discovery document
+  at `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
+  person through the Access login, and receives a token. Access accepts a dynamic
+  registration only for a callback URL of a listed client (Claude:
+  `https://claude.ai/api/mcp/auth_callback`). Claude's custom-connector dialog also takes the
+  client id and secret under its advanced settings, in which case it uses the application
+  instead of registering itself. The unused application of a self-registering client costs
+  nothing but an entry in the account.
 
 **Bypassed paths.** Callers that can hold neither a cookie nor a bearer, such as a third-party
 service posting to a webhook or a media player fetching audio by signed URL from the public
@@ -120,7 +121,7 @@ integration is repaired on the next reload.
 |---|---|---|---|---|
 | `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the clients' callback URLs; with exactly one login method in the organization, people are sent straight to it (no picker page); a deny message that names the People option |
 | `ha-access: bypass <host>` | while *Paths open without Access* is non-empty | the listed paths | `bypass` for everyone | |
-| `ha-access: client <host> <name>` | one per client whose console needs credentials | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
+| `ha-access: client <host> <name>` | one per login client | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
 is what makes the bypass list work; the live test asserts it on every run.
