@@ -398,9 +398,14 @@ async def _lifecycle(
     )
 
     print("== a real login at the edge yields the token as header and cookie")
-    real_jwt, _ = await _login_until_forwarded(edge, service_headers)
+    await _login_until_forwarded(edge, service_headers)
+    # Every service-token request is a fresh login with a fresh token, so the header and
+    # the cookie are compared on one and the same response.
     resp = await edge.get("/api/echo", headers=service_headers)
-    assert real_jwt == _set_cookie_token(resp), "header token must equal the cookie token"
+    real_jwt = resp.json()["headers"].get("cf-access-jwt-assertion")
+    assert real_jwt and real_jwt == _set_cookie_token(resp), (
+        "header token must equal the cookie token"
+    )
     claims = _claims(real_jwt)
     assert claims["aud"] in ([aud], aud) and claims["iss"] == f"https://{team}"
     assert abs((claims["exp"] - claims["iat"]) - 3600) <= 5, (
