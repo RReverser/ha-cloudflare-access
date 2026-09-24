@@ -728,8 +728,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             errors["base"] = "api_error"
         else:
             saas = app.get("saas_app") or {}
-            # The secret comes back only when the application is created (README, Verified
-            # Cloudflare behaviour); after an update it is None here.
+            # The secret comes back only when the application is created (docs/verified-cloudflare-behaviour.md); after an update it is None here.
             return {
                 **data,
                 DATA_CLIENT_APP_ID: app["id"],

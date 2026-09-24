@@ -371,8 +371,7 @@ async def _async_reconcile_clients(
         apps[sid] = app["id"]
         saas = app.get("saas_app") or {}
         derived = {DATA_CLIENT_APP_ID: app["id"], DATA_CLIENT_ID: saas.get("client_id")}
-        # Cloudflare returns the secret only in the create response (README, "Verified
-        # Cloudflare behaviour"), so its presence means the application was (re)created.
+        # Cloudflare returns the secret only in the create response (docs/verified-cloudflare-behaviour.md), so its presence means the application was (re)created.
         if saas.get("client_secret"):
             derived[DATA_CLIENT_SECRET] = saas["client_secret"]
             if sub.data.get(DATA_CLIENT_APP_ID):
@@ -398,7 +397,7 @@ async def _async_delete_stale_clients(
 
     Runs after the gate was written without their rules: Cloudflare accepts the
     deletion of a still-referenced application but refuses every later write of the
-    gate that carries the stale rule (README, "Verified Cloudflare behaviour").
+    gate that carries the stale rule (docs/verified-cloudflare-behaviour.md).
     """
     if previous is not None:
         for sid, app_id in previous.items():

@@ -16,7 +16,7 @@ any login integration.
 
 Status: implementation complete with an automated test suite; the Cloudflare behaviour it
 depends on is verified on a real account against Access applications created from the
-integration's own code (see *Verified Cloudflare behaviour*), and the sign-in has been taken
+integration's own code (see [docs/verified-cloudflare-behaviour.md](docs/verified-cloudflare-behaviour.md)), and the sign-in has been taken
 through Cloudflare's consent page with the published client. Not yet validated with a real
 Google Home or Alexa link, nor on a real phone.
 
@@ -92,7 +92,7 @@ kinds, one mechanism behind both:
   registration only for a callback URL of a listed client (Claude:
   `https://claude.ai/api/mcp/auth_callback`). Such a client cannot use the application's
   credentials instead: it finds the login endpoints by discovery on the hostname, and those
-  are the gate's, which know only the clients that registered with them (verified below).
+  are the gate's, which know only the clients that registered with them.
   The unused application of a self-registering client costs nothing but an entry in the
   account.
 
@@ -383,44 +383,6 @@ Recipe, with a script client's Client ID and secret:
 - Built-in server: the same headers plus `"Authorization":"Bearer <long-lived token>"`, the
   multi-header form Cloudflare documents; calls run as the token's user.
 
-## Verified Cloudflare behaviour
-
-Verified on the test host below with Access applications created from the integration's own
-provisioning code, and re-checked by `tests/live` in CI on every push to `main`.
-
-| Assumption | Result |
-|---|---|
-| A path-specific bypass application takes precedence over the hostname-wide gate application, prefix inheritance included | verified 14 Sep 2026 |
-| Token lifetime (`exp − iat`) equals the configured session duration; the API accepts and honours `8760h` | verified 14 Sep 2026 |
-| The header token equals the cookie token | verified 14 Sep 2026 |
-| Access accepts a `CF_Authorization` cookie obtained by another client (different User-Agent): the companion app's native client can reuse the WebView's cookie | verified 14 Sep 2026 |
-| With *Binding Cookie* enabled a copied cookie is refused, so it must stay off | verified 14 Sep 2026 |
-| Managed OAuth can be enabled through the API on the gate; Access then serves `/.well-known/oauth-authorization-server` on the hostname itself and answers a non-browser client with 401 + `WWW-Authenticate` | verified 20 Sep 2026 |
-| An Access for SaaS OIDC application can be created through the API with the client secret returned once (a refresh-token lifetime is mandatory), its key endpoint goes live at the team domain within about a minute, and a `linked_app_token` rule naming it is accepted on the gate | verified 20 Sep 2026 |
-| The gate refuses any write that still names a deleted application, so the rule must be dropped before the client's application is deleted | verified 20 Sep 2026 |
-| The gate's managed-OAuth authorization endpoint accepts a client id obtained by dynamic registration and refuses the client id of an Access for SaaS application, so a self-registering client cannot be pointed at the application's credentials | verified 24 Sep 2026 |
-| A self-registered client appears nowhere the API lists: not on the gate, not in the login logs or sessions, and not in the account's OAuth-clients listing, so it cannot be enumerated or revoked on its own | verified 24 Sep 2026 |
-| Cloudflare refuses a self-hosted application for a hostname outside the account's zones (`12130: access.api.error.invalid_request: domain does not belong to zone`), so a wrong External URL cannot create a gate that guards nothing | verified 23 Sep 2026 |
-| A bearer Access admitted reaches the origin unchanged, with the assertion alongside; the origin rule accepts a real assertion against the real JWKS and refuses a tampered one | verified 20 Sep 2026 |
-| A registered client's token, presented as a bearer on the hostname, passes the gate with an assertion whose audience is the gate's | **still open**: needs a real account-linking login (Google Home or Alexa) |
-| The Android app's WebView completes the Access login and its native client sends the cookie | **still open**: needs a phone. The app's cookie support was added for Cloudflare Access; the origin side is covered by the tests |
-
-Also observed: a service-token login answers with the application token both as the header and
-as a `Set-Cookie`; its JWT carries `aud` as a string (identity logins use a list), `sub` empty
-and `common_name` instead of `email`. The integration accepts both `aud` shapes.
-
-### Test host
-
-The live test needs no hostname of its own: it deploys the echo Worker in `tests/live/worker`
-on the account's `workers.dev` subdomain under a run-scoped name, which Access accepts as an
-application domain like any hostname, drives the integration through Home Assistant against
-it with a run-scoped Access service token, and deletes the Worker, the token and every
-application it created; a CI step that always runs afterwards (`tests/live/cleanup.py`)
-deletes them by name even when the job was cancelled, and sweeps leftovers of older runs.
-CI reads the credentials from the secrets `CF_API_TOKEN` (the two
-Access permissions above plus **Workers Scripts: Edit**)
-and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
-
 ## Security properties
 
 - Access is the only way in from the public hostname: every path, including the login pages,
@@ -460,55 +422,9 @@ and `CF_ACCOUNT_ID`; without them the live job is skipped, as on forks.
   person, their browser and app break at the next request, and their token-bearing clients at
   their next token refresh.
 
-## Development
+## Contributing
 
-```sh
-uv sync
-uv run pytest -q        # unit tests against a fake Cloudflare API and a fake JWKS
-uv run ruff check . && uv run ruff format --check . && uv run mypy
-CF_API_TOKEN=… CF_ACCOUNT_ID=… uv run pytest -q tests/live   # the real edge
-```
-
-## Publishing to HACS
-
-The repository needs a description, topics and a LICENSE file before HACS accepts it; the
-`hacs` CI job reports these until they exist.
-
-## The project's OAuth client
-
-`scripts/oauth_client.py` (run by the *OAuth client* workflow with the repository's Cloudflare
-token) creates and maintains the Cloudflare OAuth client the integration signs in with: name,
-logo (`logo.png`), redirect URL, grant types, PKCE, scopes, the client URL's DNS verification
-record, and the promotion to public visibility, which Cloudflare makes permanent. Its client
-ID is `OAUTH_CLIENT_ID` in `const.py`.
-
-The integration's icon in Home Assistant is the same drawing, shipped in the integration's
-`brand/` directory (Home Assistant 2026.3 and newer serve it from there; older versions show
-no icon). It is deliberately not Cloudflare's logo: this is a third-party project, and the
-brand mark belongs to Cloudflare.
-
-## Design notes
-
-- The Access API field `self_hosted_domains` is deprecated (support ended 21 Nov 2025); the
-  integration uses `destinations: [{type: "public", uri: …}]`.
-- Nothing is derived from Home Assistant's router. An earlier design bypassed every endpoint
-  registered without authentication and hand-listed the exceptions in both directions (the
-  vendor endpoints that require a token, the session entry points that do not); the two lists
-  were the only vendor knowledge in the code and are gone with the bypass.
-- An earlier design relayed the Access cookie into the companion app around a bypassed login;
-  with the login gated, the app obtains the cookie from Access itself and nothing needs
-  relaying. The integration's domain, `cloudflare_access_relay`, dates from that design.
-- The allow policy is derived from the Home Assistant users rather than entered, because the
-  two lists mean the same thing (an address that is not a user cannot log in anyway) and an
-  entered list drifts. A user without an address in the field cannot be a policy subject and
-  is left out; the options page and the setup form show who is in.
-- Signing in uses Cloudflare's self-managed OAuth clients, which exist on every plan. A client
-  is private to the account that created it until its owner publishes it (name, logo, a
-  client URL whose domain is verified by DNS), which this project has done, so the client ID
-  ships in the code like any "Sign in with" integration's. Cloudflare's OAuth server offers no
-  dynamic client registration, and creating a client through the API already needs an
-  authenticated token, so a per-installation client could not be automatic.
-- Registered clients are Access for SaaS applications because Google's and Amazon's consoles
-  take a static client id and secret and fixed endpoints and offer no discovery or dynamic
-  registration (checked against their documentation on 20 Sep 2026). MCP clients do both,
-  through managed OAuth.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks, the live test host and the project's
+OAuth client, [docs/verified-cloudflare-behaviour.md](docs/verified-cloudflare-behaviour.md) for
+what the tests prove against Cloudflare, and [docs/design-notes.md](docs/design-notes.md) for
+why things are the way they are.

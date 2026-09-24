@@ -109,7 +109,7 @@ def desired_gate_app(
     if token_ids := _clean(options.get(CONF_SERVICE_TOKEN_IDS)):
         # Service tokens pass a Service Auth ("non_identity") policy, not an allow policy.
         # The login answers with an application token like a user's, so the caller reaches
-        # the origin with an assertion (README, Verified Cloudflare behaviour).
+        # the origin with an assertion (docs/verified-cloudflare-behaviour.md).
         policies.append(
             {
                 "name": GATE_SERVICE_POLICY_NAME,
@@ -137,8 +137,7 @@ def desired_gate_app(
         "destinations": [{"type": "public", "uri": hostname}],
         "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION),
         # The companion app's native client reuses the cookie its WebView obtained; with
-        # a binding cookie Access refuses a copied cookie (README, Verified Cloudflare
-        # behaviour).
+        # a binding cookie Access refuses a copied cookie (docs/verified-cloudflare-behaviour.md).
         "enable_binding_cookie": False,
         "path_cookie_attribute": False,
         "http_only_cookie_attribute": True,
@@ -163,8 +162,7 @@ def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
     """Return the desired bypass application body, or None when nothing is bypassed.
 
     Each listed path is a prefix: Access applies a path rule to everything below it,
-    and the path-specific application wins over the hostname-wide gate (README,
-    Verified Cloudflare behaviour). Nothing is bypassed by default.
+    and the path-specific application wins over the hostname-wide gate (docs/verified-cloudflare-behaviour.md). Nothing is bypassed by default.
     """
     # "/" would open the whole hostname, so it is never bypassed.
     paths = sorted(
@@ -214,7 +212,7 @@ def desired_client_app(
             # Cloudflare's spelling of the refresh_token grant.
             "grant_types": ["authorization_code", "refresh_tokens"],
             # Cloudflare refuses the application without a refresh-token lifetime
-            # (README, Verified Cloudflare behaviour); the gate's session length fits.
+            # (docs/verified-cloudflare-behaviour.md); the gate's session length fits.
             "refresh_token_options": {
                 "lifetime": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
             },
