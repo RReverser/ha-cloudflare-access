@@ -457,11 +457,7 @@ async def _lifecycle(
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"],
-        {
-            "name": "Live client",
-            "redirect_uris": ["https://example.com/oauth/callback"],
-            "needs_credentials": True,
-        },
+        {"name": "Live client", "redirect_uris": ["https://example.com/oauth/callback"]},
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     shown = result["description_placeholders"]

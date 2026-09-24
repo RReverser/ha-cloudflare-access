@@ -32,7 +32,6 @@ from .const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_NEEDS_CREDENTIALS,
     CONF_REDIRECT_URIS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
@@ -106,28 +105,10 @@ def script_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
     return client_subentries(entry, CLIENT_KIND_SCRIPT)
 
 
-def credentialed_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the login clients that hold an Access application of their own."""
-    return {
-        sid: sub
-        for sid, sub in login_clients(entry).items()
-        if sub.data.get(CONF_NEEDS_CREDENTIALS)
-    }
-
-
 def client_redirect_uris(entry: ConfigEntry) -> list[str]:
-    """Return the callbacks the gate lets a self-registering client use.
-
-    Only the clients without credentials: a client with credentials never registers
-    itself, its callback lives on its own Access application (`desired_client_app`).
-    """
+    """Return every login client's callbacks: what the gate lets a self-registering client use."""
     return sorted(
-        {
-            uri
-            for sub in login_clients(entry).values()
-            if not sub.data.get(CONF_NEEDS_CREDENTIALS)
-            for uri in sub.data[CONF_REDIRECT_URIS]
-        }
+        {uri for sub in login_clients(entry).values() for uri in sub.data[CONF_REDIRECT_URIS]}
     )
 
 
