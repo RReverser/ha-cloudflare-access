@@ -10,13 +10,13 @@ on:
     inputs:
       phase:
         type: choice
-        options: [start, finish]
+        options: [start, finish, cleanup]
         default: start
       email:
         description: Who logs in (the allow rule and, in finish, the person to revoke)
         type: string
       run:
-        description: finish only, the start run's id (the number in its URL)
+        description: finish and cleanup, the start run's id (the number in its URL)
         type: string
         default: ""
       client_id:
@@ -55,3 +55,5 @@ jobs:
         run: PROBE_RUN=probe-${{ github.run_id }} uv run python -m tests.live.grant_probe start
       - if: inputs.phase == 'finish'
         run: PROBE_RUN=probe-${{ inputs.run }} uv run python -m tests.live.grant_probe finish
+      - if: inputs.phase == 'cleanup'
+        run: uv run python -m tests.live.cleanup --run probe-${{ inputs.run }}

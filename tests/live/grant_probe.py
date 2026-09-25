@@ -324,7 +324,11 @@ async def _main(argv: list[str]) -> int:
             os.environ["CF_API_TOKEN"], os.environ["CF_ACCOUNT_ID"], http_client=http
         )
         if argv[:1] == ["start"]:
-            await start(api, http, run)
+            try:
+                await start(api, http, run)
+            except BaseException:
+                print("deleted: " + ", ".join(await delete_run(api, run)))
+                raise
         elif argv[:1] == ["finish"]:
             try:
                 await finish(api, http, run)
