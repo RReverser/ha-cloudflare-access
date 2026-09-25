@@ -44,12 +44,8 @@ from .cloudflare_api import (
     CloudflareUnavailableError,
 )
 from .const import (
-    CLIENT_KIND_CONSOLE,
-    CLIENT_KIND_SCRIPT,
-    CLIENT_KIND_SELF_REGISTERING,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
-    CONF_CLIENT_KIND,
     CONF_CLIENT_NAME,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
@@ -75,7 +71,9 @@ from .const import (
     SECTION_BYPASS,
     SECTION_PEOPLE,
     SERVICE_TOKEN_NAME_FMT,
-    SUBENTRY_TYPE_CLIENT,
+    SUBENTRY_TYPE_CONSOLE,
+    SUBENTRY_TYPE_SCRIPT,
+    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 from .options import (
     api_for,
@@ -326,13 +324,17 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        """Return the subentry flows: OAuth clients.
+        """Return the subentry flows: one per client kind, so each row is labelled with it.
 
         The login e-mail rows have no flow of their own: a row is created per person by
         the integration, filled in through a repair issue, and cleared by deleting it.
         Listing the type here would put an "add" button on the page that has no use.
         """
-        return {SUBENTRY_TYPE_CLIENT: ClientSubentryFlow}
+        return {
+            SUBENTRY_TYPE_SELF_REGISTERING: SelfRegisteringAppFlow,
+            SUBENTRY_TYPE_CONSOLE: ConsoleAppFlow,
+            SUBENTRY_TYPE_SCRIPT: ScriptFlow,
+        }
 
     # ----------------------------------------------------------------- credentials
 
@@ -577,144 +579,63 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
     }
 
 
-class ClientSubentryFlow(ConfigSubentryFlow):
-    """A client: something that calls Home Assistant through the gate.
-
-    Three kinds (const.py): a self-registering app is a name and the callback URLs the
-    gate lets it register with, and nothing more exists for it; a console app gets an
-    Access for SaaS application whose client id, secret and endpoints its console takes;
-    a script gets an Access service token and sends its Client ID and secret as headers.
-    """
+class _ClientFlow(ConfigSubentryFlow):
+    """What the three client kinds share: a name, and how a finished client is stored."""
 
     _data: dict[str, Any]
 
-    # ------------------------------------------------------------------- steps
+    def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
+        """Create or update the subentry."""
+        if self.source == SOURCE_RECONFIGURE:
+            entry = self._get_entry()
+            sub = self._get_reconfigure_subentry()
+            # Merge, skipping None: an updated console app's secret is not returned again
+            # and the stored one must stay.
+            return self.async_update_and_abort(
+                entry,
+                sub,
+                title=data[CONF_CLIENT_NAME],
+                data_updates={k: v for k, v in data.items() if v is not None},
+            )
+        return self.async_create_entry(title=data[CONF_CLIENT_NAME], data=data)
+
+
+class _AppFlow(_ClientFlow):
+    """An app that logs people in: a name and the callback URLs its own side shows."""
+
+    _selector: SelectSelector
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Pick the kind: a menu, so each choice carries its own description."""
-        return self.async_show_menu(
-            step_id="user",
-            menu_options=[CLIENT_KIND_SELF_REGISTERING, CLIENT_KIND_CONSOLE, CLIENT_KIND_SCRIPT],
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
-
-    async def async_step_self_registering(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Ask for a self-registering app's name and callbacks; nothing is created."""
-        return await self._async_handle_self_registering("self_registering", user_input, {})
-
-    async def async_step_console(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Ask for a console app's name and callbacks, then show its credentials."""
-        return await self._async_handle_console("console", user_input, {})
-
-    async def async_step_script(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Ask for a script client's name, then create its token and show the credentials."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            else:
-                self._data = {CONF_CLIENT_NAME: name, CONF_CLIENT_KIND: CLIENT_KIND_SCRIPT}
-                return await self._async_create_token(errors)
-        return self._script_form("script", (user_input or {}).get(CONF_CLIENT_NAME, ""), errors)
-
-    def _script_form(self, step_id: str, name: str, errors: dict[str, str]) -> SubentryFlowResult:
-        return self.async_show_form(
-            step_id=step_id,
-            data_schema=vol.Schema({vol.Required(CONF_CLIENT_NAME, default=name): str}),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
+        """Add the app."""
+        return await self._async_handle("user", user_input, {})
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Change the client; the form depends on its kind."""
-        current = self._get_reconfigure_subentry().data
-        kind = current.get(CONF_CLIENT_KIND)
-        if kind == CLIENT_KIND_SCRIPT:
-            return await self.async_step_reconfigure_script()
-        if kind == CLIENT_KIND_CONSOLE:
-            return await self.async_step_reconfigure_console()
-        return await self.async_step_reconfigure_self_registering()
-
-    async def async_step_reconfigure_self_registering(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Rename a self-registering app or change its callbacks."""
-        current = self._get_reconfigure_subentry().data
-        return await self._async_handle_self_registering(
-            "reconfigure_self_registering", user_input, current
+        """Rename the app or change its callbacks."""
+        return await self._async_handle(
+            "reconfigure", user_input, self._get_reconfigure_subentry().data
         )
 
-    async def async_step_reconfigure_console(
-        self, user_input: dict[str, Any] | None = None
+    async def _async_handle(
+        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
     ) -> SubentryFlowResult:
-        """Rename a console app or change its callbacks; its application follows."""
-        current = self._get_reconfigure_subentry().data
-        return await self._async_handle_console("reconfigure_console", user_input, current)
-
-    async def async_step_reconfigure_script(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Rename a script client; its token is renamed and its validity extended."""
-        current = self._get_reconfigure_subentry().data
         errors: dict[str, str] = {}
         if user_input is not None:
+            uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
+            if not uris:
+                errors[CONF_REDIRECT_URIS] = "required"
+            elif any(not u.startswith("https://") for u in uris):
+                errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
             name = user_input.get(CONF_CLIENT_NAME, "").strip()
             if not name:
                 errors[CONF_CLIENT_NAME] = "required"
-            else:
-                self._data = {**current, CONF_CLIENT_NAME: name}
-                return await self._async_renew_token(errors)
+            if not errors:
+                data = {**current, CONF_CLIENT_NAME: name, CONF_REDIRECT_URIS: uris}
+                result = await self._async_finish(data, errors)
+                if result is not None:
+                    return result
         defaults = user_input or current
-        return self._script_form("reconfigure_script", defaults.get(CONF_CLIENT_NAME, ""), errors)
-
-    async def async_step_credentials(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Store a console app once its credentials were shown."""
-        if user_input is None:
-            return self._console_credentials(self._data)
-        return self._store(self._data)
-
-    async def async_step_script_credentials(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Store a script client once its credentials were shown."""
-        if user_input is None:
-            return self._script_credentials(self._data)
-        return self._store(self._data)
-
-    # ------------------------------------------------- apps that log people in
-
-    def _validate_app(
-        self, user_input: dict[str, Any], errors: dict[str, str], kind: str
-    ) -> dict[str, Any]:
-        """Check a name and callbacks; return what of them is stored."""
-        uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
-        if not uris:
-            errors[CONF_REDIRECT_URIS] = "required"
-        elif any(not u.startswith("https://") for u in uris):
-            errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
-        name = user_input.get(CONF_CLIENT_NAME, "").strip()
-        if not name:
-            errors[CONF_CLIENT_NAME] = "required"
-        return {CONF_CLIENT_KIND: kind, CONF_CLIENT_NAME: name, CONF_REDIRECT_URIS: uris}
-
-    def _app_form(
-        self,
-        step_id: str,
-        defaults: Mapping[str, Any],
-        errors: dict[str, str],
-        selector: SelectSelector,
-    ) -> SubentryFlowResult:
         return self.async_show_form(
             step_id=step_id,
             data_schema=vol.Schema(
@@ -722,46 +643,65 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                     vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
                     vol.Required(
                         CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
-                    ): selector,
+                    ): self._selector,
                 }
             ),
             errors=errors,
             description_placeholders=FORM_PLACEHOLDERS,
         )
 
-    async def _async_handle_self_registering(
-        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
-    ) -> SubentryFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = {
-                **current,
-                **self._validate_app(user_input, errors, CLIENT_KIND_SELF_REGISTERING),
-            }
-            if not errors:
-                # nothing to create: the callbacks reach the gate's list at the next reconcile
-                return self._store(data)
-        return self._app_form(step_id, user_input or current, errors, _PUBLISHED_REDIRECT_URIS)
+    async def _async_finish(
+        self, data: dict[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult | None:
+        """Finish with a valid name and callbacks; None (with errors set) shows the form again."""
+        raise NotImplementedError
 
-    async def _async_handle_console(
-        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
+
+class SelfRegisteringAppFlow(_AppFlow):
+    """An app that registers itself (Claude, ChatGPT).
+
+    Nothing is created: the callbacks reach the gate's allowed list at the next
+    reconcile, and that list is all Cloudflare keeps about such an app.
+    """
+
+    _selector = _PUBLISHED_REDIRECT_URIS
+
+    async def _async_finish(
+        self, data: dict[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult | None:
+        return self._store(data)
+
+
+class ConsoleAppFlow(_AppFlow):
+    """An app whose console asks for a client ID and secret (Google Home, Alexa).
+
+    It gets an Access for SaaS application; the page after the form shows the
+    credentials the console takes.
+    """
+
+    _selector = _TYPED_REDIRECT_URIS
+
+    async def _async_finish(
+        self, data: dict[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult | None:
+        registered = await self._async_register(data, errors, data.get(DATA_CLIENT_APP_ID))
+        if registered is None:
+            return None
+        self._data = registered
+        return self._credentials(registered)
+
+    async def async_step_credentials(
+        self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = {**current, **self._validate_app(user_input, errors, CLIENT_KIND_CONSOLE)}
-            if not errors:
-                registered = await self._async_register(
-                    data, errors, current.get(DATA_CLIENT_APP_ID)
-                )
-                if registered is not None:
-                    self._data = registered
-                    return self._console_credentials(registered)
-        return self._app_form(step_id, user_input or current, errors, _TYPED_REDIRECT_URIS)
+        """Store the app once its credentials were shown."""
+        if user_input is None:
+            return self._credentials(self._data)
+        return self._store(self._data)
 
     async def _async_register(
         self, data: dict[str, Any], errors: dict[str, str], app_id: str | None
     ) -> dict[str, Any] | None:
-        """Create or update the console app's Access application; return the data to store."""
+        """Create or update the app's Access application; return the data to store."""
         entry = self._get_entry()
         emails = await allowed_emails(self.hass, login_emails(entry))
         try:
@@ -791,7 +731,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             }
         return None
 
-    def _console_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
         return self.async_show_form(
             step_id="credentials",
@@ -805,10 +745,56 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             },
         )
 
-    # ----------------------------------------------------------- script clients
+
+class ScriptFlow(_ClientFlow):
+    """A script or service with nobody behind it: an Access service token."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Ask for the name, then create the token and show the credentials."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                self._data = {CONF_CLIENT_NAME: name}
+                return await self._async_create_token(errors)
+        return self._form("user", (user_input or {}).get(CONF_CLIENT_NAME, ""), errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Rename the script; its token is renamed and its validity extended."""
+        current = self._get_reconfigure_subentry().data
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input.get(CONF_CLIENT_NAME, "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                self._data = {**current, CONF_CLIENT_NAME: name}
+                return await self._async_renew_token(errors)
+        defaults = user_input or current
+        return self._form("reconfigure", defaults.get(CONF_CLIENT_NAME, ""), errors)
+
+    async def async_step_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store the script once its credentials were shown."""
+        if user_input is None:
+            return self._credentials(self._data)
+        return self._store(self._data)
+
+    def _form(self, step_id: str, name: str, errors: dict[str, str]) -> SubentryFlowResult:
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema({vol.Required(CONF_CLIENT_NAME, default=name): str}),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
 
     async def _async_create_token(self, errors: dict[str, str]) -> SubentryFlowResult:
-        """Create the script client's service token and show its credentials."""
+        """Create the service token and show its credentials."""
         entry = self._get_entry()
         options = provisioning_options(self.hass, entry)
         name = SERVICE_TOKEN_NAME_FMT.format(
@@ -837,8 +823,8 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                     DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
                 }
             )
-            return self._script_credentials(self._data)
-        return self._script_form("script", self._data[CONF_CLIENT_NAME], errors)
+            return self._credentials(self._data)
+        return self._form("user", self._data[CONF_CLIENT_NAME], errors)
 
     async def _async_renew_token(self, errors: dict[str, str]) -> SubentryFlowResult:
         """Rename the token and extend its validity, then show the credentials again."""
@@ -876,12 +862,12 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             _LOGGER.warning("Cloudflare refused to update the service token: %s", err)
             errors["base"] = "api_error"
         else:
-            return self._script_credentials(self._data)
-        return self._script_form("reconfigure_script", self._data[CONF_CLIENT_NAME], errors)
+            return self._credentials(self._data)
+        return self._form("reconfigure", self._data[CONF_CLIENT_NAME], errors)
 
-    def _script_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         return self.async_show_form(
-            step_id="script_credentials",
+            step_id="credentials",
             data_schema=vol.Schema({}),
             description_placeholders={
                 **FORM_PLACEHOLDERS,
@@ -891,23 +877,6 @@ class ClientSubentryFlow(ConfigSubentryFlow):
                 DATA_TOKEN_EXPIRES_AT: _date_only(data.get(DATA_TOKEN_EXPIRES_AT)),
             },
         )
-
-    # ------------------------------------------------------------------ storage
-
-    def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
-        """Create or update the subentry."""
-        if self.source == SOURCE_RECONFIGURE:
-            entry = self._get_entry()
-            sub = self._get_reconfigure_subentry()
-            # Merge, skipping None: an updated console app's secret is not returned again
-            # and the stored one must stay.
-            return self.async_update_and_abort(
-                entry,
-                sub,
-                title=data[CONF_CLIENT_NAME],
-                data_updates={k: v for k, v in data.items() if v is not None},
-            )
-        return self.async_create_entry(title=data[CONF_CLIENT_NAME], data=data)
 
 
 def _date_only(value: Any) -> str:

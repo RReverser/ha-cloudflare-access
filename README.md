@@ -69,9 +69,10 @@ its web server before any integration entry loads and the server's middleware li
 frozen by then, so the hook is added to the running server's chain; it is covered by a test
 against a started server.) Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
-Every such client is added under *Add client* on the integration entry, with a name and the
-callback URL(s) the client's own side shows; the callback belongs to the client and cannot
-be derived. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call
+Every such client is added from the integration entry's menu, which has one *Add …* item
+per kind, and listed under the entry with its kind as the second line; each is a name and
+the callback URL(s) the client's own side shows; the callback belongs to the client and
+cannot be derived. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call
 back on localhost, which Access does not take as a list entry; they are not supported yet.
 Two kinds of app, one mechanism each:
 
@@ -251,7 +252,8 @@ Every repair issue whose remedy is an action offers it as its fix: retrying a fa
 setting the External URL, giving a refused address to a person, and settling HA-MCP's login
 mode against the gate.
 
-Clients are subentries of the integration entry (*Add client*), of three kinds:
+Clients are subentries of the integration entry, one *Add …* menu item and one row label per
+kind:
 
 - **An app that registers itself** (above): a name and its callback URLs; *Reconfigure*
   changes them. Clients of an earlier version whose callbacks are all published ones of

@@ -110,24 +110,27 @@ SUBENTRY_TYPE_LOGIN_EMAIL: Final = "login_email"
 CONF_USER_ID: Final = "user_id"
 CONF_EMAIL: Final = "email"
 
-# Clients (config subentries) are of three kinds, one per way Cloudflare lets something
-# through the gate with a token. A self-registering app (an MCP client: Claude, ChatGPT)
-# finds the login by discovery on the hostname and registers with the gate's managed
-# OAuth; the gate accepts that registration only for a listed callback URL, and nothing
-# else about such a client exists on Cloudflare (docs/verified-cloudflare-behaviour.md).
-# A console app (Google Home, Alexa) takes a client id, secret and endpoints: it gets an
-# Access for SaaS OIDC application of its own, whose tokens the gate accepts through a
-# rule naming it. A script is a machine with nobody behind it: it gets an Access service
-# token, whose Client ID and secret it sends as request headers, and the gate's Service
-# Auth policy names it.
-SUBENTRY_TYPE_CLIENT: Final = "oauth_client"
+# Clients are config subentries, one subentry type per kind so the entry page labels each
+# row with its kind. A self-registering app (an MCP client: Claude, ChatGPT) finds the
+# login by discovery on the hostname and registers with the gate's managed OAuth; the gate
+# starts a login only for a listed callback URL, and nothing else about such a client
+# exists on Cloudflare (docs/verified-cloudflare-behaviour.md). A console app (Google Home,
+# Alexa) takes a client id, secret and endpoints: it gets an Access for SaaS OIDC
+# application of its own, whose tokens the gate accepts through a rule naming it. A script
+# is a machine with nobody behind it: it gets an Access service token, whose Client ID and
+# secret it sends as request headers, and the gate's Service Auth policy names it.
+SUBENTRY_TYPE_SELF_REGISTERING: Final = "self_registering_app"
+SUBENTRY_TYPE_CONSOLE: Final = "console_app"
+SUBENTRY_TYPE_SCRIPT: Final = "script"
+CLIENT_SUBENTRY_TYPES: Final = (
+    SUBENTRY_TYPE_SELF_REGISTERING,
+    SUBENTRY_TYPE_CONSOLE,
+    SUBENTRY_TYPE_SCRIPT,
+)
+# before 0.3.0 every client was one subentry type, with the kind in its data
+LEGACY_SUBENTRY_TYPE_CLIENT: Final = "oauth_client"
+LEGACY_CONF_CLIENT_KIND: Final = "kind"
 CONF_CLIENT_NAME: Final = "name"
-CONF_CLIENT_KIND: Final = "kind"
-CLIENT_KIND_SELF_REGISTERING: Final = "self_registering"
-CLIENT_KIND_CONSOLE: Final = "console"
-CLIENT_KIND_SCRIPT: Final = "script"
-# before 0.3.0 every client that logged people in was one kind, with an application
-LEGACY_CLIENT_KIND_LOGIN: Final = "login"
 CONF_REDIRECT_URIS: Final = "redirect_uris"
 DATA_CLIENT_APP_ID: Final = "app_id"
 DATA_CLIENT_ID: Final = "client_id"

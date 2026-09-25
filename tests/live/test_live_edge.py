@@ -273,16 +273,11 @@ async def _remove_entry(hass: HomeAssistant) -> None:
 async def _register_script(hass: HomeAssistant, entry: ConfigEntry, name: str) -> dict[str, Any]:
     """Add a script client through the subentry flow; return the credentials page's values."""
     flow = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, "oauth_client"), context={"source": "user"}
+        (entry.entry_id, "script"), context={"source": "user"}
     )
-    result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "script"}
-    )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script", result
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user", flow
     result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {"name": name})
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "script_credentials", (
-        result
-    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     shown = dict(result["description_placeholders"])
     result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
@@ -450,20 +445,15 @@ async def _lifecycle(
     print("== a self-registering app is a callback URL the gate lets register")
     callback = "https://example.com/oauth/callback"
     flow = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, "oauth_client"), context={"source": "user"}
+        (entry.entry_id, "self_registering_app"), context={"source": "user"}
     )
-    result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "self_registering"}
-    )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "self_registering"
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user", flow
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"], {"name": "Live agent", "redirect_uris": [callback]}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     agent_sub = next(
-        s
-        for s in entry.subentries.values()
-        if s.subentry_type == "oauth_client" and s.data.get("kind") == "self_registering"
+        s for s in entry.subentries.values() if s.subentry_type == "self_registering_app"
     )
 
     async def gate_allows_callback() -> bool:
@@ -475,12 +465,9 @@ async def _lifecycle(
 
     print("== a console app gets an Access for SaaS application the gate accepts")
     flow = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, "oauth_client"), context={"source": "user"}
+        (entry.entry_id, "console_app"), context={"source": "user"}
     )
-    result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "console"}
-    )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "console", result
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "user", flow
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"],
         {"name": "Live client", "redirect_uris": [callback]},
@@ -490,11 +477,7 @@ async def _lifecycle(
     assert shown["client_id"] and shown["client_secret"], shown
     result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
-    subentry = next(
-        s
-        for s in entry.subentries.values()
-        if s.subentry_type == "oauth_client" and s.data.get("kind") == "console"
-    )
+    subentry = next(s for s in entry.subentries.values() if s.subentry_type == "console_app")
     client_app = await api.get_app(subentry.data["app_id"])
     assert client_app and client_app["type"] == "saas", client_app
     assert client_app["saas_app"]["client_id"] == shown["client_id"]

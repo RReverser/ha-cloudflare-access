@@ -48,10 +48,6 @@ from .cloudflare_api import (
 )
 from .const import (
     CLIENT_APP_NAME_FMT,
-    CLIENT_KIND_CONSOLE,
-    CLIENT_KIND_SCRIPT,
-    CLIENT_KIND_SELF_REGISTERING,
-    CONF_CLIENT_KIND,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
@@ -78,13 +74,17 @@ from .const import (
     ISSUE_NO_EXTERNAL_URL,
     ISSUE_UPDATE_FAILED,
     KNOWN_REDIRECT_URIS,
+    LEGACY_CONF_CLIENT_KIND,
     LEGACY_ISSUE_RESTART_REQUIRED,
+    LEGACY_SUBENTRY_TYPE_CLIENT,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
     SERVICE_TOKEN_NAME_FMT,
-    SUBENTRY_TYPE_CLIENT,
+    SUBENTRY_TYPE_CONSOLE,
     SUBENTRY_TYPE_LOGIN_EMAIL,
+    SUBENTRY_TYPE_SCRIPT,
+    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 from .edge_auth import async_install_middleware
 from .issues import issue_id
@@ -96,7 +96,6 @@ from .options import (
     app_tag,
     async_provisioning_options,
     client_redirect_uris,
-    client_subentries,
     console_clients,
     effective_options,
     provisioning_options,
@@ -222,7 +221,7 @@ def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> Non
                         CONF_REDIRECT_URIS: [uri],
                     }
                 ),
-                subentry_type=SUBENTRY_TYPE_CLIENT,
+                subentry_type=SUBENTRY_TYPE_SELF_REGISTERING,
                 title=urlparse(uri).hostname or uri,
                 unique_id=None,
             ),
@@ -232,30 +231,43 @@ def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 
 @callback
-def _async_migrate_client_kinds(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Sort the clients an earlier version created into the kinds of today.
+def _async_migrate_client_types(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Give the clients of an earlier version the subentry type of their kind.
 
-    Until 0.3.0 every client that logged people in was one kind and got an application.
-    A client whose callbacks are all published ones of a self-registering app is that;
-    its application, which such an app cannot use, is dropped here and deleted at the
-    next setup as an orphan. Anything else keeps its application as a console client.
+    Until 0.3.0 every client was one subentry type with the kind in its data, and every
+    client that logged people in got an application. A subentry's type cannot change, so
+    each is replaced by one of the new type. A client whose callbacks are all published
+    ones of a self-registering app becomes that; its application, which such an app
+    cannot use, is dropped here and deleted at the next setup as an orphan. Anything else
+    that logged people in keeps its application as a console app.
     """
     published = {uri for uri, _ in KNOWN_REDIRECT_URIS}
-    for sub in client_subentries(entry).values():
-        kind = sub.data.get(CONF_CLIENT_KIND)
-        if kind in (CLIENT_KIND_SELF_REGISTERING, CLIENT_KIND_CONSOLE, CLIENT_KIND_SCRIPT):
+    for sub in list(entry.subentries.values()):
+        if sub.subentry_type != LEGACY_SUBENTRY_TYPE_CLIENT:
             continue
+        data = {k: v for k, v in sub.data.items() if k != LEGACY_CONF_CLIENT_KIND}
+        kind = sub.data.get(LEGACY_CONF_CLIENT_KIND)
         uris = set(sub.data.get(CONF_REDIRECT_URIS) or [])
-        if uris and uris <= published:
-            data = {
-                k: v
-                for k, v in sub.data.items()
-                if k not in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET)
-            }
-            data[CONF_CLIENT_KIND] = CLIENT_KIND_SELF_REGISTERING
+        if kind == "script":
+            subentry_type = SUBENTRY_TYPE_SCRIPT
+        elif kind == "console":
+            subentry_type = SUBENTRY_TYPE_CONSOLE
+        elif kind == "self_registering" or (uris and uris <= published):
+            subentry_type = SUBENTRY_TYPE_SELF_REGISTERING
+            for key in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET):
+                data.pop(key, None)
         else:
-            data = {**sub.data, CONF_CLIENT_KIND: CLIENT_KIND_CONSOLE}
-        hass.config_entries.async_update_subentry(entry, sub, data=data)
+            subentry_type = SUBENTRY_TYPE_CONSOLE
+        hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=MappingProxyType(data),
+                subentry_type=subentry_type,
+                title=sub.title,
+                unique_id=None,
+            ),
+        )
 
 
 async def _async_migrate_service_token_option(
@@ -281,7 +293,6 @@ async def _async_migrate_service_token_option(
                 data=MappingProxyType(
                     {
                         CONF_CLIENT_NAME: token.get("name") or token_id,
-                        CONF_CLIENT_KIND: CLIENT_KIND_SCRIPT,
                         DATA_TOKEN_ID: token_id,
                         DATA_CLIENT_ID: token.get("client_id"),
                         # the earlier version never stored the secret and Cloudflare
@@ -291,7 +302,7 @@ async def _async_migrate_service_token_option(
                         DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
                     }
                 ),
-                subentry_type=SUBENTRY_TYPE_CLIENT,
+                subentry_type=SUBENTRY_TYPE_SCRIPT,
                 title=token.get("name") or token_id,
                 unique_id=None,
             ),
@@ -513,7 +524,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.minor_version < 2:
         _async_migrate_redirect_uris(hass, entry)
         _async_migrate_login_email_rows(hass, entry)
-        _async_migrate_client_kinds(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=2)
     if entry.minor_version < 3:
         # the hostname is Home Assistant's External URL now, not an option
@@ -530,7 +540,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             dev_reg.async_remove_device(device.id)
         hass.config_entries.async_update_entry(entry, minor_version=4)
     if entry.minor_version < 5:
-        _async_migrate_client_kinds(hass, entry)
+        _async_migrate_client_types(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=5)
     return True
 

@@ -22,12 +22,9 @@ from .cloudflare_api import (
 )
 from .const import (
     APP_TAG_FMT,
-    CLIENT_KIND_CONSOLE,
-    CLIENT_KIND_SCRIPT,
-    CLIENT_KIND_SELF_REGISTERING,
+    CLIENT_SUBENTRY_TYPES,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
-    CONF_CLIENT_KIND,
     CONF_CLIENT_REDIRECT_URIS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
@@ -43,7 +40,9 @@ from .const import (
     DEFAULT_SESSION_DURATION,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
-    SUBENTRY_TYPE_CLIENT,
+    SUBENTRY_TYPE_CONSOLE,
+    SUBENTRY_TYPE_SCRIPT,
+    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 
 DEFAULT_OPTIONS: dict[str, Any] = {
@@ -86,29 +85,27 @@ def app_tag(entry: ConfigEntry) -> str:
     return APP_TAG_FMT.format(entry_id=entry.entry_id.lower())
 
 
-def client_subentries(entry: ConfigEntry, kind: str | None = None) -> dict[str, ConfigSubentry]:
+def client_subentries(
+    entry: ConfigEntry, subentry_type: str | None = None
+) -> dict[str, ConfigSubentry]:
     """Return the client subentries by subentry id, of one kind when given."""
-    return {
-        sid: sub
-        for sid, sub in entry.subentries.items()
-        if sub.subentry_type == SUBENTRY_TYPE_CLIENT
-        and (kind is None or sub.data.get(CONF_CLIENT_KIND) == kind)
-    }
+    types = CLIENT_SUBENTRY_TYPES if subentry_type is None else (subentry_type,)
+    return {sid: sub for sid, sub in entry.subentries.items() if sub.subentry_type in types}
 
 
 def self_registering_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
     """Return the apps that register themselves at the gate."""
-    return client_subentries(entry, CLIENT_KIND_SELF_REGISTERING)
+    return client_subentries(entry, SUBENTRY_TYPE_SELF_REGISTERING)
 
 
 def console_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
     """Return the apps whose console takes a client id and secret: each has an application."""
-    return client_subentries(entry, CLIENT_KIND_CONSOLE)
+    return client_subentries(entry, SUBENTRY_TYPE_CONSOLE)
 
 
 def script_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
     """Return the clients that run on their own with a service token."""
-    return client_subentries(entry, CLIENT_KIND_SCRIPT)
+    return client_subentries(entry, SUBENTRY_TYPE_SCRIPT)
 
 
 def client_redirect_uris(entry: ConfigEntry) -> list[str]:
