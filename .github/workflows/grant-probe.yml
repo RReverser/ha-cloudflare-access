@@ -1,0 +1,51 @@
+name: Grant probe
+
+# Maintainer-only, two dispatches (tests/live/grant_probe.py): `start` prints an
+# authorize URL to log in at; `finish` takes the code from the URL you land on plus
+# the start run's id and client id, and prints what happens to the grant after the
+# client's callback is removed. The code expires quickly: dispatch `finish` right away.
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [start, finish]
+        default: start
+      email:
+        description: Who logs in (the allow rule and, in finish, the person to revoke)
+        type: string
+      run:
+        description: finish only, the start run's id (the number in its URL)
+        type: string
+        default: ""
+      client_id:
+        description: finish only, printed by start
+        type: string
+        default: ""
+      code:
+        description: finish only, from the URL you landed on
+        type: string
+        default: ""
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    concurrency: grant-probe
+    timeout-minutes: 90
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      EMAIL: ${{ inputs.email }}
+      CLIENT_ID: ${{ inputs.client_id }}
+      CODE: ${{ inputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - if: inputs.phase == 'start'
+        run: PROBE_RUN=probe-${{ github.run_id }} uv run python -m tests.live.grant_probe start
+      - if: inputs.phase == 'finish'
+        run: PROBE_RUN=probe-${{ inputs.run }} uv run python -m tests.live.grant_probe finish
