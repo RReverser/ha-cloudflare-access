@@ -26,6 +26,12 @@ without them the live job is skipped, as on forks.
 The repository needs a description, topics and a LICENSE file before HACS accepts it; the
 `hacs` CI job reports these until they exist.
 
+## Grant probe
+
+`tests/live/grant_probe.py` (the *Grant probe* workflow, two dispatches) checks what happens to
+a self-registered client's grant after its callback is removed, which needs one real login in
+the middle; its findings are in [docs/verified-cloudflare-behaviour.md](docs/verified-cloudflare-behaviour.md).
+
 ## The project's OAuth client
 
 `scripts/oauth_client.py` (run by the *OAuth client* workflow with the repository's Cloudflare

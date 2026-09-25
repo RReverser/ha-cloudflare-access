@@ -18,6 +18,10 @@ applications created from the integration's own provisioning code, and re-checke
 | A self-registered client appears nowhere the API lists: not on the gate, not in the login logs or sessions, and not in the account's OAuth-clients listing, so it cannot be enumerated or revoked on its own | verified 24 Sep 2026 |
 | Cloudflare refuses a self-hosted application for a hostname outside the account's zones (`12130: access.api.error.invalid_request: domain does not belong to zone`), so a wrong External URL cannot create a gate that guards nothing | verified 23 Sep 2026 |
 | A bearer Access admitted reaches the origin unchanged, with the assertion alongside; the origin rule accepts a real assertion against the real JWKS and refuses a tampered one | verified 20 Sep 2026 |
+| A self-registered client's grant (`tests/live/grant_probe.py`, one real login): the access token stops at the origin after the default 15 minutes (`expires_in` 900), but refreshing keeps working after the client's callback is removed from the gate's allowed list, and every refreshed token is admitted, for the 26 minutes observed; the grant is bounded only by the gate's OAuth grant `session_duration` | verified 25 Sep 2026 |
+| Once the callback is removed, a fresh authorization for that client is refused at once: the authorization endpoint sends the browser back to the callback with `invalid_request: Redirect URI not allowed by application configuration`. The allowed list is checked live, not at registration | verified 25 Sep 2026 |
+| Revoking the person (`revoke_user`) leaves a managed-OAuth grant intact: refresh still succeeds and the new token is admitted. Revoking the application's tokens (`revoke_tokens`) still lets refresh hand out a token, but the origin refuses it | verified 25 Sep 2026 (one observation each) |
+| An authorization code is still exchangeable six hours after the login | observed 25 Sep 2026 |
 
 Also observed: a service-token login answers with the application token both as the header and
 as a `Set-Cookie`; its JWT carries `aud` as a string (identity logins use a list), `sub` empty
