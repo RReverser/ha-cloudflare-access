@@ -569,8 +569,10 @@ async def _lifecycle(
         return await api.get_app(subentry.data["app_id"]) is None
 
     assert await _until(client_gone, "client application deleted", 60)
-    # removing the self-registering app takes its callback off the list: a new
-    # registration with it is refused (an existing grant is not, docs/verified-cloudflare-behaviour.md)
+    # removing the self-registering app takes its callback off the list. Registration
+    # itself still answers 201 (the list is checked at authorization, not at
+    # registration; the grant probe saw the same), so the check is that a client
+    # registered with the removed callback cannot start a login any more.
     hass.config_entries.async_remove_subentry(entry, agent_sub.subentry_id)
 
     async def callback_gone() -> bool:
@@ -580,14 +582,25 @@ async def _lifecycle(
     registration = await edge.http.post(
         metadata["registration_endpoint"],
         json={
-            "client_name": "probe",
+            "client_name": "probe after removal",
             "redirect_uris": [callback],
             "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
         },
     )
-    assert registration.status_code != 201, registration.text
+    print(f"registration with the removed callback: {registration.status_code}")
+    if registration.status_code == 201:
+        removed_client = registration.json()["client_id"]
+
+        async def login_refused() -> bool:
+            resp = await authorize(removed_client)
+            location = resp.headers.get("location", "")
+            return resp.status_code == 400 or (
+                location.startswith(callback) and "error=invalid_request" in location
+            )
+
+        assert await _until(login_refused, "login refused for the removed callback", 60)
 
     print("== a listed path is bypassed; clearing the list removes the bypass")
     await _save_options(hass, entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/open"]}})
