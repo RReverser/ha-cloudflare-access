@@ -324,7 +324,7 @@ async def _lifecycle(
         "CF-Access-Client-Id": shown["client_id"],
         "CF-Access-Client-Secret": shown["client_secret"],
     }
-    (script,) = [sub for sub in entry.subentries.values() if sub.data.get("kind") == "script"]
+    (script,) = [sub for sub in entry.subentries.values() if sub.subentry_type == "script"]
     token_id = script.data["token_id"]
     assert (await api.get_service_token(token_id) or {}).get("client_id") == shown["client_id"]
     assert entry.options[CONF_GATE_ENABLED] is False
