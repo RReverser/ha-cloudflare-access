@@ -22,6 +22,7 @@ applications created from the integration's own provisioning code, and re-checke
 | Once the callback is removed, a fresh authorization for that client is refused at once: the authorization endpoint sends the browser back to the callback with `invalid_request: Redirect URI not allowed by application configuration`. The allowed list is checked live, not at registration | verified 25 Sep 2026 |
 | Revoking the person (`revoke_user`) leaves a managed-OAuth grant intact: refresh still succeeds and the new token is admitted. Revoking the application's tokens (`revoke_tokens`) still lets refresh hand out a token, but the origin refuses it | verified 25 Sep 2026 (one observation each) |
 | An authorization code is still exchangeable six hours after the login | observed 25 Sep 2026 |
+| Dynamic registration is not checked against the gate's allowed callbacks: a registration with a callback that just left the list answers 201, and it is that client's authorization that is refused (`invalid_request: Redirect URI not allowed by application configuration`). Without RFC 8707 `resource` the authorization endpoint answers `invalid_target` before it looks at anything else | verified 25 Sep 2026 (tests/live) |
 
 Also observed: a service-token login answers with the application token both as the header and
 as a `Set-Cookie`; its JWT carries `aud` as a string (identity logins use a list), `sub` empty

@@ -79,9 +79,10 @@ Two kinds of app, one mechanism each:
   OAuth* enabled, which makes Access the OAuth server for the hostname: an unauthenticated
   non-browser request gets a 401 pointing at Access's discovery document at
   `/.well-known/oauth-authorization-server`; the app registers dynamically, sends the person
-  through the Access login, and receives a token. Access accepts a registration only for a
-  listed callback URL, and the form offers the published callbacks of these apps as choices
-  (Claude: `https://claude.ai/api/mcp/auth_callback`). Nothing else exists for such an app,
+  through the Access login, and receives a token. Access takes any registration, but starts
+  a login only for a callback URL on the gate's list (verified), and the form offers the
+  published callbacks of these apps as choices (Claude:
+  `https://claude.ai/api/mcp/auth_callback`). Nothing else exists for such an app,
   on Cloudflare or in the integration: removing it takes its callback off the list, which
   refuses a new login at once, while a login it already holds keeps refreshing until the
   session duration runs out (verified, see the session duration option).
