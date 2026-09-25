@@ -459,8 +459,8 @@ async def _async_revoke_removed(
 
     Access re-checks a person against the policy only when their session expires
     (README, "Security properties"), so dropping an address from the rule alone would
-    leave their sessions valid until then. A self-registered client's grant is not a
-    session: the revoke leaves it refreshing until its grant session ends
+    leave their sessions valid until then. A self-registered client's grant needs no
+    revoke: its refresh is checked against the rule and refused once the address is gone
     (docs/verified-cloudflare-behaviour.md).
     """
     removed = sorted(previous - {e.strip().lower() for e in current})

@@ -209,7 +209,7 @@ project's CI: start the flow with the source `api_token`.
 | Enabled | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application, and the other settings can be prepared first. The switch stays an option rather than the entry's own enable/disable because Home Assistant hides the options dialog of a disabled entry |
 | People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
-| Session duration | 30 days | How long a login lasts, picked as days, hours and minutes (stored as `<n>h` or `<n>m`): an Access session in the browser, a console app's refresh token, and a self-registering app's grant session. The last is the only bound on such an app once it is removed: its callback leaves the gate's list at once, but Cloudflare re-checks neither the list nor the person when the app refreshes its token, so the login lasts until this runs out (verified). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
+| Session duration | 30 days | How long a login lasts, picked as days, hours and minutes (stored as `<n>h` or `<n>m`): an Access session in the browser, a console app's refresh token, and a self-registering app's grant session. The last is the only bound on such an app once the app itself is removed: its callback leaves the gate's list at once, but Cloudflare does not re-check the list when the app refreshes its token, so that login lasts until this runs out (verified). A removed person is different: the refresh is refused as soon as the address leaves the allow rule. Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
 | Delete the Access applications when the integration is removed | on | Console apps' applications included |
 
 Disabling the integration entry takes the gate and the bypass application down, so the
@@ -398,10 +398,10 @@ Recipe, with a script client's Client ID and secret:
   deactivated, an address changed) the integration also revokes that person's Access
   sessions and tokens across the organization, which Cloudflare applies within about
   30 seconds. Addresses dropped while Home Assistant was down are found on the gate at the
-  next start. A credential that cannot revoke starts the sign-in again instead. The one
-  thing that revoke does not reach is the login a self-registering app holds for that
-  person: Cloudflare offers nothing per person or per client for those, so it lasts until
-  the session duration runs out.
+  next start. A credential that cannot revoke starts the sign-in again instead. A
+  self-registering app's login for that person ends by itself: Access re-checks the allow
+  rule when the app refreshes its token, so the refresh is refused once the address is
+  gone, and the token the app already holds lasts at most its 15 minutes (verified).
 - Home Assistant's own authentication is untouched and still applies behind the gate: a
   browser or app session needs a Home Assistant login too (or single sign-on through a login
   integration), and a Home Assistant token alone does not pass the edge.
