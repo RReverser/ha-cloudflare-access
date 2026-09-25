@@ -159,15 +159,18 @@ async def start(api: CloudflareAccessApi, http: httpx.AsyncClient, run: str) -> 
         }
     )
     print(f"host {host}\napp {app['id']}")
+    # until the gate is active, the Worker itself answers the discovery path with its echo
     deadline = time.time() + 180
     while True:
         try:
             metadata = await _metadata(http, host)
-            break
+            if "registration_endpoint" in metadata:
+                break
         except httpx.HTTPError, ValueError:
-            if time.time() > deadline:
-                raise
-            await asyncio.sleep(3)
+            pass
+        if time.time() > deadline:
+            raise SystemExit(f"the gate on {host} did not become active in time")
+        await asyncio.sleep(3)
     registration = await http.post(
         metadata["registration_endpoint"],
         json={
