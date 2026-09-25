@@ -27,6 +27,11 @@ on:
         description: finish only, from the URL you landed on
         type: string
         default: ""
+      mode:
+        description: finish only, what is taken away
+        type: choice
+        options: [callback, person]
+        default: callback
 
 jobs:
   probe:
@@ -39,6 +44,7 @@ jobs:
       EMAIL: ${{ inputs.email }}
       CLIENT_ID: ${{ inputs.client_id }}
       CODE: ${{ inputs.code }}
+      PROBE_MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

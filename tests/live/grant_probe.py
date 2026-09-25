@@ -8,8 +8,10 @@ Two phases, because the grant needs one real browser login in the middle:
           from the URL you land on (example.com ignores it).
   finish  exchanges the code (the PKCE verifier is derived from the API token and the
           start run's id, so no state crosses the runs), proves the token works at the
-          origin, removes the callback from the allowed list the way the integration
-          does when a client is deleted, then for PROBE_MINUTES checks every minute:
+          origin, then takes the client away the way the integration does when a client
+          is deleted (PROBE_MODE=callback: its callback leaves the allowed list) or the
+          person away the way it does when a person is removed (PROBE_MODE=person: the
+          email leaves the allow rule), then for PROBE_MINUTES checks every minute:
           the original access token at the origin, a refresh, the refreshed token at
           the origin, and a fresh authorization for the client. Afterwards it revokes
           the person's sessions, then every session of the application, checking the
@@ -18,7 +20,7 @@ Two phases, because the grant needs one real browser login in the middle:
 No token, code or email is printed; only statuses and where a redirect points.
 
     CF_API_TOKEN=… CF_ACCOUNT_ID=… EMAIL=… PROBE_RUN=… uv run python -m tests.live.grant_probe start
-    CF_API_TOKEN=… CF_ACCOUNT_ID=… PROBE_RUN=… CLIENT_ID=… CODE=… uv run python -m tests.live.grant_probe finish
+    CF_API_TOKEN=… CF_ACCOUNT_ID=… EMAIL=… PROBE_RUN=… CLIENT_ID=… CODE=… PROBE_MODE=callback|person uv run python -m tests.live.grant_probe finish
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from .cleanup import delete_run, run_names
 
 CALLBACK = "https://example.com/oauth/callback"
 PROBE_MINUTES = int(os.environ.get("PROBE_MINUTES", "25"))
+PROBE_MODE = os.environ.get("PROBE_MODE", "callback")
 WORKER_SOURCE = Path(__file__).with_name("worker") / "worker.js"
 
 
@@ -276,12 +279,25 @@ async def finish(api: CloudflareAccessApi, http: httpx.AsyncClient, run: str) ->
             "enabled": True,
             "allow_any_on_localhost": False,
             "allow_any_on_loopback": False,
-            "allowed_uris": [],
+            "allowed_uris": [CALLBACK],
         },
         "grant": {"session_duration": "2h"},
     }
+    if PROBE_MODE == "person":
+        # the person leaves the allow rule; the rule keeps a subject so it stays valid
+        body["policies"] = [
+            {
+                "name": "ha-access probe: allow",
+                "decision": "allow",
+                "precedence": 1,
+                "include": [{"email": {"email": "nobody@example.com"}}],
+            }
+        ]
+        print(f"{_now()} person removed from the allow rule")
+    else:
+        body["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] = []
+        print(f"{_now()} callback removed from the allowed list")
     await api.update_app(app["id"], body)
-    print(f"{_now()} callback removed from the allowed list")
 
     end = time.time() + PROBE_MINUTES * 60
     while time.time() < end:
