@@ -447,17 +447,43 @@ async def _lifecycle(
     assert resp.status_code == 200, "the companion app's native client reuses the WebView's cookie"
     assert resp.json()["headers"].get("cf-access-jwt-assertion") == real_jwt
 
-    print("== a registered client gets an Access for SaaS application the gate accepts")
+    print("== a self-registering app is a callback URL the gate lets register")
+    callback = "https://example.com/oauth/callback"
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "login"}
+        flow["flow_id"], {"next_step_id": "self_registering"}
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "self_registering"
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"name": "Live agent", "redirect_uris": [callback]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    agent_sub = next(
+        s
+        for s in entry.subentries.values()
+        if s.subentry_type == "oauth_client" and s.data.get("kind") == "self_registering"
+    )
+
+    async def gate_allows_callback() -> bool:
+        app = await api.get_app(gate_id)
+        dcr = (app or {}).get("oauth_configuration", {}).get("dynamic_client_registration", {})
+        return callback in (dcr.get("allowed_uris") or [])
+
+    assert await _until(gate_allows_callback, "callback on the gate's list", 60)
+
+    print("== a console app gets an Access for SaaS application the gate accepts")
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "oauth_client"), context={"source": "user"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"next_step_id": "console"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "console", result
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"],
-        {"name": "Live client", "redirect_uris": ["https://example.com/oauth/callback"]},
+        {"name": "Live client", "redirect_uris": [callback]},
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
     shown = result["description_placeholders"]
@@ -467,8 +493,8 @@ async def _lifecycle(
     subentry = next(
         s
         for s in entry.subentries.values()
-        if s.subentry_type == "oauth_client" and s.data.get("kind") == "login"
-    )  # user rows are subentries too
+        if s.subentry_type == "oauth_client" and s.data.get("kind") == "console"
+    )
     client_app = await api.get_app(subentry.data["app_id"])
     assert client_app and client_app["type"] == "saas", client_app
     assert client_app["saas_app"]["client_id"] == shown["client_id"]
@@ -494,7 +520,6 @@ async def _lifecycle(
 
     print("== the gate's own OAuth endpoints know self-registered clients, not the application")
     metadata = (await edge.get("/.well-known/oauth-authorization-server")).json()
-    callback = "https://example.com/oauth/callback"
 
     async def authorize(client_id: str) -> httpx.Response:
         return await edge.http.get(
@@ -544,6 +569,25 @@ async def _lifecycle(
         return await api.get_app(subentry.data["app_id"]) is None
 
     assert await _until(client_gone, "client application deleted", 60)
+    # removing the self-registering app takes its callback off the list: a new
+    # registration with it is refused (an existing grant is not, docs/verified-cloudflare-behaviour.md)
+    hass.config_entries.async_remove_subentry(entry, agent_sub.subentry_id)
+
+    async def callback_gone() -> bool:
+        return not await gate_allows_callback()
+
+    assert await _until(callback_gone, "callback off the gate's list", 60)
+    registration = await edge.http.post(
+        metadata["registration_endpoint"],
+        json={
+            "client_name": "probe",
+            "redirect_uris": [callback],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+    assert registration.status_code != 201, registration.text
 
     print("== a listed path is bypassed; clearing the list removes the bypass")
     await _save_options(hass, entry, **{"bypass": {CONF_EXTRA_BYPASS_PATHS: ["/api/open"]}})

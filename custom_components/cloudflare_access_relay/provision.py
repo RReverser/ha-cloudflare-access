@@ -154,6 +154,13 @@ def desired_gate_app(
                 "allow_any_on_loopback": False,
                 "allowed_uris": sorted(_clean(options.get(CONF_CLIENT_REDIRECT_URIS))),
             },
+            # A self-registered client's login lasts this long: its refresh keeps working
+            # after the client is removed from the list, and nothing per client or per
+            # person ends it earlier (docs/verified-cloudflare-behaviour.md), so the grant
+            # session gets the same length as every other login.
+            "grant": {
+                "session_duration": options.get(CONF_SESSION_DURATION, DEFAULT_SESSION_DURATION)
+            },
         },
     }
 
@@ -193,7 +200,7 @@ def desired_bypass_app(options: dict[str, Any]) -> dict[str, Any] | None:
 def desired_client_app(
     options: dict[str, Any], emails: Sequence[str], name: str, redirect_uris: list[str]
 ) -> dict[str, Any]:
-    """Return the desired application body for a client registered by hand.
+    """Return the desired application body for a console client.
 
     An Access for SaaS OIDC application gives the client the client id, secret and
     endpoints its console wants. It carries the gate's allow rule so the same people
@@ -282,6 +289,7 @@ def _oauth_key(config: dict[str, Any] | None) -> str:
             "localhost": bool(dcr.get("allow_any_on_localhost")),
             "loopback": bool(dcr.get("allow_any_on_loopback")),
             "uris": sorted(dcr.get("allowed_uris") or []),
+            "grant": (config.get("grant") or {}).get("session_duration"),
         }
     )
 

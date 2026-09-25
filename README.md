@@ -69,32 +69,31 @@ its web server before any integration entry loads and the server's middleware li
 frozen by then, so the hook is added to the running server's chain; it is covered by a test
 against a started server.) Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
-Every such client is added under *Add client* on the integration entry as *a client that
-logs people in*, with a name and the callback URL(s) the client's own side shows; the
-callback belongs to the client and cannot be derived, but the form offers the published
-callbacks of the agent apps that register themselves (Claude, ChatGPT) as choices; a console
-client (Google Home, Alexa) shows its own exact callback, with your project or vendor id in
-it, which is typed in. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call back
-on localhost, which Access does not take as a list entry; they are not supported yet. Two
-kinds, one mechanism behind both:
+Every such client is added under *Add client* on the integration entry, with a name and the
+callback URL(s) the client's own side shows; the callback belongs to the client and cannot
+be derived. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call
+back on localhost, which Access does not take as a list entry; they are not supported yet.
+Two kinds of app, one mechanism each:
 
-- **Every login client gets an Access for SaaS OIDC application**: its registration with
-  Access, carrying the gate's allow rule, whose tokens the gate accepts through a rule of
-  its own. The page after the callbacks shows the application's client id, secret,
-  authorization, token and user-info URLs. A console that asks for them (Google Home
-  account linking, an Alexa skill) takes exactly those four values, as it would from Home
-  Assistant's own OAuth today.
-- **Clients that discover and register themselves** (MCP clients) ignore that page: the
-  gate has *managed OAuth* enabled, which makes Access the OAuth server for the hostname.
-  An unauthenticated non-browser request gets a 401 pointing at Access's discovery document
-  at `/.well-known/oauth-authorization-server`; the client registers dynamically, sends the
-  person through the Access login, and receives a token. Access accepts a dynamic
-  registration only for a callback URL of a listed client (Claude:
-  `https://claude.ai/api/mcp/auth_callback`). Such a client cannot use the application's
-  credentials instead: it finds the login endpoints by discovery on the hostname, and those
-  are the gate's, which know only the clients that registered with them.
-  The unused application of a self-registering client costs nothing but an entry in the
-  account.
+- **An app that registers itself** (MCP clients: Claude, ChatGPT). The gate has *managed
+  OAuth* enabled, which makes Access the OAuth server for the hostname: an unauthenticated
+  non-browser request gets a 401 pointing at Access's discovery document at
+  `/.well-known/oauth-authorization-server`; the app registers dynamically, sends the person
+  through the Access login, and receives a token. Access accepts a registration only for a
+  listed callback URL, and the form offers the published callbacks of these apps as choices
+  (Claude: `https://claude.ai/api/mcp/auth_callback`). Nothing else exists for such an app,
+  on Cloudflare or in the integration: removing it takes its callback off the list, which
+  refuses a new login at once, while a login it already holds keeps refreshing until the
+  session duration runs out (verified, see the session duration option).
+- **An app whose console asks for a client ID and secret** (Google Home account linking, an
+  Alexa skill). It gets an Access for SaaS OIDC application of its own, carrying the gate's
+  allow rule, whose tokens the gate accepts through a rule naming it. The page after the
+  callbacks shows the application's client id, secret, authorization, token and user-info
+  URLs, which the console takes as it would from Home Assistant's own OAuth today. Such an
+  app cannot register itself, and a self-registering app cannot use these credentials: it
+  finds the login endpoints by discovery on the hostname, and those are the gate's, which
+  know only the clients that registered with them. Removing the app deletes the
+  application.
 
 **Bypassed paths.** Callers that can hold neither a cookie nor a bearer, such as a third-party
 service posting to a webhook or a media player fetching audio by signed URL from the public
@@ -122,7 +121,7 @@ integration is repaired on the next reload.
 |---|---|---|---|---|
 | `ha-access: gate <host>` | while the gate is enabled | `<host>` | `allow` for the Home Assistant users' addresses; *Service Auth* for listed service tokens; *Service Auth* accepting the tokens of every registered client | session duration from the options; binding cookie **off** (it would tie the cookie to the WebView alone); managed OAuth on, with dynamic registration for the clients' callback URLs; with exactly one login method in the organization, people are sent straight to it (no picker page); a deny message that names the People option |
 | `ha-access: bypass <host>` | while *Paths open without Access* is non-empty | the listed paths | `bypass` for everyone | |
-| `ha-access: client <host> <name>` | one per login client | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
+| `ha-access: client <host> <name>` | one per console app | (SaaS OIDC application) | `allow`, same rule as the gate | authorization code and refresh token grants, refresh token lifetime = session duration, scopes `openid email profile` |
 
 Cloudflare precedence: a more specific path rule wins over the hostname-wide application. That
 is what makes the bypass list work; the live test asserts it on every run.
@@ -208,8 +207,8 @@ project's CI: start the flow with the source `api_token`.
 | Enabled | off | The exposure switch. On: the gate application covers the hostname. Off: no gate application, and the other settings can be prepared first. The switch stays an option rather than the entry's own enable/disable because Home Assistant hides the options dialog of a disabled entry |
 | People → one field per person | | The e-mail address Access knows the person by: shown read-only when it is their login username, editable otherwise. Empty means the person cannot log in |
 | Bypass policies → Paths open without Access | empty | Hostname-relative path prefixes reachable without a login. The form offers the registered webhooks (by name) and the public resource routes under `/api/` (camera and image proxies, text-to-speech audio, map tiles) as choices; anything can be typed. Nothing is open unless picked |
-| Session duration | 30 days | Lifetime of an Access session and of a registered client's refresh token, picked as days, hours and minutes (stored as `<n>h` or `<n>m`). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
-| Delete the Access applications when the integration is removed | on | Registered clients' applications included |
+| Session duration | 30 days | How long a login lasts, picked as days, hours and minutes (stored as `<n>h` or `<n>m`): an Access session in the browser, a console app's refresh token, and a self-registering app's grant session. The last is the only bound on such an app once it is removed: its callback leaves the gate's list at once, but Cloudflare re-checks neither the list nor the person when the app refreshes its token, so the login lasts until this runs out (verified). Cloudflare's dashboard stops at one month; the API accepted `8760h` and Access honoured it (verified) |
+| Delete the Access applications when the integration is removed | on | Console apps' applications included |
 
 Disabling the integration entry takes the gate and the bypass application down, so the
 hostname is as it was without the integration; enabling it provisions them again. Registered
@@ -251,13 +250,17 @@ Every repair issue whose remedy is an action offers it as its fix: retrying a fa
 setting the External URL, giving a refused address to a person, and settling HA-MCP's login
 mode against the gate.
 
-Clients are subentries of the integration entry (*Add client*), of two kinds:
+Clients are subentries of the integration entry (*Add client*), of three kinds:
 
-- **A client that logs people in** (above); one whose console needs credentials stores its
-  application id, client id and secret, and *Reconfigure* shows the credentials again. For
-  Google Home account linking enter the client id, client secret, authorization URL and token
-  URL shown; for an Alexa skill the same four under account linking, with credentials in the
-  request body.
+- **An app that registers itself** (above): a name and its callback URLs; *Reconfigure*
+  changes them. Clients of an earlier version whose callbacks are all published ones of
+  such an app become this kind at the update, and the application the earlier version
+  gave them, which they could not use, is deleted.
+- **An app whose console asks for a client ID and secret** (above): stores its application
+  id, client id and secret, and *Reconfigure* shows the credentials again. For Google Home
+  account linking enter the client id, client secret, authorization URL and token URL shown;
+  for an Alexa skill the same four under account linking, with credentials in the request
+  body.
 - **A script or service with its own credentials**: a machine with nobody behind it, for
   example a backup job or a monitoring probe on another host. The integration creates an
   Access service token named `ha-access: client <host> <name>` and shows its Client ID and
@@ -276,7 +279,7 @@ Clients are subentries of the integration entry (*Add client*), of two kinds:
 The integration knows nothing about how the hostname reaches Home Assistant or what serves
 on it; it only guards the hostname. The three things people run next to it that deserve a
 precise account are the Cloudflared add-on, which usually provides the hostname, and the two
-MCP servers, which are the main users of the login clients. Everything below was traced from
+MCP servers, which are the main users of the self-registering apps. Everything below was traced from
 the sources (core 2026.9.2, HA-MCP 2.2.x, the add-on's configuration schema) and Cloudflare's
 documentation; what was not exercised on a live instance is marked.
 
@@ -392,7 +395,10 @@ Recipe, with a script client's Client ID and secret:
   deactivated, an address changed) the integration also revokes that person's Access
   sessions and tokens across the organization, which Cloudflare applies within about
   30 seconds. Addresses dropped while Home Assistant was down are found on the gate at the
-  next start. A credential that cannot revoke starts the sign-in again instead.
+  next start. A credential that cannot revoke starts the sign-in again instead. The one
+  thing that revoke does not reach is the login a self-registering app holds for that
+  person: Cloudflare offers nothing per person or per client for those, so it lasts until
+  the session duration runs out.
 - Home Assistant's own authentication is untouched and still applies behind the gate: a
   browser or app session needs a Home Assistant login too (or single sign-on through a login
   integration), and a Home Assistant token alone does not pass the edge.
@@ -401,8 +407,8 @@ Recipe, with a script client's Client ID and secret:
   request. Fail closed: wrong signature, issuer, audience or expiry, an unknown key, a
   missing claim or an unmapped identity give a 401 with the reason logged at INFO. The
   assertion is never logged.
-- Access issues, validates and revokes the tokens of Google, Alexa and MCP clients; Home
-  Assistant issues them none.
+- Access issues and validates the tokens of Google, Alexa and MCP clients; Home Assistant
+  issues them none.
 - Bypassed paths are exactly what you listed; there is no discovery and no default.
 - Who may log in is not a list to maintain in two places: the people who have a Home Assistant
   account are the people the gate lets in, and nobody else.

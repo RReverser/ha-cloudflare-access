@@ -22,8 +22,9 @@ from .cloudflare_api import (
 )
 from .const import (
     APP_TAG_FMT,
-    CLIENT_KIND_LOGIN,
+    CLIENT_KIND_CONSOLE,
     CLIENT_KIND_SCRIPT,
+    CLIENT_KIND_SELF_REGISTERING,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_CLIENT_KIND,
@@ -95,9 +96,14 @@ def client_subentries(entry: ConfigEntry, kind: str | None = None) -> dict[str, 
     }
 
 
-def login_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the clients that log people in."""
-    return client_subentries(entry, CLIENT_KIND_LOGIN)
+def self_registering_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
+    """Return the apps that register themselves at the gate."""
+    return client_subentries(entry, CLIENT_KIND_SELF_REGISTERING)
+
+
+def console_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
+    """Return the apps whose console takes a client id and secret: each has an application."""
+    return client_subentries(entry, CLIENT_KIND_CONSOLE)
 
 
 def script_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
@@ -106,9 +112,13 @@ def script_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
 
 
 def client_redirect_uris(entry: ConfigEntry) -> list[str]:
-    """Return every login client's callbacks: what the gate lets a self-registering client use."""
+    """Return the self-registering clients' callbacks: what the gate lets register."""
     return sorted(
-        {uri for sub in login_clients(entry).values() for uri in sub.data[CONF_REDIRECT_URIS]}
+        {
+            uri
+            for sub in self_registering_clients(entry).values()
+            for uri in sub.data[CONF_REDIRECT_URIS]
+        }
     )
 
 

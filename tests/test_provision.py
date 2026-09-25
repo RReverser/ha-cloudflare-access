@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from types import MappingProxyType
 from typing import Any
 
 from homeassistant.auth.models import User
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
@@ -413,6 +414,7 @@ def test_gate_is_an_oauth_server_for_self_registering_clients() -> None:
             "allow_any_on_loopback": False,
             "allowed_uris": ["https://claude.ai/api/mcp/auth_callback"],
         },
+        "grant": {"session_duration": "720h"},
     }
     assert [p["name"] for p in gate["policies"]] == ["ha-access: allow"]
     gate = desired_gate_app(opts, [ALICE], linked_app_ids=["app-b", "app-a"])
@@ -495,6 +497,9 @@ async def test_session_duration_change_updates_gate_only(
     puts = cf.writes("PUT")
     assert [p[2]["name"] for p in puts] == [GATE]
     assert puts[0][2]["session_duration"] == "24h"
+    assert puts[0][2]["oauth_configuration"]["grant"] == {"session_duration": "24h"}, (
+        "a self-registered client's login lasts as long as a browser session"
+    )
     assert access.entry.data[DATA_POLICY_AUD] == access.aud, "audience survives an update"
 
 
@@ -504,15 +509,16 @@ async def test_session_duration_change_updates_gate_only(
 async def _register_client(
     hass: HomeAssistant, entry: MockConfigEntry, name: str, uris: list[str]
 ) -> dict[str, Any]:
-    """Drive the subentry flow; return the credentials page's placeholders."""
+    """Drive the subentry flow for a console app; return the credentials page's placeholders."""
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     assert flow["type"] is FlowResultType.MENU and flow["step_id"] == "user"
+    assert flow["menu_options"] == ["self_registering", "console", "script"]
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "login"}
+        flow["flow_id"], {"next_step_id": "console"}
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "console", result
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"], {"name": name, "redirect_uris": uris}
     )
@@ -634,62 +640,113 @@ async def test_only_applications_tagged_for_this_entry_are_touched(
 async def test_self_registering_client_is_a_redirect_url_on_the_gate(
     hass: HomeAssistant, access: Access
 ) -> None:
-    """A client without a console gets no application: its URL is allowed to self-register."""
+    """A self-registering app gets no application: its URL is allowed to register, no more."""
     cf = access.cloudflare
     dcr = lambda: cf.by_name(GATE)["oauth_configuration"]["dynamic_client_registration"]  # noqa: E731
     assert dcr()["allowed_uris"] == []
+    assert cf.by_name(GATE)["oauth_configuration"]["grant"] == {"session_duration": "720h"}
+    apps_before = len(cf.apps)
     flow = await hass.config_entries.subentries.async_init(
         (access.entry.entry_id, "oauth_client"), context={"source": "user"}
     )
     result = await hass.config_entries.subentries.async_configure(
-        flow["flow_id"], {"next_step_id": "login"}
+        flow["flow_id"], {"next_step_id": "self_registering"}
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "login", result
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "self_registering"
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"],
         {"name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
-    shown = dict(result["description_placeholders"])
-    assert shown["client_id"] and shown["client_secret"] not in ("", "(unchanged)")
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await _settle(hass)
-    # the callback is allowed for self-registration, and the application exists for a
-    # console that would rather take the credentials
     assert dcr()["allowed_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
-    app = cf.by_name(f"ha-access: client {HOSTNAME} Claude")
-    assert app is not None and app["saas_app"]["redirect_uris"] == [
-        "https://claude.ai/api/mcp/auth_callback"
-    ]
-    assert cf.by_name(GATE)["policies"][-1]["include"] == [
-        {"linked_app_token": {"app_uid": app["id"]}}
-    ]
-
-    # a changed URL follows on both, and the secret is not minted again
+    assert len(cf.apps) == apps_before, "nothing is created for a self-registering app"
+    assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
     sub = _client_sub(access.entry)
-    assert sub.title == "Claude" and sub.data["client_secret"] == shown["client_secret"]
+    assert sub.title == "Claude" and sub.data == {
+        "kind": "self_registering",
+        "name": "Claude",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    }
+
+    # a changed URL follows on the gate
     flow = await hass.config_entries.subentries.async_init(
         (access.entry.entry_id, "oauth_client"),
         context={"source": "reconfigure", "subentry_id": sub.subentry_id},
     )
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "reconfigure_self_registering"
     result = await hass.config_entries.subentries.async_configure(
         flow["flow_id"], {"name": "Claude", "redirect_uris": ["https://claude.ai/*"]}
     )
-    assert result["type"] is FlowResultType.FORM and result["step_id"] == "credentials", result
-    assert result["description_placeholders"]["client_secret"] == "(unchanged)"
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.ABORT, result
     await _settle(hass)
     assert dcr()["allowed_uris"] == ["https://claude.ai/*"]
-    assert cf.by_name(f"ha-access: client {HOSTNAME} Claude")["saas_app"]["redirect_uris"] == [
-        "https://claude.ai/*"
-    ]
-    assert access.entry.subentries[sub.subentry_id].data["client_secret"] == shown["client_secret"]
 
+    # removal takes the URL off the list: no new registration, nothing else to revoke
     hass.config_entries.async_remove_subentry(access.entry, sub.subentry_id)
     await _settle(hass)
     assert dcr()["allowed_uris"] == []
+
+
+async def test_clients_of_an_earlier_version_are_sorted_into_kinds(
+    hass: HomeAssistant, fake_cloudflare: FakeCloudflare, jwks_server: FakeJwks, alice: User
+) -> None:
+    """0.2.x gave every client that logged people in an application; a self-registering
+    app cannot use one, so a client with published callbacks becomes one and its
+    application is deleted as an orphan; any other client keeps its application."""
+    cf = fake_cloudflare
+    entry = make_entry(**{CONF_GATE_ENABLED: True}, minor_version=4)
+    entry.add_to_hass(hass)
+    for name, uris in (
+        ("Claude", ["https://claude.ai/api/mcp/auth_callback"]),
+        ("Google Home", ["https://oauth-redirect.googleusercontent.com/r/p"]),
+    ):
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=MappingProxyType(
+                    {
+                        "kind": "login",
+                        "name": name,
+                        "redirect_uris": uris,
+                        "app_id": f"old-{name}",
+                        "client_id": "cid",
+                        "client_secret": "sec",
+                    }
+                ),
+                subentry_type="oauth_client",
+                title=name,
+                unique_id=None,
+            ),
+        )
+    tag = f"hass-{entry.entry_id.lower()}"
+    for name in ("Claude", "Google Home"):
+        cf.apps[f"old-{name}"] = {
+            "id": f"old-{name}",
+            "type": "saas",
+            "name": f"ha-access: client {HOSTNAME} {name}",
+            "tags": [tag],
+            "saas_app": {"auth_type": "oidc", "client_id": "cid"},
+            "policies": [],
+        }
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.minor_version == 5
+    subs = {s.title: dict(s.data) for s in entry.subentries.values()}
+    assert subs["Claude"] == {
+        "kind": "self_registering",
+        "name": "Claude",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    }
+    assert subs["Google Home"]["kind"] == "console"
+    assert subs["Google Home"]["app_id"] == "old-Google Home"
+    assert "old-Claude" not in cf.apps, "the application a self-registering app cannot use"
+    assert "old-Google Home" in cf.apps
+    gate = cf.by_name(GATE)
+    assert gate["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] == [
+        "https://claude.ai/api/mcp/auth_callback"
+    ]
+    assert gate["policies"][-1]["include"] == [{"linked_app_token": {"app_uid": "old-Google Home"}}]
 
 
 async def test_legacy_redirect_url_option_becomes_clients(
@@ -706,7 +763,7 @@ async def test_legacy_redirect_url_option_becomes_clients(
     assert "client_redirect_uris" not in entry.options
     subs = [s for s in entry.subentries.values() if s.subentry_type == "oauth_client"]
     assert [(s.title, s.data["kind"], s.data["redirect_uris"]) for s in subs] == [
-        ("claude.ai", "login", ["https://claude.ai/api/mcp/auth_callback"])
+        ("claude.ai", "self_registering", ["https://claude.ai/api/mcp/auth_callback"])
     ]
     gate = fake_cloudflare.by_name(GATE)
     assert gate["oauth_configuration"]["dynamic_client_registration"]["allowed_uris"] == [
@@ -1004,7 +1061,7 @@ async def test_the_sensors_of_an_earlier_version_are_removed_from_the_registries
         "sensor", DOMAIN, f"{entry.entry_id}-alice", config_entry=entry, device_id=device.id
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
-    assert entry.minor_version == 4
+    assert entry.minor_version == 5
     assert er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id) == []
     assert dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id) == []
 

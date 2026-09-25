@@ -723,7 +723,8 @@ def fake_cloudflare(fake_internet: FakeInternet) -> Generator[FakeCloudflare]:
 # --------------------------------------------------------------------------- HA entry
 
 
-def make_entry(**options: Any) -> MockConfigEntry:
+def make_entry(minor_version: int | None = None, **options: Any) -> MockConfigEntry:
+    """An entry as the config flow creates it; `minor_version` for an earlier version's."""
     opts: dict[str, Any] = {
         CONF_GATE_ENABLED: False,
         CONF_DELETE_OBJECTS_ON_REMOVE: True,
@@ -735,6 +736,7 @@ def make_entry(**options: Any) -> MockConfigEntry:
         unique_id=HOSTNAME,
         data={CONF_API_TOKEN: "cf-token", CONF_ACCOUNT_ID: ACCOUNT_ID},
         options=opts,
+        **({"minor_version": minor_version} if minor_version is not None else {}),
     )
 
 

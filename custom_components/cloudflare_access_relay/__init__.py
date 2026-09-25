@@ -48,8 +48,9 @@ from .cloudflare_api import (
 )
 from .const import (
     CLIENT_APP_NAME_FMT,
-    CLIENT_KIND_LOGIN,
+    CLIENT_KIND_CONSOLE,
     CLIENT_KIND_SCRIPT,
+    CLIENT_KIND_SELF_REGISTERING,
     CONF_CLIENT_KIND,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
@@ -76,6 +77,7 @@ from .const import (
     ISSUE_NO_ALLOWED_USERS,
     ISSUE_NO_EXTERNAL_URL,
     ISSUE_UPDATE_FAILED,
+    KNOWN_REDIRECT_URIS,
     LEGACY_ISSUE_RESTART_REQUIRED,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
@@ -95,8 +97,8 @@ from .options import (
     async_provisioning_options,
     client_redirect_uris,
     client_subentries,
+    console_clients,
     effective_options,
-    login_clients,
     provisioning_options,
     script_clients,
 )
@@ -231,12 +233,29 @@ def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 @callback
 def _async_migrate_client_kinds(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Mark the clients an earlier version created, which were all login clients."""
+    """Sort the clients an earlier version created into the kinds of today.
+
+    Until 0.3.0 every client that logged people in was one kind and got an application.
+    A client whose callbacks are all published ones of a self-registering app is that;
+    its application, which such an app cannot use, is dropped here and deleted at the
+    next setup as an orphan. Anything else keeps its application as a console client.
+    """
+    published = {uri for uri, _ in KNOWN_REDIRECT_URIS}
     for sub in client_subentries(entry).values():
-        if CONF_CLIENT_KIND not in sub.data:
-            hass.config_entries.async_update_subentry(
-                entry, sub, data={**sub.data, CONF_CLIENT_KIND: CLIENT_KIND_LOGIN}
-            )
+        kind = sub.data.get(CONF_CLIENT_KIND)
+        if kind in (CLIENT_KIND_SELF_REGISTERING, CLIENT_KIND_CONSOLE, CLIENT_KIND_SCRIPT):
+            continue
+        uris = set(sub.data.get(CONF_REDIRECT_URIS) or [])
+        if uris and uris <= published:
+            data = {
+                k: v
+                for k, v in sub.data.items()
+                if k not in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET)
+            }
+            data[CONF_CLIENT_KIND] = CLIENT_KIND_SELF_REGISTERING
+        else:
+            data = {**sub.data, CONF_CLIENT_KIND: CLIENT_KIND_CONSOLE}
+        hass.config_entries.async_update_subentry(entry, sub, data=data)
 
 
 async def _async_migrate_service_token_option(
@@ -356,13 +375,13 @@ async def _async_reconcile_clients(
     options: dict[str, Any],
     emails: list[str],
 ) -> dict[str, str]:
-    """Bring the registered clients' applications in line with the subentries.
+    """Bring the console clients' applications in line with the subentries.
 
     Applications of removed clients are left to `_async_delete_stale_clients`, which
     runs once the gate no longer names them.
     """
     apps: dict[str, str] = {}
-    for sid, sub in login_clients(entry).items():
+    for sid, sub in console_clients(entry).items():
         desired = desired_client_app(
             options, emails, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
         )
@@ -429,7 +448,9 @@ async def _async_revoke_removed(
 
     Access re-checks a person against the policy only when their session expires
     (README, "Security properties"), so dropping an address from the rule alone would
-    leave their sessions and their clients' refresh tokens valid until then.
+    leave their sessions valid until then. A self-registered client's grant is not a
+    session: the revoke leaves it refreshing until its grant session ends
+    (docs/verified-cloudflare-behaviour.md).
     """
     removed = sorted(previous - {e.strip().lower() for e in current})
     for email in removed:
@@ -508,6 +529,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
             dev_reg.async_remove_device(device.id)
         hass.config_entries.async_update_entry(entry, minor_version=4)
+    if entry.minor_version < 5:
+        _async_migrate_client_kinds(hass, entry)
+        hass.config_entries.async_update_entry(entry, minor_version=5)
     return True
 
 
@@ -640,7 +664,7 @@ def _async_track_changes(hass: HomeAssistant, entry: ConfigEntry, data: EntryDat
         if (
             emails == data.emails
             and options[CONF_HOSTNAME] == data.options[CONF_HOSTNAME]
-            and set(login_clients(entry)) == set(data.client_apps)
+            and set(console_clients(entry)) == set(data.client_apps)
             and set(script_clients(entry)) == set(data.script_tokens)
             and options[CONF_CLIENT_REDIRECT_URIS] == data.options[CONF_CLIENT_REDIRECT_URIS]
             and options[CONF_SERVICE_TOKEN_IDS] == data.options[CONF_SERVICE_TOKEN_IDS]
@@ -816,7 +840,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             app_tag(entry),
             entry.data.get(DATA_GATE_APP_ID),
             entry.data.get(DATA_BYPASS_APP_ID),
-            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in login_clients(entry).values()),
+            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in console_clients(entry).values()),
         )
         for sub in script_clients(entry).values():
             if sub.data.get(DATA_TOKEN_ID):

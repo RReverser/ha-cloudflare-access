@@ -44,8 +44,9 @@ from .cloudflare_api import (
     CloudflareUnavailableError,
 )
 from .const import (
-    CLIENT_KIND_LOGIN,
+    CLIENT_KIND_CONSOLE,
     CLIENT_KIND_SCRIPT,
+    CLIENT_KIND_SELF_REGISTERING,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_CLIENT_KIND,
@@ -94,7 +95,8 @@ from .users import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_REDIRECT_URIS = SelectSelector(
+# the published callbacks of the self-registering apps as choices, any URL typed
+_PUBLISHED_REDIRECT_URIS = SelectSelector(
     SelectSelectorConfig(
         options=[
             SelectOptionDict(value=uri, label=f"{label}: {uri}")
@@ -103,6 +105,12 @@ _REDIRECT_URIS = SelectSelector(
         multiple=True,
         custom_value=True,
         mode=SelectSelectorMode.DROPDOWN,
+    )
+)
+# a console shows its own exact callback: typed, nothing to pick from
+_TYPED_REDIRECT_URIS = SelectSelector(
+    SelectSelectorConfig(
+        options=[], multiple=True, custom_value=True, mode=SelectSelectorMode.DROPDOWN
     )
 )
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
@@ -293,7 +301,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     VERSION = 1
     # 2: options and subentries of earlier versions are migrated; 3: the hostname is the
     # External URL, no longer an option (`async_migrate_entry`).
-    MINOR_VERSION = 4
+    MINOR_VERSION = 5
 
     def __init__(self) -> None:
         """Start with no credential."""
@@ -572,11 +580,10 @@ def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
 class ClientSubentryFlow(ConfigSubentryFlow):
     """A client: something that calls Home Assistant through the gate.
 
-    A login client logs people in through Access: its callbacks are what the gate lets a
-    self-registering client (an MCP client) use, and it gets an Access for SaaS
-    application whose client id and secret a console (Google Home, the Alexa developer
-    console) can take. A script client is a machine with nobody behind it: it gets an
-    Access service token and sends its Client ID and secret as request headers.
+    Three kinds (const.py): a self-registering app is a name and the callback URLs the
+    gate lets it register with, and nothing more exists for it; a console app gets an
+    Access for SaaS application whose client id, secret and endpoints its console takes;
+    a script gets an Access service token and sends its Client ID and secret as headers.
     """
 
     _data: dict[str, Any]
@@ -587,15 +594,21 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         """Pick the kind: a menu, so each choice carries its own description."""
         return self.async_show_menu(
             step_id="user",
-            menu_options=[CLIENT_KIND_LOGIN, CLIENT_KIND_SCRIPT],
+            menu_options=[CLIENT_KIND_SELF_REGISTERING, CLIENT_KIND_CONSOLE, CLIENT_KIND_SCRIPT],
             description_placeholders=FORM_PLACEHOLDERS,
         )
 
-    async def async_step_login(
+    async def async_step_self_registering(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Ask for a login client: name, callback URLs, whether its console needs credentials."""
-        return await self._async_handle_login("login", user_input, {})
+        """Ask for a self-registering app's name and callbacks; nothing is created."""
+        return await self._async_handle_self_registering("self_registering", user_input, {})
+
+    async def async_step_console(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Ask for a console app's name and callbacks, then show its credentials."""
+        return await self._async_handle_console("console", user_input, {})
 
     async def async_step_script(
         self, user_input: dict[str, Any] | None = None
@@ -624,9 +637,28 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Change the client; the form depends on its kind."""
         current = self._get_reconfigure_subentry().data
-        if current.get(CONF_CLIENT_KIND) == CLIENT_KIND_SCRIPT:
+        kind = current.get(CONF_CLIENT_KIND)
+        if kind == CLIENT_KIND_SCRIPT:
             return await self.async_step_reconfigure_script()
-        return await self._async_handle_login("reconfigure", user_input, current)
+        if kind == CLIENT_KIND_CONSOLE:
+            return await self.async_step_reconfigure_console()
+        return await self.async_step_reconfigure_self_registering()
+
+    async def async_step_reconfigure_self_registering(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Rename a self-registering app or change its callbacks."""
+        current = self._get_reconfigure_subentry().data
+        return await self._async_handle_self_registering(
+            "reconfigure_self_registering", user_input, current
+        )
+
+    async def async_step_reconfigure_console(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Rename a console app or change its callbacks; its application follows."""
+        current = self._get_reconfigure_subentry().data
+        return await self._async_handle_console("reconfigure_console", user_input, current)
 
     async def async_step_reconfigure_script(
         self, user_input: dict[str, Any] | None = None
@@ -647,9 +679,9 @@ class ClientSubentryFlow(ConfigSubentryFlow):
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Store a login client once its credentials were shown."""
+        """Store a console app once its credentials were shown."""
         if user_input is None:
-            return self._login_credentials(self._data)
+            return self._console_credentials(self._data)
         return self._store(self._data)
 
     async def async_step_script_credentials(
@@ -660,54 +692,76 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             return self._script_credentials(self._data)
         return self._store(self._data)
 
-    # ------------------------------------------------------------ login clients
+    # ------------------------------------------------- apps that log people in
 
-    def _validate_login(self, user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
+    def _validate_app(
+        self, user_input: dict[str, Any], errors: dict[str, str], kind: str
+    ) -> dict[str, Any]:
+        """Check a name and callbacks; return what of them is stored."""
         uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
         if not uris:
             errors[CONF_REDIRECT_URIS] = "required"
         elif any(not u.startswith("https://") for u in uris):
             errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
-        return {CONF_REDIRECT_URIS: uris}
+        name = user_input.get(CONF_CLIENT_NAME, "").strip()
+        if not name:
+            errors[CONF_CLIENT_NAME] = "required"
+        return {CONF_CLIENT_KIND: kind, CONF_CLIENT_NAME: name, CONF_REDIRECT_URIS: uris}
 
-    async def _async_handle_login(
+    def _app_form(
+        self,
+        step_id: str,
+        defaults: Mapping[str, Any],
+        errors: dict[str, str],
+        selector: SelectSelector,
+    ) -> SubentryFlowResult:
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
+                    vol.Required(
+                        CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
+                    ): selector,
+                }
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def _async_handle_self_registering(
         self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
     ) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             data = {
                 **current,
-                CONF_CLIENT_KIND: CLIENT_KIND_LOGIN,
-                **self._validate_login(user_input, errors),
+                **self._validate_app(user_input, errors, CLIENT_KIND_SELF_REGISTERING),
             }
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            data[CONF_CLIENT_NAME] = name
+            if not errors:
+                # nothing to create: the callbacks reach the gate's list at the next reconcile
+                return self._store(data)
+        return self._app_form(step_id, user_input or current, errors, _PUBLISHED_REDIRECT_URIS)
+
+    async def _async_handle_console(
+        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {**current, **self._validate_app(user_input, errors, CLIENT_KIND_CONSOLE)}
             if not errors:
                 registered = await self._async_register(
                     data, errors, current.get(DATA_CLIENT_APP_ID)
                 )
                 if registered is not None:
                     self._data = registered
-                    return self._login_credentials(registered)
-        defaults = user_input or current
-        fields: dict[Any, Any] = {}
-        fields[vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, ""))] = str
-        fields[
-            vol.Required(CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or []))
-        ] = _REDIRECT_URIS
-        return self.async_show_form(
-            step_id=step_id,
-            data_schema=vol.Schema(fields),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
+                    return self._console_credentials(registered)
+        return self._app_form(step_id, user_input or current, errors, _TYPED_REDIRECT_URIS)
 
     async def _async_register(
         self, data: dict[str, Any], errors: dict[str, str], app_id: str | None
     ) -> dict[str, Any] | None:
-        """Create or update the login client's Access application; return the data to store."""
+        """Create or update the console app's Access application; return the data to store."""
         entry = self._get_entry()
         emails = await allowed_emails(self.hass, login_emails(entry))
         try:
@@ -737,7 +791,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
             }
         return None
 
-    def _login_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
+    def _console_credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
         team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
         return self.async_show_form(
             step_id="credentials",
@@ -845,7 +899,7 @@ class ClientSubentryFlow(ConfigSubentryFlow):
         if self.source == SOURCE_RECONFIGURE:
             entry = self._get_entry()
             sub = self._get_reconfigure_subentry()
-            # Merge, skipping None: an updated login client's secret is not returned again
+            # Merge, skipping None: an updated console app's secret is not returned again
             # and the stored one must stay.
             return self.async_update_and_abort(
                 entry,

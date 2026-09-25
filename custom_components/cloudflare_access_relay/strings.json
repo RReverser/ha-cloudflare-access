@@ -37,7 +37,7 @@
           "delete_objects_on_remove": "Delete the Access applications when the integration is removed"
         },
         "data_description": {
-          "session_duration": "How long an [Access session]({docs_session}) lasts before the person has to log in again.\n\nThe same time applies to a registered client's refresh token.",
+          "session_duration": "How long a login lasts before the person has to log in again: an [Access session]({docs_session}) in the browser, and the login a client holds, of either kind.",
           "delete_objects_on_remove": "When the integration is removed, its Access applications are removed too.\n\nTurn this off to keep them in Cloudflare, for example so another instance can adopt them."
         },
         "sections": {
@@ -94,7 +94,7 @@
         },
         "data_description": {
           "gate_enabled": "Requires a login for every request to the hostname.\n\nThe login goes through the [login methods of your Zero Trust organization]({docs_identity_providers}); the bypass policies below stay open. Off: nothing is gated, and the settings can be prepared first.",
-          "session_duration": "How long an [Access session]({docs_session}) lasts before the person has to log in again.\n\nThe same time applies to a registered client's refresh token.",
+          "session_duration": "How long a login lasts before the person has to log in again: an [Access session]({docs_session}) in the browser, and the login a client holds, of either kind.",
           "delete_objects_on_remove": "When the integration is removed, its Access applications are removed too.\n\nTurn this off to keep them in Cloudflare, for example so another instance can adopt them."
         },
         "sections": {
@@ -206,24 +206,38 @@
           "title": "Client",
           "description": "Something that calls Home Assistant through the gate.",
           "menu_options": {
-            "login": "A client that logs people in",
+            "self_registering": "An app that registers itself",
+            "console": "An app whose console asks for a client ID and secret",
             "script": "A script or service with its own credentials"
           },
           "menu_option_descriptions": {
-            "login": "e.g. Claude, ChatGPT, Google Home, Alexa. It gets [an Access login]({docs_saas_apps}) and each person logs in as themselves; a console that asks for a client ID and secret gets them on the last page.",
-            "script": "e.g. a backup job, a monitoring probe on another machine. It runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request."
+            "self_registering": "e.g. Claude, ChatGPT. It finds the login on its own and registers with the gate ([managed OAuth]({docs_managed_oauth})); only its callback URL is needed. Removing it stops new logins at once; a login it already holds lasts until the session duration runs out.",
+            "console": "e.g. Google Home, Alexa. It gets [an Access login]({docs_saas_apps}) of its own; the last page shows the client ID, secret and URLs the console asks for. Removing it deletes that login.",
+            "script": "e.g. a backup job, a monitoring probe on another machine. It runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request. Removing it deletes the token."
           }
         },
-        "login": {
-          "title": "A client that logs people in",
-          "description": "Enter the callback URL that the client's side shows. The next page shows the client's credentials.",
+        "self_registering": {
+          "title": "An app that registers itself",
+          "description": "Nothing is created for the app: the gate lets it register with the callback URL you enter.",
           "data": {
             "name": "Name",
             "redirect_uris": "Callback URLs"
           },
           "data_description": {
-            "name": "A name that identifies the client to you. e.g. Claude, Google Home.",
-            "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path."
+            "name": "A name that identifies the client to you. e.g. Claude, ChatGPT.",
+            "redirect_uris": "The URL the app returns to after the login. The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host."
+          }
+        },
+        "console": {
+          "title": "An app whose console asks for a client ID and secret",
+          "description": "Enter the callback URL the console shows. The next page shows the credentials to enter there.",
+          "data": {
+            "name": "Name",
+            "redirect_uris": "Callback URLs"
+          },
+          "data_description": {
+            "name": "A name that identifies the client to you. e.g. Google Home, Alexa.",
+            "redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. More than one when the console lists several."
           }
         },
         "script": {
@@ -236,16 +250,28 @@
             "name": "A name that identifies the client to you. e.g. Backup job."
           }
         },
-        "reconfigure": {
-          "title": "Change the client",
-          "description": "Saving updates the client and its Access application.",
+        "reconfigure_self_registering": {
+          "title": "Change the app",
+          "description": "Saving updates the callback URLs the gate lets the app register with.",
           "data": {
             "name": "Name",
             "redirect_uris": "Callback URLs"
           },
           "data_description": {
-            "name": "A name that identifies the client to you. e.g. Claude, Google Home.",
-            "redirect_uris": "The URL the client returns to after the login; more than one when the client has several.\n\nThe list offers the agent apps that register themselves (e.g. Claude, ChatGPT). A console client (e.g. Google Home, Alexa) shows its own exact callback, for example {example_console_redirect}: type that one. {example_wildcard_redirect} covers every path."
+            "name": "A name that identifies the client to you. e.g. Claude, ChatGPT.",
+            "redirect_uris": "The URL the app returns to after the login. The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host."
+          }
+        },
+        "reconfigure_console": {
+          "title": "Change the app",
+          "description": "Saving updates the app's Access login. The next page shows the credentials again.",
+          "data": {
+            "name": "Name",
+            "redirect_uris": "Callback URLs"
+          },
+          "data_description": {
+            "name": "A name that identifies the client to you. e.g. Google Home, Alexa.",
+            "redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. More than one when the console lists several."
           }
         },
         "reconfigure_script": {
@@ -260,7 +286,7 @@
         },
         "credentials": {
           "title": "Credentials for {name}",
-          "description": "Only a console that asks you for these needs them (e.g. Google Home, Alexa). An app that registers itself (e.g. Claude, ChatGPT) connects without them and cannot use them: the gate's login only knows the clients that registered with it.\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+          "description": "Enter these in the console (e.g. Google Home account linking, an Alexa skill).\n\nThe secret is shown only here and when you reconfigure the client.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
         },
         "script_credentials": {
           "title": "Credentials for {name}",
