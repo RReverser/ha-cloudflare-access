@@ -532,6 +532,9 @@ async def _lifecycle(
                 "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
                 "code_challenge_method": "S256",
                 "scope": "openid email profile",
+                # RFC 8707; without it Access sends the browser back at once
+                # (`invalid_target`) before looking at anything else
+                "resource": f"https://{edge.host}/",
             },
             follow_redirects=False,
         )
@@ -548,10 +551,13 @@ async def _lifecycle(
     )
     assert registration.status_code == 201, registration.text
     dcr_client = registration.json()["client_id"]
-    # a known client id is sent on to its callback (here with an error about the missing
-    # `resource` parameter); an unknown one gets Access's error page
+    # a known client id is sent on to the login page; an unknown one gets Access's
+    # error page
     resp = await authorize(dcr_client)
-    assert resp.status_code == 302 and resp.headers["location"].startswith(callback), resp.text
+    assert resp.status_code == 302 and "/cdn-cgi/access/login/" in resp.headers["location"], (
+        resp.status_code,
+        resp.headers.get("location"),
+    )
     resp = await authorize(shown["client_id"])
     assert resp.status_code == 400, "the application's client id is not one of the gate's"
     assert (await authorize("not-a-client")).status_code == 400
