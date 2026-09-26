@@ -216,7 +216,7 @@ async def test_live_foreign_hostname_is_refused(
     foreign = f"{WORKER_NAME}.example.com"  # the run marker keeps the cleanup's sweep on it
     body = {
         "type": "self_hosted",
-        "name": f"ha-access: gate {foreign}",
+        "name": f"Home Assistant ({foreign})",
         "domain": foreign,
         "destinations": [{"type": "public", "uri": foreign}],
         "session_duration": "1h",

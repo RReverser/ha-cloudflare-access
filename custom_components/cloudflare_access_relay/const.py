@@ -153,12 +153,16 @@ OPTION_IDP_IDS: Final = "idp_ids"
 # message; a semicolon was refused too), so letters, digits and spaces only.
 DENY_MESSAGE: Final = "Not allowed in yet so ask the Home Assistant owner to add you under People"
 
-# Access application names: readable in the dashboard, and the way an application is
-# found again when the stored ids are lost (together with the tag).
+# Access application names: shown to a real person (the managed-OAuth consent screen
+# reads "Signed in to {name} as ...", and Cloudflare's login page can show it too), and
+# the way an application is found again when the stored ids are lost (together with the
+# tag: exact-match on this name is only ever a candidate, ownership still needs the tag).
 APP_NAME_PREFIX: Final = "ha-access:"
-GATE_APP_NAME_FMT: Final = APP_NAME_PREFIX + " gate {hostname}"
-BYPASS_APP_NAME_FMT: Final = APP_NAME_PREFIX + " bypass {hostname}"
-CLIENT_APP_NAME_FMT: Final = APP_NAME_PREFIX + " client {hostname} {name}"
+GATE_APP_NAME_FMT: Final = "Home Assistant ({hostname})"
+BYPASS_APP_NAME_FMT: Final = "Home Assistant open paths ({hostname})"
+# The hostname leads, with nothing after {name}: formatting with name="" gives a stable
+# prefix a client removed while Home Assistant was down is found by (__init__.py).
+CLIENT_APP_NAME_FMT: Final = "{hostname}: {name}"
 # A script client's service token is named the same way; the name is how a token of a
 # removed client is found again (tokens carry no tags).
 SERVICE_TOKEN_NAME_FMT: Final = CLIENT_APP_NAME_FMT

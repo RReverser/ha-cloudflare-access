@@ -46,8 +46,8 @@ from .conftest import (
     make_entry,
 )
 
-GATE = f"ha-access: gate {HOSTNAME}"
-BYPASS = f"ha-access: bypass {HOSTNAME}"
+GATE = f"Home Assistant ({HOSTNAME})"
+BYPASS = f"Home Assistant open paths ({HOSTNAME})"
 
 
 def _uris(app: dict[str, Any]) -> list[str]:
@@ -182,7 +182,7 @@ async def test_a_script_client_gets_a_service_token_the_gate_accepts(
     cf = access.cloudflare
     shown = await _register_script(hass, access.entry, "Backup job")
     (token,) = cf.service_tokens.values()
-    assert token["name"] == f"ha-access: client {HOSTNAME} Backup job"
+    assert token["name"] == f"{HOSTNAME}: Backup job"
     assert shown["client_id"] == token["client_id"] and len(shown["client_secret"]) == 32
     assert shown["expires_at"] == "2027-09-22", "the date the script stops working"
     sub = _client_sub(access.entry)
@@ -212,7 +212,7 @@ async def test_a_script_client_gets_a_service_token_the_gate_accepts(
     assert result["description_placeholders"]["expires_at"] == "2028-09-22"
     result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
     assert result["type"] is FlowResultType.ABORT, result
-    assert token["name"] == f"ha-access: client {HOSTNAME} Nightly backup"
+    assert token["name"] == f"{HOSTNAME}: Nightly backup"
     await _settle(hass)
     assert cf.by_name(GATE)["policies"][1]["include"] == [
         {"service_token": {"token_id": token["id"]}}
@@ -237,7 +237,7 @@ async def test_a_lost_service_token_is_replaced_and_an_orphan_deleted(
     cf.service_tokens.clear()
     cf.service_tokens["orphan"] = {
         "id": "orphan",
-        "name": f"ha-access: client {HOSTNAME} Removed while HA was down",
+        "name": f"{HOSTNAME}: Removed while HA was down",
         "client_id": "x.access",
         "expires_at": "2027-01-01T00:00:00Z",
     }
@@ -558,7 +558,7 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     shown = await _register_client(
         hass, access.entry, "Google Home", ["https://oauth-redirect.googleusercontent.com/r/p"]
     )
-    client = cf.by_name(f"ha-access: client {HOSTNAME} Google Home")
+    client = cf.by_name(f"{HOSTNAME}: Google Home")
     assert client is not None
     assert client["type"] == "saas"
     assert client["saas_app"]["auth_type"] == "oidc"
@@ -592,7 +592,7 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     # removing the client removes its application and the rule, in that order of safety
     hass.config_entries.async_remove_subentry(access.entry, sub.subentry_id)
     await _settle(hass, 2)
-    assert cf.by_name(f"ha-access: client {HOSTNAME} Google Home") is None
+    assert cf.by_name(f"{HOSTNAME}: Google Home") is None
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
     writes = cf.writes()
     gate_put = max(i for i, w in enumerate(writes) if w[0] == "PUT" and w[2]["name"] == GATE)
@@ -721,7 +721,7 @@ async def test_clients_of_an_earlier_version_are_sorted_into_kinds(
         cf.apps[f"old-{name}"] = {
             "id": f"old-{name}",
             "type": "saas",
-            "name": f"ha-access: client {HOSTNAME} {name}",
+            "name": f"{HOSTNAME}: {name}",
             "tags": [tag],
             "saas_app": {"auth_type": "oidc", "client_id": "cid"},
             "policies": [],
@@ -787,14 +787,14 @@ async def test_options_based_clients_become_subentries_again(
     cf.apps["old-app"] = {
         "id": "old-app",
         "type": "saas",
-        "name": f"ha-access: client {HOSTNAME} Google Home",
+        "name": f"{HOSTNAME}: Google Home",
         "tags": [f"hass-{entry.entry_id.lower()}"],
         "saas_app": {"auth_type": "oidc", "client_id": "cid"},
         "policies": [],
     }
     cf.service_tokens["tok-1"] = {
         "id": "tok-1",
-        "name": f"ha-access: client {HOSTNAME} Backup job",
+        "name": f"{HOSTNAME}: Backup job",
         "client_id": "tid.access",
         "expires_at": "2027-01-01T00:00:00Z",
     }
@@ -847,7 +847,7 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
         hass, access.entry, "Alexa", ["https://layla.amazon.com/api/skill/link/x"]
     )
     await _settle(hass)
-    client_id = cf.by_name(f"ha-access: client {HOSTNAME} Alexa")["id"]
+    client_id = cf.by_name(f"{HOSTNAME}: Alexa")["id"]
     writes = len(cf.writes())
 
     assert await hass.config_entries.async_reload(access.entry.entry_id)
@@ -861,7 +861,7 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
     del cf.apps[client_id]
     assert await hass.config_entries.async_reload(access.entry.entry_id)
     await hass.async_block_till_done()
-    recreated = cf.by_name(f"ha-access: client {HOSTNAME} Alexa")
+    recreated = cf.by_name(f"{HOSTNAME}: Alexa")
     assert recreated is not None and recreated["id"] != client_id
     sub = _client_sub(access.entry)
     assert sub.data["app_id"] == recreated["id"]
@@ -870,7 +870,7 @@ async def test_client_registration_survives_a_reload_and_a_lost_application(
     assert gate["policies"][-1]["include"] == [{"linked_app_token": {"app_uid": recreated["id"]}}]
 
     # an application left behind by a client removed while Home Assistant was down
-    cf.apps["stray"] = {**recreated, "id": "stray", "name": f"ha-access: client {HOSTNAME} Old"}
+    cf.apps["stray"] = {**recreated, "id": "stray", "name": f"{HOSTNAME}: Old"}
     assert await hass.config_entries.async_reload(access.entry.entry_id)
     await hass.async_block_till_done()
     assert "stray" not in cf.apps
@@ -900,7 +900,7 @@ async def test_disabling_the_entry_takes_the_gate_down_and_enabling_brings_it_ba
     await hass.async_block_till_done()
     assert access.entry.state is ConfigEntryState.NOT_LOADED
     assert cf.by_name(GATE) is None and cf.by_name(BYPASS) is None, "the hostname is open again"
-    assert [a["name"] for a in cf.apps.values()] == [f"ha-access: client {HOSTNAME} Google Home"]
+    assert [a["name"] for a in cf.apps.values()] == [f"{HOSTNAME}: Google Home"]
     assert access.entry.data[DATA_GATE_APP_ID] is None
     assert access.entry.data[DATA_POLICY_AUD] is None
 
@@ -973,7 +973,7 @@ async def test_the_gate_sends_people_straight_to_the_only_login_method(
     assert gate["custom_deny_message"].replace(" ", "").isalnum(), "Cloudflare refuses punctuation"
     assert len(gate["custom_deny_message"]) <= 75, "Cloudflare's limit"
     await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
-    client = cf.by_name(f"ha-access: client {HOSTNAME} Google Home")
+    client = cf.by_name(f"{HOSTNAME}: Google Home")
     assert client["allowed_idps"] == ["otp-1"] and client["auto_redirect_to_identity"] is True
 
     # a second login method brings Cloudflare's picker page back
@@ -1032,10 +1032,10 @@ async def test_the_gate_follows_a_changed_external_url(hass: HomeAssistant, acce
     await hass.config.async_update(external_url="https://new.example.com")
     await _settle(hass)
     gate = cf.apps[gate_id]
-    assert gate["name"] == "ha-access: gate new.example.com" and gate["domain"] == "new.example.com"
+    assert gate["name"] == "Home Assistant (new.example.com)" and gate["domain"] == "new.example.com"
     assert access.entry.title == "new.example.com" and access.entry.unique_id == "new.example.com"
     (token,) = cf.service_tokens.values()
-    assert token["name"] == "ha-access: client new.example.com Probe"
+    assert token["name"] == "new.example.com: Probe"
 
     await hass.config.async_update(external_url=None)
     await _settle(hass)
