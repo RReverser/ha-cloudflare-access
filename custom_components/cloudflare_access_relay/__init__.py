@@ -89,6 +89,7 @@ from .jwks import JwksVerifier
 from .logins import LoginCoordinator, async_remove_login_history
 from .mcp import async_check_mcp_login_conflict
 from .options import (
+    KNOWN_OPTIONS,
     api_for,
     app_tag,
     async_provisioning_options,
@@ -520,6 +521,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: AccessConfigEntry) -> bool:
     """Provision the Access applications and recognise Access identities at the origin."""
+    # The options are exactly the integration's own keys; a tool that patches options
+    # by merging a saved form back in can leave section contents at the top level.
+    if stray := set(entry.options) - KNOWN_OPTIONS:
+        _LOGGER.warning("Dropping unknown options %s", sorted(stray))
+        hass.config_entries.async_update_entry(
+            entry, options={k: v for k, v in entry.options.items() if k in KNOWN_OPTIONS}
+        )
     try:
         options = provisioning_options(hass, entry)
     except NoURLAvailableError as err:

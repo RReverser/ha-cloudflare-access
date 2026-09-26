@@ -673,9 +673,9 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             console_fields[
                 vol.Optional(
                     FIELD_SHOW_CREDENTIALS,
-                    default=list(entered_console.get(FIELD_SHOW_CREDENTIALS) or []),
+                    default=bool(entered_console.get(FIELD_SHOW_CREDENTIALS, False)),
                 )
-            ] = _names_selector(self._console)
+            ] = BooleanSelector()
         script_fields: dict[Any, Any] = {}
         self._scripts = {}
         for sid, script in script_clients(self.config_entry).items():
@@ -687,8 +687,8 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         ] = str
         if self._scripts:
             script_fields[
-                vol.Optional(FIELD_RENEW, default=list(entered_scripts.get(FIELD_RENEW) or []))
-            ] = _names_selector(self._scripts)
+                vol.Optional(FIELD_RENEW, default=bool(entered_scripts.get(FIELD_RENEW, False)))
+            ] = BooleanSelector()
         return {
             vol.Optional(SECTION_SELF_REGISTERING, default={}): section(
                 vol.Schema(
@@ -754,25 +754,25 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 cid = ulid_util.ulid_now()
                 console[cid] = registered
                 self._credentials.append(self._console_block(registered))
-        for name in console_in.get(FIELD_SHOW_CREDENTIALS) or []:
-            shown = self._console.get(name)
-            if shown is not None and shown in console:
-                self._credentials.append(self._console_block(console[shown]))
+        if console_in.get(FIELD_SHOW_CREDENTIALS):
+            self._credentials.extend(
+                self._console_block(app) for cid, app in console.items() if cid in stored
+            )
         options[CONF_CONSOLE_APPS] = console
 
         # scripts: a cleared name removes the script (its token goes at the reload), a
         # changed one renames the token here; a renewal and a new script show their secret
         scripts: dict[str, dict[str, Any]] = {}
         stored_scripts = script_clients(entry)
-        renew = set(scripts_in.get(FIELD_RENEW) or [])
+        renew = bool(scripts_in.get(FIELD_RENEW))
         for name, sid in self._scripts.items():
             new = str(scripts_in.get(name) or "").strip()
             if not new or errors:
                 continue
             script = {**stored_scripts[sid], CONF_CLIENT_NAME: new}
-            if new != name or name in renew:
-                script = await self._async_renew_token(script, name in renew, errors) or script
-                if name in renew and not errors:
+            if new != name or renew:
+                script = await self._async_renew_token(script, renew, errors) or script
+                if renew and not errors:
                     self._credentials.append(_script_block(script))
             scripts[sid] = script
         new_script = str(scripts_in.get(FIELD_NEW_NAME) or "").strip()
@@ -885,17 +885,6 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             _LOGGER.warning("Cloudflare refused to update the service token: %s", err)
             errors["base"] = "api_error"
         return None
-
-
-def _names_selector(names: Mapping[str, str]) -> SelectSelector:
-    """Return a multi-select of the clients of a section, by name."""
-    return SelectSelector(
-        SelectSelectorConfig(
-            options=[SelectOptionDict(value=n, label=n) for n in names],
-            multiple=True,
-            mode=SelectSelectorMode.LIST,
-        )
-    )
 
 
 def _date_only(value: Any) -> str:

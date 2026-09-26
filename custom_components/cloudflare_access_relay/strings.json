@@ -114,17 +114,17 @@
           },
           "self_registering": {
             "name": "Self-registering apps",
-            "description": "Apps that find the login on their own and register with the gate ([managed OAuth]({docs_managed_oauth})), e.g. Claude, ChatGPT. Nothing is created for them: the gate lets them register with the callback URLs listed here. Removing a URL stops new logins from that app at once; a login it already holds lasts until the session duration runs out.",
+            "description": "Apps that find the login on their own and register with the gate, e.g. Claude, ChatGPT. Nothing is created for them: the gate lets them register with the callback URLs listed here. Removing a URL stops new logins from that app at once; a login it already holds lasts until the session duration runs out.",
             "data": {
               "redirect_uris": "Callback URLs"
             },
             "data_description": {
-              "redirect_uris": "The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host."
+              "redirect_uris": "The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host. How the gate takes such registrations: [managed OAuth]({docs_managed_oauth})."
             }
           },
           "console_apps": {
             "name": "Apps with client credentials",
-            "description": "Apps whose console asks for a client ID and secret, e.g. Google Home, Alexa. Each gets [an Access login]({docs_saas_apps}) of its own. One field per app holds its callback URLs; clear the field to remove the app, which deletes its login.",
+            "description": "Apps whose console asks for a client ID and secret, e.g. Google Home, Alexa. Each gets an Access login of its own. One field per app holds its callback URLs; clear the field to remove the app, which deletes its login.",
             "data": {
               "new_name": "New app: name",
               "new_redirect_uris": "New app: callback URLs",
@@ -132,20 +132,20 @@
             },
             "data_description": {
               "new_name": "A name that identifies the app to you, e.g. Google Home. Its credentials are shown on the next page.",
-              "new_redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}.",
-              "show_credentials": "The next page shows the client ID, secret and URLs of the apps ticked here."
+              "new_redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. What the app gets: [an Access for SaaS login]({docs_saas_apps}).",
+              "show_credentials": "The next page shows every app's client ID, secret and URLs."
             }
           },
           "scripts": {
             "name": "Scripts",
-            "description": "Scripts and services with nobody behind them, e.g. a backup job or a monitoring probe on another machine. Each gets [an Access service token]({docs_service_tokens}) to send with every request. One field per script holds its name; change it to rename, clear it to remove the script, which deletes its token.",
+            "description": "Scripts and services with nobody behind them, e.g. a backup job or a monitoring probe on another machine. Each gets an Access service token to send with every request. One field per script holds its name; change it to rename, clear it to remove the script, which deletes its token.",
             "data": {
               "new_name": "New script: name",
-              "renew": "Renew the token"
+              "renew": "Renew the tokens"
             },
             "data_description": {
-              "new_name": "A name that identifies the script to you, e.g. Backup job. Its credentials are shown on the next page.",
-              "renew": "Extends the validity of the tokens of the scripts ticked here (Cloudflare's default is a year) and shows their credentials again on the next page."
+              "new_name": "A name that identifies the script to you, e.g. Backup job. Its credentials are shown on the next page. How the token is sent: [service tokens]({docs_service_tokens}).",
+              "renew": "Extends the validity of every script's token (Cloudflare's default is a year) and shows their credentials again on the next page."
             }
           }
         }

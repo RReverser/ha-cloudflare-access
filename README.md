@@ -259,7 +259,7 @@ Clients are three sections of the options form, one per kind:
 - **Apps with client credentials** (above): one field per app holding its callback URLs;
   clear it to remove the app, which deletes its Access login. *New app* fields add one; its
   client ID, secret and URLs are shown on the page after Save, and *Show the credentials
-  again* shows them for the apps ticked. For Google Home account linking enter the client
+  again* shows them for every app. For Google Home account linking enter the client
   id, client secret, authorization URL and token URL shown; for an Alexa skill the same
   four under account linking, with credentials in the request body.
 - **Scripts**: machines with nobody behind them, for example a backup job or a monitoring
@@ -269,7 +269,7 @@ Clients are three sections of the options form, one per kind:
   Client ID and secret on the page after Save, which the script sends as the
   `CF-Access-Client-Id` and `CF-Access-Client-Secret` request headers together with its
   usual Home Assistant token; the gate's *Service Auth* policy names the token. *Renew the
-  token* extends a script's validity (Cloudflare's default is a year) and shows the
+  tokens* extends every script's validity (Cloudflare's default is a year) and shows the
   credentials again. A token deleted outside the integration is replaced with new
   credentials at the next reload, and removing the script, or the integration, deletes the
   token. Service tokens of an earlier version's option, and clients of an earlier version's

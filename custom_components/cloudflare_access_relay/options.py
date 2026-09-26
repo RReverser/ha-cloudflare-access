@@ -30,6 +30,7 @@ from .const import (
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
+    CONF_LOGIN_EMAILS,
     CONF_SCRIPTS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
@@ -51,6 +52,13 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     CONF_CONSOLE_APPS: {},
     CONF_SCRIPTS: {},
 }
+
+
+# every key the options may hold: the defaults' plus what has no default (the login
+# addresses by user id) and what a migration reads and removes
+KNOWN_OPTIONS: frozenset[str] = frozenset(
+    {*DEFAULT_OPTIONS, CONF_LOGIN_EMAILS, CONF_SERVICE_TOKEN_IDS, CONF_HOSTNAME}
+)
 
 
 def effective_options(entry: ConfigEntry) -> dict[str, Any]:

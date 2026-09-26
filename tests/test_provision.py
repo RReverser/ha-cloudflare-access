@@ -233,7 +233,7 @@ async def test_a_script_client_gets_a_service_token_the_gate_accepts(
     # the credentials again
     again = _shown(
         await _save_clients(
-            hass, access.entry, scripts={"Backup job": "Nightly backup", "renew": ["Backup job"]}
+            hass, access.entry, scripts={"Backup job": "Nightly backup", "renew": True}
         )
     )
     assert again["client_secret"] == shown["client_secret"]
