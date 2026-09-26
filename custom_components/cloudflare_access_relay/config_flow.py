@@ -637,7 +637,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         # A menu item is one line, so the label carries the name, the kind and the
         # details; given as a dict, the labels are shown as they are, and the Add item's
         # empty label falls back to its translation.
-        labels: dict[str, str] = {STEP_ADD: ""}
+        labels: dict[str, str] = {STEP_ADD: "Add a client"}
         for uri in client_redirect_uris(entry):
             labels[f"{MENU_SELF_REGISTERING_PREFIX}{_uri_key(uri)}"] = (
                 f"{_uri_label(uri)} · self-registering app · {uri}"

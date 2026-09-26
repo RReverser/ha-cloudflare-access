@@ -127,10 +127,7 @@
       },
       "clients": {
         "title": "Clients",
-        "description": "Everything that calls Home Assistant through the gate with a token. Pick one to change or remove it.",
-        "menu_options": {
-          "add": "Add a client"
-        }
+        "description": "Everything that calls Home Assistant through the gate with a token. Pick one to change or remove it."
       },
       "add": {
         "title": "Add a client",

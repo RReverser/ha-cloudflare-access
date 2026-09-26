@@ -352,6 +352,55 @@ async def test_legacy_service_token_option_becomes_script_clients(
     assert "tok-1" in cf.service_tokens, "a token the integration did not create is kept"
 
 
+def test_every_menu_option_has_a_translated_label() -> None:
+    """Every array-form `menu_options` in the strings has a non-blank label.
+
+    Home Assistant's menu-flow frontend renders a step's `menu_options` two ways: a
+    list of step ids, each translated through `component.<domain>.options.step.<step>
+    .menu_options.<option>` (asserted here, against both string files: nothing renders
+    a live instance to check this); or a dict of step id to label, shown exactly as
+    given with no translation and no fallback for a blank value (the "Clients" menu,
+    whose labels are client names built at runtime: `test_clients_menu_has_no_blank_labels`
+    below covers that one instead, since there is no translation to check).
+    """
+    import json
+    from pathlib import Path
+
+    from custom_components.cloudflare_access_relay import config_flow
+
+    base = Path(config_flow.__file__).parent
+    for filename in ("strings.json", "translations/en.json"):
+        strings = json.loads((base / filename).read_text())
+        for step_id, step in strings["options"]["step"].items():
+            options = step.get("menu_options")
+            if not isinstance(options, dict):
+                continue  # a dict here is code-supplied (the "clients" step); nothing to check
+            for option, label in options.items():
+                assert str(label).strip(), (filename, step_id, option)
+
+
+async def test_clients_menu_has_no_blank_labels(hass: HomeAssistant, access: Access) -> None:
+    """The "Clients" menu's labels are client names built at runtime, not translations.
+
+    They get no fallback from the frontend if blank (screenshot: the "Add a client" row
+    showed nothing but a chevron, from a label that was an empty string). This walks
+    the menu with one of each client kind present and checks every label directly,
+    without a live instance.
+    """
+    await _add_self_registering(hass, access.entry, ["https://claude.ai/api/mcp/auth_callback"])
+    await _register_client(hass, access.entry, "Google Home", ["https://example.com/cb"])
+    await _register_script(hass, access.entry, "Backup job")
+
+    flow = await hass.config_entries.options.async_init(access.entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "clients"}
+    )
+    assert result["type"] is FlowResultType.MENU and result["step_id"] == "clients", result
+    assert all(str(label).strip() for label in result["menu_options"].values()), result[
+        "menu_options"
+    ]
+
+
 # --------------------------------------------------------------------------- users
 
 
@@ -707,7 +756,7 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
         flow["flow_id"], {"next_step_id": "clients"}
     )
     assert menu["menu_options"] == {
-        "add": "",
+        "add": "Add a client",
         _sr_key("https://claude.ai/api/mcp/auth_callback"): (
             "Claude · self-registering app · https://claude.ai/api/mcp/auth_callback"
         ),
