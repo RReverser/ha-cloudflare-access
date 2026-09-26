@@ -69,11 +69,11 @@ its web server before any integration entry loads and the server's middleware li
 frozen by then, so the hook is added to the running server's chain; it is covered by a test
 against a started server.) Access's own policies decide
 who may link, and revoking a person in Access ends their clients at the next token refresh.
-Every such client is an entry under the integration's *Configure → Clients*: a name and
+Every such client is added from the integration entry's menu, which has one *Add …* item
+per kind, and listed under the entry with its kind as the second line; each is a name and
 the callback URL(s) the client's own side shows; the callback belongs to the client and
-cannot be derived. Tools that run on a
-person's own computer (Claude Code, Cursor, VS Code) call back on localhost, which Access
-does not take as a list entry; they are not supported yet.
+cannot be derived. Tools that run on a person's own computer (Claude Code, Cursor, VS Code) call
+back on localhost, which Access does not take as a list entry; they are not supported yet.
 Two kinds of app, one mechanism each:
 
 - **An app that registers itself** (MCP clients: Claude, ChatGPT). The gate has *managed
@@ -252,26 +252,28 @@ Every repair issue whose remedy is an action offers it as its fix: retrying a fa
 setting the External URL, giving a refused address to a person, and settling HA-MCP's login
 mode against the gate.
 
-Clients are managed under *Configure → Clients*: one list of every client, each entry naming
-its kind and details, and one *Add a client* button that asks which kind:
+Clients are subentries of the integration entry, one *Add …* menu item and one row label per
+kind:
 
-- **Self-registering app** (above): a callback URL, picked from the published ones or typed.
-  Its entry shows the app's name and URL; the entry's page changes or removes the URL.
-- **App with client credentials** (above): a name and the callback URLs the console shows.
-  Its client ID, secret and URLs are shown on the page after Save; the entry's page changes
-  it, shows the credentials again, or removes it, which deletes its Access login. For
-  Google Home account linking enter the client id, client secret, authorization URL and
-  token URL shown; for an Alexa skill the same four under account linking, with
-  credentials in the request body.
-- **Script**: a name. The integration creates an Access service token named
-  `ha-access: client <host> <name>` and shows its Client ID and secret on the page after
-  Save, which the script sends as the `CF-Access-Client-Id` and `CF-Access-Client-Secret`
+- **An app that registers itself** (above): a name and its callback URLs; *Reconfigure*
+  changes them. Clients of an earlier version whose callbacks are all published ones of
+  such an app become this kind at the update, and the application the earlier version
+  gave them, which they could not use, is deleted.
+- **An app whose console asks for a client ID and secret** (above): stores its application
+  id, client id and secret, and *Reconfigure* shows the credentials again. For Google Home
+  account linking enter the client id, client secret, authorization URL and token URL shown;
+  for an Alexa skill the same four under account linking, with credentials in the request
+  body.
+- **A script or service with its own credentials**: a machine with nobody behind it, for
+  example a backup job or a monitoring probe on another host. The integration creates an
+  Access service token named `ha-access: client <host> <name>` and shows its Client ID and
+  secret, which the script sends as the `CF-Access-Client-Id` and `CF-Access-Client-Secret`
   request headers together with its usual Home Assistant token; the gate's *Service Auth*
-  policy names the token. The entry's page renames the script, renews the token
-  (Cloudflare's default validity is a year) and shows the credentials again, or removes
-  it, which deletes the token. A token deleted outside the integration is replaced with
-  new credentials at the next reload. Service tokens of an earlier version's option, and
-  clients of an earlier version's subentries, become entries at the update. Both the sign-in and an API token need **Access: Service
+  policy names the token. *Reconfigure* renames the token, extends its validity (Cloudflare's
+  default is a year) and shows the credentials again. A token deleted outside the integration
+  is replaced with new credentials at the next reload, and removing the client, or the
+  integration, deletes the token. Service tokens of an earlier version's option are turned
+  into script clients at setup. Both the sign-in and an API token need **Access: Service
   Tokens: Edit** for this; a sign-in granted before the scope was added asks to sign in again
   when a script client is added.
 
