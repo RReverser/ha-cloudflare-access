@@ -180,9 +180,13 @@ async def _ephemeral_host(api: CloudflareAccessApi, http: httpx.AsyncClient) -> 
 
 
 async def _save_options(hass: HomeAssistant, entry: ConfigEntry, **changes: Any) -> None:
-    """Re-save the options through the options flow (reloads and re-provisions)."""
+    """Re-save the settings through the options flow (reloads and re-provisions)."""
     flow = await hass.config_entries.options.async_init(entry.entry_id)
-    assert flow["type"] is FlowResultType.FORM
+    assert flow["type"] is FlowResultType.MENU, flow
+    flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "settings"}
+    )
+    assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "settings", flow
     current = dict(entry.options)
     user_input = {
         CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
@@ -271,29 +275,39 @@ async def _remove_entry(hass: HomeAssistant) -> None:
             await hass.async_block_till_done()
 
 
-async def _save_clients(hass: HomeAssistant, entry: ConfigEntry, **sections: Any) -> str:
-    """Submit the options form with client sections; return the credentials page, if any."""
+async def _drive(
+    hass: HomeAssistant, entry: ConfigEntry, path: list[str], form: dict[str, Any]
+) -> str:
+    """Walk the options menus along `path`, submit `form`; return the credentials page, if any."""
     flow = await hass.config_entries.options.async_init(entry.entry_id)
-    assert flow["type"] is FlowResultType.FORM
-    current = dict(entry.options)
-    result = await hass.config_entries.options.async_configure(
-        flow["flow_id"],
-        {
-            CONF_GATE_ENABLED: current[CONF_GATE_ENABLED],
-            "bypass": {CONF_EXTRA_BYPASS_PATHS: current.get(CONF_EXTRA_BYPASS_PATHS, [])},
-            CONF_DELETE_OBJECTS_ON_REMOVE: current[CONF_DELETE_OBJECTS_ON_REMOVE],
-            **sections,
-        },
-    )
+    result: dict[str, Any] = dict(flow)
+    for step in path:
+        assert result["type"] is FlowResultType.MENU and step in result["menu_options"], (
+            step,
+            result,
+        )
+        result = dict(
+            await hass.config_entries.options.async_configure(
+                flow["flow_id"], {"next_step_id": step}
+            )
+        )
+    assert result["type"] is FlowResultType.FORM, result
+    result = dict(await hass.config_entries.options.async_configure(flow["flow_id"], form))
     shown = ""
     if result["type"] is FlowResultType.FORM:
         assert result["step_id"] == "credentials", result
         shown = result["description_placeholders"]["credentials"]
-        result = await hass.config_entries.options.async_configure(flow["flow_id"], {})
+        result = dict(await hass.config_entries.options.async_configure(flow["flow_id"], {}))
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED, entry.reason
     return shown
+
+
+def _sr_key(uri: str) -> str:
+    from custom_components.cloudflare_access_relay.config_flow import _uri_key
+
+    return f"client_sr_{_uri_key(uri)}"
 
 
 def _shown(markdown: str) -> dict[str, str]:
@@ -307,7 +321,7 @@ def _shown(markdown: str) -> dict[str, str]:
 
 async def _register_script(hass: HomeAssistant, entry: ConfigEntry, name: str) -> dict[str, str]:
     """Add a script through the options form; return what its credentials page showed."""
-    return _shown(await _save_clients(hass, entry, scripts={"new_name": name}))
+    return _shown(await _drive(hass, entry, ["clients", "add", "script_add"], {"name": name}))
 
 
 async def _lifecycle(
@@ -469,7 +483,9 @@ async def _lifecycle(
 
     print("== a self-registering app is a callback URL the gate lets register")
     callback = "https://example.com/oauth/callback"
-    assert not await _save_clients(hass, entry, self_registering={"redirect_uris": [callback]})
+    await _drive(
+        hass, entry, ["clients", "add", "self_registering_add"], {"redirect_uris": [callback]}
+    )
 
     async def gate_allows_callback() -> bool:
         app = await api.get_app(gate_id)
@@ -480,14 +496,15 @@ async def _lifecycle(
 
     print("== a console app gets an Access for SaaS application the gate accepts")
     shown = _shown(
-        await _save_clients(
+        await _drive(
             hass,
             entry,
-            console_apps={"new_name": "Live client", "new_redirect_uris": [callback]},
+            ["clients", "add", "console_add"],
+            {"name": "Live client", "redirect_uris": [callback]},
         )
     )
     assert shown["client_id"] and shown["client_secret"], shown
-    (console_app,) = entry.options["console_apps"].values()
+    ((console_id, console_app),) = entry.options["console_apps"].items()
     client_app = await api.get_app(console_app["app_id"])
     assert client_app and client_app["type"] == "saas", client_app
     assert client_app["saas_app"]["client_id"] == shown["client_id"]
@@ -544,13 +561,14 @@ async def _lifecycle(
     )
     assert registration.status_code == 201, registration.text
     dcr_client = registration.json()["client_id"]
+
     # a known client id is sent on to the login page; an unknown one gets Access's
     # error page
-    resp = await authorize(dcr_client)
-    assert resp.status_code == 302 and "/cdn-cgi/access/login/" in resp.headers["location"], (
-        resp.status_code,
-        resp.headers.get("location"),
-    )
+    async def sent_to_login() -> bool:
+        resp = await authorize(dcr_client)
+        return resp.status_code == 302 and "/cdn-cgi/access/login/" in resp.headers["location"]
+
+    assert await _until(sent_to_login, "a known client is sent on to the login page", 60)
     resp = await authorize(shown["client_id"])
     assert resp.status_code == 400, "the application's client id is not one of the gate's"
     assert (await authorize("not-a-client")).status_code == 400
@@ -562,7 +580,12 @@ async def _lifecycle(
     )
     assert listing.status_code == 200, listing.text
     assert dcr_client not in [c.get("client_id") for c in listing.json()["result"]]
-    assert not await _save_clients(hass, entry, console_apps={"Live client": []})
+    await _drive(
+        hass,
+        entry,
+        ["clients", f"client_app_{console_id}"],
+        {"name": "Live client", "redirect_uris": [callback], "remove": True},
+    )
 
     async def client_gone() -> bool:
         return await api.get_app(console_app["app_id"]) is None
@@ -572,7 +595,9 @@ async def _lifecycle(
     # itself still answers 201 (the list is checked at authorization, not at
     # registration; the grant probe saw the same), so the check is that a client
     # registered with the removed callback cannot start a login any more.
-    assert not await _save_clients(hass, entry, self_registering={"redirect_uris": []})
+    await _drive(
+        hass, entry, ["clients", _sr_key(callback)], {"redirect_uri": callback, "remove": True}
+    )
 
     async def callback_gone() -> bool:
         return not await gate_allows_callback()
@@ -662,7 +687,13 @@ async def _lifecycle(
     assert await _until(reusable, "cookie reuse restored")
 
     print("== removing the script client drops its rule from the gate and deletes its token")
-    assert not await _save_clients(hass, entry, scripts={"CI runner": ""})
+    ((script_id, _),) = entry.options["scripts"].items()
+    await _drive(
+        hass,
+        entry,
+        ["clients", f"client_script_{script_id}"],
+        {"name": "CI runner", "remove": True},
+    )
 
     async def token_gone() -> bool:
         app = await api.get_app(gate_id)

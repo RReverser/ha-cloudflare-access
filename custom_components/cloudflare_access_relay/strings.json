@@ -86,6 +86,17 @@
     "step": {
       "init": {
         "title": "Cloudflare Access for {hostname}",
+        "menu_options": {
+          "settings": "Settings",
+          "clients": "Clients"
+        },
+        "menu_option_descriptions": {
+          "settings": "The gate, who may log in, session duration, bypass policies.",
+          "clients": "{clients}"
+        }
+      },
+      "settings": {
+        "title": "Settings for {hostname}",
         "description": "Saving re-provisions the Access applications.\n\nReloading the integration does the same without a change.",
         "data": {
           "gate_enabled": "Enabled",
@@ -111,48 +122,106 @@
             "data_description": {
               "extra_bypass_paths": "Path prefixes that anyone can reach without logging in.\n\nEach one becomes an [Access bypass policy]({docs_policies}). The list offers what this Home Assistant serves; you can also type any prefix."
             }
-          },
-          "self_registering": {
-            "name": "Self-registering apps",
-            "description": "Apps that find the login on their own and register with the gate, e.g. Claude, ChatGPT. Nothing is created for them: the gate lets them register with the callback URLs listed here. Removing a URL stops new logins from that app at once; a login it already holds lasts until the session duration runs out.",
-            "data": {
-              "redirect_uris": "Callback URLs"
-            },
-            "data_description": {
-              "redirect_uris": "The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host. How the gate takes such registrations: [managed OAuth]({docs_managed_oauth})."
-            }
-          },
-          "console_apps": {
-            "name": "Apps with client credentials",
-            "description": "Apps whose console asks for a client ID and secret, e.g. Google Home, Alexa. Each gets an Access login of its own. One field per app holds its callback URLs; clear the field to remove the app, which deletes its login.",
-            "data": {
-              "new_name": "New app: name",
-              "new_redirect_uris": "New app: callback URLs",
-              "show_credentials": "Show the credentials again"
-            },
-            "data_description": {
-              "new_name": "A name that identifies the app to you, e.g. Google Home. Its credentials are shown on the next page.",
-              "new_redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. What the app gets: [an Access for SaaS login]({docs_saas_apps}).",
-              "show_credentials": "The next page shows every app's client ID, secret and URLs."
-            }
-          },
-          "scripts": {
-            "name": "Scripts",
-            "description": "Scripts and services with nobody behind them, e.g. a backup job or a monitoring probe on another machine. Each gets an Access service token to send with every request. One field per script holds its name; change it to rename, clear it to remove the script, which deletes its token.",
-            "data": {
-              "new_name": "New script: name",
-              "renew": "Renew the tokens"
-            },
-            "data_description": {
-              "new_name": "A name that identifies the script to you, e.g. Backup job. Its credentials are shown on the next page. How the token is sent: [service tokens]({docs_service_tokens}).",
-              "renew": "Extends the validity of every script's token (Cloudflare's default is a year) and shows their credentials again on the next page."
-            }
           }
+        }
+      },
+      "clients": {
+        "title": "Clients",
+        "description": "Everything that calls Home Assistant through the gate with a token. Pick one to change or remove it.",
+        "menu_options": {
+          "add": "Add a client"
+        }
+      },
+      "add": {
+        "title": "Add a client",
+        "menu_options": {
+          "self_registering_add": "Self-registering app",
+          "console_add": "App with client credentials",
+          "script_add": "Script"
+        },
+        "menu_option_descriptions": {
+          "self_registering_add": "e.g. Claude, ChatGPT. It finds the login on its own and registers with the gate; only its callback URL is needed. Removing it stops new logins at once; a login it already holds lasts until the session duration runs out.",
+          "console_add": "e.g. Google Home, Alexa. It gets an Access login of its own; the next page shows the client ID, secret and URLs the console asks for. Removing it deletes that login.",
+          "script_add": "e.g. a backup job, a monitoring probe on another machine. It runs with nobody behind it and gets an Access service token to send with every request. Removing it deletes the token."
+        }
+      },
+      "self_registering_add": {
+        "title": "Self-registering app",
+        "description": "Nothing is created for the app: the gate lets it register with the callback URL you pick or type.",
+        "data": {
+          "redirect_uris": "Callback URLs"
+        },
+        "data_description": {
+          "redirect_uris": "The list offers the published callbacks of the apps that register themselves; any other URL can be typed, and {example_wildcard_redirect} covers every path under a host. How the gate takes such registrations: [managed OAuth]({docs_managed_oauth})."
+        }
+      },
+      "self_registering_edit": {
+        "title": "{name}",
+        "description": "A self-registering app: the gate lets it register with this callback URL.",
+        "data": {
+          "redirect_uri": "Callback URL",
+          "remove": "Remove"
+        },
+        "data_description": {
+          "redirect_uri": "The URL the app returns to after the login; {example_wildcard_redirect} covers every path under a host.",
+          "remove": "Takes the URL off the gate's list. New logins from the app are refused at once; a login it already holds lasts until the session duration runs out."
+        }
+      },
+      "console_add": {
+        "title": "App with client credentials",
+        "description": "The next page shows the client ID, secret and URLs to enter in the console.",
+        "data": {
+          "name": "Name",
+          "redirect_uris": "Callback URLs"
+        },
+        "data_description": {
+          "name": "A name that identifies the app to you, e.g. Google Home.",
+          "redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. What the app gets: [an Access for SaaS login]({docs_saas_apps})."
+        }
+      },
+      "console_edit": {
+        "title": "{name}",
+        "description": "An app with client credentials: it has an Access login of its own.",
+        "data": {
+          "name": "Name",
+          "redirect_uris": "Callback URLs",
+          "show_credentials": "Show the credentials again",
+          "remove": "Remove"
+        },
+        "data_description": {
+          "name": "A name that identifies the app to you.",
+          "redirect_uris": "The exact callback the console shows, with your project or vendor id in it, for example {example_console_redirect}. What the app gets: [an Access for SaaS login]({docs_saas_apps}).",
+          "show_credentials": "The next page shows the client ID, secret and URLs.",
+          "remove": "Deletes the app's Access login; its console stops working at once."
+        }
+      },
+      "script_add": {
+        "title": "Script",
+        "description": "The next page shows the credentials the script sends with every request.",
+        "data": {
+          "name": "Name"
+        },
+        "data_description": {
+          "name": "A name that identifies the script to you, e.g. Backup job. How the token is sent: [service tokens]({docs_service_tokens})."
+        }
+      },
+      "script_edit": {
+        "title": "{name}",
+        "description": "A script: it has an Access service token, valid until {expires_at}.",
+        "data": {
+          "name": "Name",
+          "renew": "Renew the token",
+          "remove": "Remove"
+        },
+        "data_description": {
+          "name": "Renaming renames the token too.",
+          "renew": "Extends the validity (Cloudflare's default is a year) and shows the credentials again on the next page.",
+          "remove": "Deletes the token; the script stops working at once."
         }
       },
       "credentials": {
         "title": "Credentials",
-        "description": "Shown only now. A console app's secret is shown again on request; a script's only when its token is renewed.\n\n{credentials}"
+        "description": "Shown only now. An app's credentials can be shown again from its page; a script's only when its token is renewed.\n\n{credentials}"
       }
     },
     "error": {
@@ -160,11 +229,14 @@
       "invalid_duration": "The session must last at least one minute.",
       "invalid_email": "Enter an e-mail address.",
       "invalid_redirect_uri": "Callback URLs must start with https://.",
-      "required": "A new app needs its callback URL.",
+      "required": "This field is required.",
       "invalid_auth": "Cloudflare rejected the credential.",
       "missing_service_tokens_edit": "The Cloudflare credential cannot manage service tokens. Sign in with Cloudflare again to grant that, or give the API token 'Access: Service Tokens: Edit'.",
       "cannot_connect": "Cloudflare could not be reached.",
       "api_error": "Cloudflare returned an error; see the log."
+    },
+    "abort": {
+      "entry_gone": "This client no longer exists."
     }
   },
   "issues": {

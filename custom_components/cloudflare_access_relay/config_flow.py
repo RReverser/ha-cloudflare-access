@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
@@ -67,24 +69,35 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     DOMAIN,
-    FIELD_NEW_NAME,
-    FIELD_NEW_REDIRECT_URIS,
+    FIELD_REDIRECT_URI,
     FIELD_REDIRECT_URIS,
+    FIELD_REMOVE,
     FIELD_RENEW,
     FIELD_SHOW_CREDENTIALS,
     FORM_PLACEHOLDERS,
     KNOWN_REDIRECT_URIS,
+    MENU_CONSOLE_PREFIX,
+    MENU_SCRIPT_PREFIX,
+    MENU_SELF_REGISTERING_PREFIX,
     OPTION_APP_TAG,
     SECTION_BYPASS,
-    SECTION_CONSOLE_APPS,
     SECTION_PEOPLE,
-    SECTION_SCRIPTS,
-    SECTION_SELF_REGISTERING,
     SERVICE_TOKEN_NAME_FMT,
+    STEP_ADD,
+    STEP_CLIENTS,
+    STEP_CONSOLE_ADD,
+    STEP_CONSOLE_EDIT,
+    STEP_CREDENTIALS,
+    STEP_SCRIPT_ADD,
+    STEP_SCRIPT_EDIT,
+    STEP_SELF_REGISTERING_ADD,
+    STEP_SELF_REGISTERING_EDIT,
+    STEP_SETTINGS,
 )
 from .options import (
     api_for,
     async_provisioning_options,
+    client_redirect_uris,
     console_clients,
     effective_options,
     external_hostname,
@@ -568,25 +581,160 @@ def _validate_uris(values: list[str] | None, errors: dict[str, str], key: str) -
 class OptionsFlowHandler(OptionsFlowWithReload):
     """Everything but the credentials; saving reloads and re-provisions.
 
-    The clients are three sections of the one form: the self-registering apps' callback
-    list, one field per console app and per script, and fields for a new one. What
-    needs Cloudflare (a new console app's application, a new script's token, a renewal)
-    is done here, so the credentials can be shown on the page after Save; the rest is
-    reconciled by the reload.
+    A menu leads to the general settings, the self-registering apps' callback list, and
+    for console apps and scripts a menu of the existing entries with an add page and,
+    per entry, an edit page. What needs Cloudflare now (a new console app's
+    application, a new script's token, a renewal) is done in the flow, so the
+    credentials can be shown on a page before the save; the rest is reconciled by the
+    reload that follows every save.
     """
 
     def __init__(self) -> None:
-        """Start with no people and no clients known."""
+        """Start with nothing known."""
         super().__init__()
         self._people: dict[str, str] = {}
-        # field label (the client's name) to client id, per section
-        self._console: dict[str, str] = {}
-        self._scripts: dict[str, str] = {}
+        self._editing = ""
         self._options: dict[str, Any] = {}
         self._credentials: list[str] = []
 
+    def __getattr__(self, name: str) -> Any:
+        """Resolve a client's menu entry to its edit step; the step id carries its id."""
+        for prefix, step in (
+            (f"async_step_{MENU_SELF_REGISTERING_PREFIX}", "async_step_self_registering_edit"),
+            (f"async_step_{MENU_CONSOLE_PREFIX}", "async_step_console_edit"),
+            (f"async_step_{MENU_SCRIPT_PREFIX}", "async_step_script_edit"),
+        ):
+            if name.startswith(prefix):
+                self._editing = name[len(prefix) :]
+                return getattr(self, step)
+        raise AttributeError(name)
+
+    # -------------------------------------------------------------------- menus
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Show and process the options form."""
+        """Show the menu: the general settings, or the clients."""
+        entry = self.config_entry
+        names = [
+            *(_uri_label(u) for u in client_redirect_uris(entry)),
+            *(a[CONF_CLIENT_NAME] for a in console_clients(entry).values()),
+            *(s[CONF_CLIENT_NAME] for s in script_clients(entry).values()),
+        ]
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=[STEP_SETTINGS, STEP_CLIENTS],
+            description_placeholders={
+                **FORM_PLACEHOLDERS,
+                CONF_HOSTNAME: entry.title,
+                "clients": ", ".join(names) if names else "none yet",
+            },
+        )
+
+    async def async_step_clients(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """List every client as a button, with its kind and details, plus Add."""
+        entry = self.config_entry
+        # A menu item is one line, so the label carries the name, the kind and the
+        # details; given as a dict, the labels are shown as they are, and the Add item's
+        # empty label falls back to its translation.
+        labels: dict[str, str] = {STEP_ADD: ""}
+        for uri in client_redirect_uris(entry):
+            labels[f"{MENU_SELF_REGISTERING_PREFIX}{_uri_key(uri)}"] = (
+                f"{_uri_label(uri)} · self-registering app · {uri}"
+            )
+        for cid, app in console_clients(entry).items():
+            labels[f"{MENU_CONSOLE_PREFIX}{cid}"] = (
+                f"{app[CONF_CLIENT_NAME]} · app with client credentials · "
+                f"{', '.join(app[CONF_REDIRECT_URIS])}"
+            )
+        for sid, script in script_clients(entry).items():
+            labels[f"{MENU_SCRIPT_PREFIX}{sid}"] = (
+                f"{script[CONF_CLIENT_NAME]} · script · token valid until "
+                f"{_date_only(script.get(DATA_TOKEN_EXPIRES_AT))}"
+            )
+        return self.async_show_menu(
+            step_id=STEP_CLIENTS, menu_options=labels, description_placeholders=FORM_PLACEHOLDERS
+        )
+
+    async def async_step_add(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick the kind of client to add; each choice carries its own description."""
+        return self.async_show_menu(
+            step_id=STEP_ADD,
+            menu_options=[STEP_SELF_REGISTERING_ADD, STEP_CONSOLE_ADD, STEP_SCRIPT_ADD],
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    # ---------------------------------------------------- self-registering apps
+
+    async def async_step_self_registering_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add self-registering apps: their callback URLs join the gate's list."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            uris = _validate_uris(user_input.get(FIELD_REDIRECT_URIS), errors, FIELD_REDIRECT_URIS)
+            if not uris and not errors:
+                errors[FIELD_REDIRECT_URIS] = "required"
+            if not errors:
+                current = client_redirect_uris(self.config_entry)
+                return self._save({CONF_CLIENT_REDIRECT_URIS: sorted({*current, *uris})})
+        return self.async_show_form(
+            step_id=STEP_SELF_REGISTERING_ADD,
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        FIELD_REDIRECT_URIS,
+                        default=list((user_input or {}).get(FIELD_REDIRECT_URIS) or []),
+                    ): _PUBLISHED_REDIRECT_URIS
+                }
+            ),
+            errors=errors,
+            description_placeholders=FORM_PLACEHOLDERS,
+        )
+
+    async def async_step_self_registering_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change or remove one self-registering app's callback URL."""
+        errors: dict[str, str] = {}
+        uris = client_redirect_uris(self.config_entry)
+        current = next((u for u in uris if _uri_key(u) == self._editing), None)
+        if current is None:
+            return self.async_abort(reason="entry_gone")
+        if user_input is not None:
+            others = [u for u in uris if u != current]
+            if user_input.get(FIELD_REMOVE):
+                return self._save({CONF_CLIENT_REDIRECT_URIS: others})
+            new = _validate_uris(
+                [str(user_input.get(FIELD_REDIRECT_URI) or "")], errors, FIELD_REDIRECT_URI
+            )
+            if not new and not errors:
+                errors[FIELD_REDIRECT_URI] = "required"
+            if not errors:
+                return self._save({CONF_CLIENT_REDIRECT_URIS: sorted({*others, *new})})
+        defaults = user_input or {FIELD_REDIRECT_URI: current}
+        return self.async_show_form(
+            step_id=STEP_SELF_REGISTERING_EDIT,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        FIELD_REDIRECT_URI, default=defaults.get(FIELD_REDIRECT_URI, "")
+                    ): str,
+                    vol.Optional(FIELD_REMOVE, default=bool(defaults.get(FIELD_REMOVE, False))): (
+                        BooleanSelector()
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={**FORM_PLACEHOLDERS, CONF_CLIENT_NAME: _uri_label(current)},
+        )
+
+    # ------------------------------------------------------------------- pages
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show and process the general settings."""
         errors: dict[str, str] = {}
         current = effective_options(self.config_entry)
         if user_input is not None:
@@ -596,12 +744,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
             if not errors:
-                await self._async_apply_clients(user_input, options, errors)
-            if not errors:
-                self._options = options
-                if self._credentials:
-                    return await self.async_step_credentials()
-                return self.async_create_entry(data=options)
+                return self._save(options)
             current = {**current, **user_input}
         people, self._people = await _people_section(
             self.hass, login_emails(self.config_entry), current
@@ -614,11 +757,10 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 ): BooleanSelector(),
                 **people,
                 **await _advanced_schema(self.hass, current),
-                **self._client_sections(current),
             }
         )
         return self.async_show_form(
-            step_id="init",
+            step_id=STEP_SETTINGS,
             data_schema=schema,
             errors=errors,
             description_placeholders={
@@ -628,160 +770,177 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             },
         )
 
+    async def async_step_console_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add a console app: its application is created and its credentials shown."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            app = _app_input(user_input, errors)
+            if not errors:
+                registered = await self._async_register(app, errors)
+                if registered is not None:
+                    apps = {**console_clients(self.config_entry), ulid_util.ulid_now(): registered}
+                    self._credentials = [self._console_block(registered)]
+                    return await self._async_finish({CONF_CONSOLE_APPS: apps})
+        return self._app_form(STEP_CONSOLE_ADD, user_input or {}, errors)
+
+    async def async_step_console_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change, remove or show the credentials of one console app."""
+        errors: dict[str, str] = {}
+        apps = console_clients(self.config_entry)
+        if (current := apps.get(self._editing)) is None:
+            return self.async_abort(reason="entry_gone")
+        if user_input is not None:
+            if user_input.get(FIELD_REMOVE):
+                # its application goes at the reload, once the gate no longer names it
+                return self._save(
+                    {CONF_CONSOLE_APPS: {k: v for k, v in apps.items() if k != self._editing}}
+                )
+            app = {**current, **_app_input(user_input, errors)}
+            if not errors:
+                changed = app[CONF_REDIRECT_URIS] != current[CONF_REDIRECT_URIS] or (
+                    app[CONF_CLIENT_NAME] != current[CONF_CLIENT_NAME]
+                )
+                if changed:
+                    app = await self._async_register(app, errors) or app
+                if not errors:
+                    apps[self._editing] = app
+                    if user_input.get(FIELD_SHOW_CREDENTIALS):
+                        self._credentials = [self._console_block(app)]
+                    return await self._async_finish({CONF_CONSOLE_APPS: apps})
+        return self._app_form(
+            STEP_CONSOLE_EDIT,
+            user_input or current,
+            errors,
+            extra=(FIELD_SHOW_CREDENTIALS, FIELD_REMOVE),
+        )
+
+    async def async_step_script_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add a script: its token is created and its credentials shown."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = str(user_input.get(CONF_CLIENT_NAME) or "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                created = await self._async_create_token({CONF_CLIENT_NAME: name}, errors)
+                if created is not None:
+                    scripts = {**script_clients(self.config_entry), ulid_util.ulid_now(): created}
+                    self._credentials = [_script_block(created)]
+                    return await self._async_finish({CONF_SCRIPTS: scripts})
+        return self._script_form(STEP_SCRIPT_ADD, user_input or {}, errors)
+
+    async def async_step_script_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Rename, renew or remove one script."""
+        errors: dict[str, str] = {}
+        scripts = script_clients(self.config_entry)
+        if (current := scripts.get(self._editing)) is None:
+            return self.async_abort(reason="entry_gone")
+        if user_input is not None:
+            if user_input.get(FIELD_REMOVE):
+                # its token goes at the reload, once the gate no longer names it
+                return self._save(
+                    {CONF_SCRIPTS: {k: v for k, v in scripts.items() if k != self._editing}}
+                )
+            name = str(user_input.get(CONF_CLIENT_NAME) or "").strip()
+            if not name:
+                errors[CONF_CLIENT_NAME] = "required"
+            else:
+                script = {**current, CONF_CLIENT_NAME: name}
+                renew = bool(user_input.get(FIELD_RENEW))
+                if name != current[CONF_CLIENT_NAME] or renew:
+                    script = await self._async_renew_token(script, renew, errors) or script
+                if not errors:
+                    scripts[self._editing] = script
+                    if renew:
+                        self._credentials = [_script_block(script)]
+                    return await self._async_finish({CONF_SCRIPTS: scripts})
+        return self._script_form(
+            STEP_SCRIPT_EDIT, user_input or current, errors, extra=(FIELD_RENEW, FIELD_REMOVE)
+        )
+
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show the credentials of what was just created or asked for, then save."""
         if user_input is None:
             return self.async_show_form(
-                step_id="credentials",
+                step_id=STEP_CREDENTIALS,
                 data_schema=vol.Schema({}),
                 description_placeholders={
                     **FORM_PLACEHOLDERS,
                     "credentials": "\n\n---\n\n".join(self._credentials),
                 },
             )
-        return self.async_create_entry(data=self._options)
+        return self._save(self._options)
 
-    # ------------------------------------------------------------- the sections
+    # ------------------------------------------------------------------ helpers
 
-    def _client_sections(self, current: Mapping[str, Any]) -> dict[Any, Any]:
-        """Return the three client sections; a submitted form is shown again with its values."""
-        entered_sr = current.get(SECTION_SELF_REGISTERING) or {}
-        entered_console = current.get(SECTION_CONSOLE_APPS) or {}
-        entered_scripts = current.get(SECTION_SCRIPTS) or {}
-        console_fields: dict[Any, Any] = {}
-        self._console = {}
-        for cid, app in console_clients(self.config_entry).items():
-            # the key is the label: these fields have no translation, so the frontend
-            # shows it (as the People section does)
-            name = app[CONF_CLIENT_NAME]
-            self._console[name] = cid
-            console_fields[
-                vol.Optional(name, default=list(entered_console.get(name, app[CONF_REDIRECT_URIS])))
-            ] = _TYPED_REDIRECT_URIS
-        console_fields[
-            vol.Optional(FIELD_NEW_NAME, default=entered_console.get(FIELD_NEW_NAME, ""))
-        ] = str
-        console_fields[
-            vol.Optional(
-                FIELD_NEW_REDIRECT_URIS,
-                default=list(entered_console.get(FIELD_NEW_REDIRECT_URIS) or []),
-            )
-        ] = _TYPED_REDIRECT_URIS
-        if self._console:
-            console_fields[
-                vol.Optional(
-                    FIELD_SHOW_CREDENTIALS,
-                    default=bool(entered_console.get(FIELD_SHOW_CREDENTIALS, False)),
-                )
-            ] = BooleanSelector()
-        script_fields: dict[Any, Any] = {}
-        self._scripts = {}
-        for sid, script in script_clients(self.config_entry).items():
-            name = script[CONF_CLIENT_NAME]
-            self._scripts[name] = sid
-            script_fields[vol.Optional(name, default=entered_scripts.get(name, name))] = str
-        script_fields[
-            vol.Optional(FIELD_NEW_NAME, default=entered_scripts.get(FIELD_NEW_NAME, ""))
-        ] = str
-        if self._scripts:
-            script_fields[
-                vol.Optional(FIELD_RENEW, default=bool(entered_scripts.get(FIELD_RENEW, False)))
-            ] = BooleanSelector()
-        return {
-            vol.Optional(SECTION_SELF_REGISTERING, default={}): section(
-                vol.Schema(
-                    {
-                        vol.Optional(
-                            FIELD_REDIRECT_URIS,
-                            default=list(
-                                entered_sr.get(FIELD_REDIRECT_URIS)
-                                or current.get(CONF_CLIENT_REDIRECT_URIS)
-                                or []
-                            ),
-                        ): _PUBLISHED_REDIRECT_URIS
-                    }
-                ),
-                {"collapsed": True},
-            ),
-            vol.Optional(SECTION_CONSOLE_APPS, default={}): section(
-                vol.Schema(console_fields), {"collapsed": True}
-            ),
-            vol.Optional(SECTION_SCRIPTS, default={}): section(
-                vol.Schema(script_fields), {"collapsed": True}
-            ),
+    def _save(self, changes: dict[str, Any]) -> ConfigFlowResult:
+        """Save the changed options on top of the stored ones; the reload follows."""
+        return self.async_create_entry(data={**self.config_entry.options, **changes})
+
+    async def _async_finish(self, changes: dict[str, Any]) -> ConfigFlowResult:
+        """Save, through the credentials page when there is something to show."""
+        if self._credentials:
+            self._options = {**self.config_entry.options, **changes}
+            return await self.async_step_credentials()
+        return self._save(changes)
+
+    def _app_form(
+        self,
+        step_id: str,
+        defaults: Mapping[str, Any],
+        errors: dict[str, str],
+        extra: tuple[str, ...] = (),
+    ) -> ConfigFlowResult:
+        fields: dict[Any, Any] = {
+            vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
+            vol.Required(
+                CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
+            ): _TYPED_REDIRECT_URIS,
         }
-
-    async def _async_apply_clients(
-        self, user_input: dict[str, Any], options: dict[str, Any], errors: dict[str, str]
-    ) -> None:
-        """Turn the three sections into options, doing at Cloudflare what needs doing now."""
-        entry = self.config_entry
-        sr = user_input.get(SECTION_SELF_REGISTERING) or {}
-        console_in = user_input.get(SECTION_CONSOLE_APPS) or {}
-        scripts_in = user_input.get(SECTION_SCRIPTS) or {}
-        for key in (SECTION_SELF_REGISTERING, SECTION_CONSOLE_APPS, SECTION_SCRIPTS):
-            options.pop(key, None)
-        options[CONF_CLIENT_REDIRECT_URIS] = sorted(
-            set(_validate_uris(sr.get(FIELD_REDIRECT_URIS), errors, FIELD_REDIRECT_URIS))
+        for key in extra:
+            fields[vol.Optional(key, default=bool(defaults.get(key, False)))] = BooleanSelector()
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(fields),
+            errors=errors,
+            description_placeholders={
+                **FORM_PLACEHOLDERS,
+                CONF_CLIENT_NAME: str(defaults.get(CONF_CLIENT_NAME, "")),
+            },
         )
-        self._credentials = []
 
-        # console apps: a cleared field removes the app (its application goes at the
-        # reload), a changed one updates the application here
-        console: dict[str, dict[str, Any]] = {}
-        stored = console_clients(entry)
-        for name, cid in self._console.items():
-            uris = _validate_uris(console_in.get(name), errors, FIELD_NEW_REDIRECT_URIS)
-            if not uris or errors:
-                continue
-            app = {**stored[cid], CONF_REDIRECT_URIS: uris}
-            if uris != list(stored[cid][CONF_REDIRECT_URIS]):
-                app = await self._async_register(app, errors) or app
-            console[cid] = app
-        new_name = str(console_in.get(FIELD_NEW_NAME) or "").strip()
-        new_uris = _validate_uris(
-            console_in.get(FIELD_NEW_REDIRECT_URIS), errors, FIELD_NEW_REDIRECT_URIS
+    def _script_form(
+        self,
+        step_id: str,
+        defaults: Mapping[str, Any],
+        errors: dict[str, str],
+        extra: tuple[str, ...] = (),
+    ) -> ConfigFlowResult:
+        fields: dict[Any, Any] = {
+            vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
+        }
+        for key in extra:
+            fields[vol.Optional(key, default=bool(defaults.get(key, False)))] = BooleanSelector()
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(fields),
+            errors=errors,
+            description_placeholders={
+                **FORM_PLACEHOLDERS,
+                CONF_CLIENT_NAME: str(defaults.get(CONF_CLIENT_NAME, "")),
+                DATA_TOKEN_EXPIRES_AT: _date_only(defaults.get(DATA_TOKEN_EXPIRES_AT)),
+            },
         )
-        if new_name and not new_uris and not errors:
-            errors[FIELD_NEW_REDIRECT_URIS] = "required"
-        if new_name and new_uris and not errors:
-            registered = await self._async_register(
-                {CONF_CLIENT_NAME: new_name, CONF_REDIRECT_URIS: new_uris}, errors
-            )
-            if registered is not None:
-                cid = ulid_util.ulid_now()
-                console[cid] = registered
-                self._credentials.append(self._console_block(registered))
-        if console_in.get(FIELD_SHOW_CREDENTIALS):
-            self._credentials.extend(
-                self._console_block(app) for cid, app in console.items() if cid in stored
-            )
-        options[CONF_CONSOLE_APPS] = console
-
-        # scripts: a cleared name removes the script (its token goes at the reload), a
-        # changed one renames the token here; a renewal and a new script show their secret
-        scripts: dict[str, dict[str, Any]] = {}
-        stored_scripts = script_clients(entry)
-        renew = bool(scripts_in.get(FIELD_RENEW))
-        for name, sid in self._scripts.items():
-            new = str(scripts_in.get(name) or "").strip()
-            if not new or errors:
-                continue
-            script = {**stored_scripts[sid], CONF_CLIENT_NAME: new}
-            if new != name or renew:
-                script = await self._async_renew_token(script, renew, errors) or script
-                if renew and not errors:
-                    self._credentials.append(_script_block(script))
-            scripts[sid] = script
-        new_script = str(scripts_in.get(FIELD_NEW_NAME) or "").strip()
-        if new_script and not errors:
-            created = await self._async_create_token({CONF_CLIENT_NAME: new_script}, errors)
-            if created is not None:
-                scripts[ulid_util.ulid_now()] = created
-                self._credentials.append(_script_block(created))
-        options[CONF_SCRIPTS] = scripts
 
     def _console_block(self, app: Mapping[str, Any]) -> str:
         return _console_app_block(self.config_entry.data[DATA_TEAM_DOMAIN], app)
@@ -885,6 +1044,30 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             _LOGGER.warning("Cloudflare refused to update the service token: %s", err)
             errors["base"] = "api_error"
         return None
+
+
+def _app_input(user_input: Mapping[str, Any], errors: dict[str, str]) -> dict[str, Any]:
+    """Return a console app's name and callbacks from a form, recording what is missing."""
+    name = str(user_input.get(CONF_CLIENT_NAME) or "").strip()
+    if not name:
+        errors[CONF_CLIENT_NAME] = "required"
+    uris = _validate_uris(user_input.get(CONF_REDIRECT_URIS), errors, CONF_REDIRECT_URIS)
+    if not uris and CONF_REDIRECT_URIS not in errors:
+        errors[CONF_REDIRECT_URIS] = "required"
+    return {CONF_CLIENT_NAME: name, CONF_REDIRECT_URIS: uris}
+
+
+def _uri_key(uri: str) -> str:
+    """Return a step-id-safe key for a callback URL."""
+    return hashlib.sha1(uri.encode()).hexdigest()[:16]
+
+
+def _uri_label(uri: str) -> str:
+    """Return the app a published callback belongs to, else the URL's host."""
+    for known, label in KNOWN_REDIRECT_URIS:
+        if uri == known:
+            return label
+    return urlparse(uri).hostname or uri
 
 
 def _date_only(value: Any) -> str:

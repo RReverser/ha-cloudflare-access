@@ -122,15 +122,28 @@ CONF_EMAIL: Final = "email"
 # policy names it. Console apps and scripts are dicts by a generated id.
 CONF_CONSOLE_APPS: Final = "console_apps"
 CONF_SCRIPTS: Final = "scripts"
-SECTION_SELF_REGISTERING: Final = "self_registering"
-SECTION_CONSOLE_APPS: Final = "console_apps"
-SECTION_SCRIPTS: Final = "scripts"
-# fields of those sections besides the one per existing client
+# steps of the options flow: a menu of the general settings and the clients; the clients
+# are a menu of every client (a button each, labelled with its kind and details) and an
+# Add button that opens the menu of kinds; per kind an add page and an edit page
+STEP_SETTINGS: Final = "settings"
+STEP_CLIENTS: Final = "clients"
+STEP_ADD: Final = "add"
+STEP_SELF_REGISTERING_ADD: Final = "self_registering_add"
+STEP_SELF_REGISTERING_EDIT: Final = "self_registering_edit"
+STEP_CONSOLE_ADD: Final = "console_add"
+STEP_CONSOLE_EDIT: Final = "console_edit"
+STEP_SCRIPT_ADD: Final = "script_add"
+STEP_SCRIPT_EDIT: Final = "script_edit"
+STEP_CREDENTIALS: Final = "credentials"
+# a menu entry per existing client: the step id carries the kind and the client id
+MENU_SELF_REGISTERING_PREFIX: Final = "client_sr_"
+MENU_CONSOLE_PREFIX: Final = "client_app_"
+MENU_SCRIPT_PREFIX: Final = "client_script_"
 FIELD_REDIRECT_URIS: Final = "redirect_uris"
-FIELD_NEW_NAME: Final = "new_name"
-FIELD_NEW_REDIRECT_URIS: Final = "new_redirect_uris"
+FIELD_REDIRECT_URI: Final = "redirect_uri"
 FIELD_SHOW_CREDENTIALS: Final = "show_credentials"
 FIELD_RENEW: Final = "renew"
+FIELD_REMOVE: Final = "remove"
 # before 0.3.0 clients were config subentries: one type with the kind in its data, then
 # briefly one type per kind
 LEGACY_SUBENTRY_TYPE_CLIENT: Final = "oauth_client"

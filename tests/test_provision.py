@@ -55,15 +55,59 @@ def _uris(app: dict[str, Any]) -> list[str]:
     return [d["uri"] for d in app["destinations"]]
 
 
-async def _save_options(hass: HomeAssistant, entry: MockConfigEntry, **changes: Any) -> None:
+async def _settings_form(hass: HomeAssistant, entry: MockConfigEntry) -> dict[str, Any]:
+    """Open the options and go to the settings page; return that form's result."""
     flow = await hass.config_entries.options.async_init(entry.entry_id)
-    assert flow["type"] is FlowResultType.FORM
+    assert flow["type"] is FlowResultType.MENU and flow["step_id"] == "init", flow
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "settings"}
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "settings", result
+    return dict(result)
+
+
+async def _save_options(hass: HomeAssistant, entry: MockConfigEntry, **changes: Any) -> None:
+    form = await _settings_form(hass, entry)
     current = {CONF_GATE_ENABLED: entry.options[CONF_GATE_ENABLED]}
     result = await hass.config_entries.options.async_configure(
-        flow["flow_id"], {**current, **changes}
+        form["flow_id"], {**current, **changes}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     await hass.async_block_till_done()
+
+
+async def _drive(
+    hass: HomeAssistant, entry: MockConfigEntry, path: list[str], form: dict[str, Any]
+) -> str:
+    """Walk the options menus along `path`, submit `form`; return the credentials page, if any."""
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    assert flow["type"] is FlowResultType.MENU, flow
+    result: dict[str, Any] = dict(flow)
+    for step in path:
+        assert result["type"] is FlowResultType.MENU, result
+        assert step in result["menu_options"], (step, result["menu_options"])
+        result = dict(
+            await hass.config_entries.options.async_configure(
+                flow["flow_id"], {"next_step_id": step}
+            )
+        )
+    assert result["type"] is FlowResultType.FORM, result
+    result = dict(await hass.config_entries.options.async_configure(flow["flow_id"], form))
+    shown = ""
+    if result["type"] is FlowResultType.FORM:
+        assert result["step_id"] == "credentials", result
+        shown = result["description_placeholders"]["credentials"]
+        result = dict(await hass.config_entries.options.async_configure(flow["flow_id"], {}))
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    return shown
+
+
+def _sr_key(uri: str) -> str:
+    """The clients menu's step id of a self-registering app's URL (as the flow keys it)."""
+    from custom_components.cloudflare_access_relay.config_flow import _uri_key
+
+    return f"client_sr_{_uri_key(uri)}"
 
 
 def _console_app(entry: MockConfigEntry) -> tuple[str, dict[str, Any]]:
@@ -91,21 +135,29 @@ def _shown(markdown: str) -> dict[str, str]:
     return out
 
 
-async def _save_clients(hass: HomeAssistant, entry: MockConfigEntry, **sections: Any) -> str:
-    """Submit the options form with client sections; return the credentials page, if any."""
-    flow = await hass.config_entries.options.async_init(entry.entry_id)
-    assert flow["type"] is FlowResultType.FORM
-    result = await hass.config_entries.options.async_configure(
-        flow["flow_id"], {CONF_GATE_ENABLED: entry.options[CONF_GATE_ENABLED], **sections}
-    )
-    shown = ""
-    if result["type"] is FlowResultType.FORM:
-        assert result["step_id"] == "credentials", result
-        shown = result["description_placeholders"]["credentials"]
-        result = await hass.config_entries.options.async_configure(flow["flow_id"], {})
-    assert result["type"] is FlowResultType.CREATE_ENTRY, result
-    await hass.async_block_till_done()
-    return shown
+async def _add_self_registering(
+    hass: HomeAssistant, entry: MockConfigEntry, uris: list[str]
+) -> None:
+    await _drive(hass, entry, ["clients", "add", "self_registering_add"], {"redirect_uris": uris})
+
+
+async def _edit_self_registering(
+    hass: HomeAssistant, entry: MockConfigEntry, uri: str, **fields: Any
+) -> None:
+    await _drive(hass, entry, ["clients", _sr_key(uri)], {"redirect_uri": uri, **fields})
+
+
+async def _edit_console(
+    hass: HomeAssistant, entry: MockConfigEntry, cid: str, **fields: Any
+) -> str:
+    app = entry.options["console_apps"][cid]
+    form = {"name": app["name"], "redirect_uris": list(app["redirect_uris"]), **fields}
+    return await _drive(hass, entry, ["clients", f"client_app_{cid}"], form)
+
+
+async def _edit_script(hass: HomeAssistant, entry: MockConfigEntry, sid: str, **fields: Any) -> str:
+    form = {"name": entry.options["scripts"][sid]["name"], **fields}
+    return await _drive(hass, entry, ["clients", f"client_script_{sid}"], form)
 
 
 async def _settle(hass: HomeAssistant, rounds: int = 1) -> None:
@@ -229,13 +281,9 @@ async def test_a_script_client_gets_a_service_token_the_gate_accepts(
     ]
     assert gate["policies"][1]["include"] == [{"service_token": {"token_id": token["id"]}}]
 
-    # its field renames the token; ticking it under Renew extends the validity and shows
-    # the credentials again
-    again = _shown(
-        await _save_clients(
-            hass, access.entry, scripts={"Backup job": "Nightly backup", "renew": True}
-        )
-    )
+    # its page renames the token; Renew extends the validity and shows the credentials again
+    sid = _script(access.entry)[0]
+    again = _shown(await _edit_script(hass, access.entry, sid, name="Nightly backup", renew=True))
     assert again["client_secret"] == shown["client_secret"]
     assert again["expires_at"] == "2028-09-22"
     assert token["name"] == f"ha-access: client {HOSTNAME} Nightly backup"
@@ -244,8 +292,8 @@ async def test_a_script_client_gets_a_service_token_the_gate_accepts(
         {"service_token": {"token_id": token["id"]}}
     ], "the same token, so the gate keeps its rule"
 
-    # clearing the field removes the script: the gate drops its rule, then the token goes
-    assert not await _save_clients(hass, access.entry, scripts={"Nightly backup": ""})
+    # Remove on its page: the gate drops its rule, then the token goes
+    assert not await _edit_script(hass, access.entry, sid, remove=True)
     assert access.entry.options["scripts"] == {}
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
     assert cf.service_tokens == {}
@@ -322,7 +370,7 @@ async def test_a_person_with_an_address_is_required(
     assert fake_cloudflare.writes() == []
 
     # the options' People section takes the address, even while the entry is in error
-    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = await _settings_form(hass, entry)
     people = flow["data_schema"].schema[
         next(k for k in flow["data_schema"].schema if k == "people")
     ]
@@ -343,7 +391,7 @@ async def test_a_person_with_an_address_is_required(
     assert fake_cloudflare.by_name(GATE)["policies"][0]["include"] == [
         {"email": {"email": "plain@example.com"}}
     ]
-    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = await _settings_form(hass, entry)
     people = flow["data_schema"].schema[
         next(k for k in flow["data_schema"].schema if k == "people")
     ]
@@ -358,7 +406,7 @@ async def test_a_person_with_an_address_is_required(
     # them present, Plain's address can be dropped and the policy follows
     await add_user(hass, "eve@example.com", name="Eve")
     await _settle(hass)
-    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = await _settings_form(hass, entry)
     people = flow["data_schema"].schema[
         next(k for k in flow["data_schema"].schema if k == "people")
     ]
@@ -538,8 +586,8 @@ async def _register_client(
 ) -> dict[str, str]:
     """Add a console app through the options form; return what its credentials page showed."""
     assert entry.supported_subentry_types == {}, "clients are options, not subentries"
-    shown = await _save_clients(
-        hass, entry, console_apps={"new_name": name, "new_redirect_uris": uris}
+    shown = await _drive(
+        hass, entry, ["clients", "add", "console_add"], {"name": name, "redirect_uris": uris}
     )
     assert shown, "a new app shows its credentials"
     return _shown(shown)
@@ -549,7 +597,7 @@ async def _register_script(
     hass: HomeAssistant, entry: MockConfigEntry, name: str
 ) -> dict[str, str]:
     """Add a script through the options form; return what its credentials page showed."""
-    shown = await _save_clients(hass, entry, scripts={"new_name": name})
+    shown = await _drive(hass, entry, ["clients", "add", "script_add"], {"name": name})
     assert shown, "a new script shows its credentials"
     return _shown(shown)
 
@@ -589,8 +637,8 @@ async def test_registered_client_gets_an_access_application_and_the_gate_accepts
     gate = cf.by_name(GATE)
     assert gate["policies"][-1]["include"] == [{"linked_app_token": {"app_uid": client["id"]}}]
 
-    # clearing the app's field removes its application and the rule, in that order of safety
-    assert not await _save_clients(hass, access.entry, console_apps={"Google Home": []})
+    # Remove on its page removes its application and the rule, in that order of safety
+    assert not await _edit_console(hass, access.entry, _console_app(access.entry)[0], remove=True)
     assert access.entry.options["console_apps"] == {}
     assert cf.by_name(f"ha-access: client {HOSTNAME} Google Home") is None
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
@@ -645,11 +693,7 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
     assert dcr()["allowed_uris"] == []
     assert cf.by_name(GATE)["oauth_configuration"]["grant"] == {"session_duration": "720h"}
     apps_before = len(cf.apps)
-    assert not await _save_clients(
-        hass,
-        access.entry,
-        self_registering={"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]},
-    )
+    await _add_self_registering(hass, access.entry, ["https://claude.ai/api/mcp/auth_callback"])
     assert dcr()["allowed_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert len(cf.apps) == apps_before, "nothing is created for a self-registering app"
     assert [p["name"] for p in cf.by_name(GATE)["policies"]] == ["ha-access: allow"]
@@ -657,14 +701,27 @@ async def test_self_registering_client_is_a_redirect_url_on_the_gate(
         "https://claude.ai/api/mcp/auth_callback"
     ]
 
-    # a changed URL follows on the gate
-    assert not await _save_clients(
-        hass, access.entry, self_registering={"redirect_uris": ["https://claude.ai/*"]}
+    # the clients menu lists it by the app's name; a changed URL follows on the gate
+    flow = await hass.config_entries.options.async_init(access.entry.entry_id)
+    menu = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "clients"}
+    )
+    assert menu["menu_options"] == {
+        "add": "",
+        _sr_key("https://claude.ai/api/mcp/auth_callback"): (
+            "Claude · self-registering app · https://claude.ai/api/mcp/auth_callback"
+        ),
+    }
+    await _edit_self_registering(
+        hass,
+        access.entry,
+        "https://claude.ai/api/mcp/auth_callback",
+        redirect_uri="https://claude.ai/*",
     )
     assert dcr()["allowed_uris"] == ["https://claude.ai/*"]
 
-    # an emptied list takes the URL off the gate: no new login, nothing else to revoke
-    assert not await _save_clients(hass, access.entry, self_registering={"redirect_uris": []})
+    # Remove takes the URL off the gate: no new login, nothing else to revoke
+    await _edit_self_registering(hass, access.entry, "https://claude.ai/*", remove=True)
     assert dcr()["allowed_uris"] == []
 
 
