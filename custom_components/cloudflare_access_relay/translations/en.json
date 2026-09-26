@@ -257,7 +257,7 @@
         },
         "reconfigure": {
           "title": "Change the app",
-          "description": "Saving updates the app's Access login. The next page shows the credentials again.",
+          "description": "Saving updates the app's Access login. The next page shows the client ID again; Cloudflare only returns the secret once, when the app is created.",
           "data": {
             "name": "Name",
             "redirect_uris": "Callback URLs"
@@ -269,7 +269,7 @@
         },
         "credentials": {
           "title": "Credentials for {name}",
-          "description": "Enter these in the console (e.g. Google Home account linking, an Alexa skill).\n\nThe secret is shown only here and when you reconfigure the app.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
+          "description": "Enter these in the console (e.g. Google Home account linking, an Alexa skill).\n\nThe secret is shown only here, when the app is created; reconfiguring shows the client ID again but not the secret.\n\nClient ID: `{client_id}`\n\nClient secret: `{client_secret}`\n\nAuthorization URL: `{authorization_url}`\n\nToken URL: `{token_url}`\n\nUser info URL: `{userinfo_url}`\n\nScopes: `openid email profile`"
         }
       },
       "error": {

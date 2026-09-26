@@ -740,7 +740,7 @@ class ConsoleAppFlow(_AppFlow):
                 CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
                 DATA_CLIENT_ID: data[DATA_CLIENT_ID] or "",
                 # None after an update: Cloudflare returns the secret once, at creation
-                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unchanged)",
+                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(shown only when created)",
                 **_client_endpoints(team_domain, data[DATA_CLIENT_ID] or ""),
             },
         )
