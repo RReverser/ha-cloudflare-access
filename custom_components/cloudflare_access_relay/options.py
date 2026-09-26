@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
     OAuth2TokenRequestReauthError,
@@ -22,15 +22,15 @@ from .cloudflare_api import (
 )
 from .const import (
     APP_TAG_FMT,
-    CLIENT_SUBENTRY_TYPES,
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_CLIENT_REDIRECT_URIS,
+    CONF_CONSOLE_APPS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
-    CONF_REDIRECT_URIS,
+    CONF_SCRIPTS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_SESSION_DURATION,
     DATA_TOKEN,
@@ -40,9 +40,6 @@ from .const import (
     DEFAULT_SESSION_DURATION,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
-    SUBENTRY_TYPE_CONSOLE,
-    SUBENTRY_TYPE_SCRIPT,
-    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 
 DEFAULT_OPTIONS: dict[str, Any] = {
@@ -50,6 +47,9 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     CONF_SESSION_DURATION: DEFAULT_SESSION_DURATION,
     CONF_EXTRA_BYPASS_PATHS: [],
     CONF_DELETE_OBJECTS_ON_REMOVE: DEFAULT_DELETE_OBJECTS_ON_REMOVE,
+    CONF_CLIENT_REDIRECT_URIS: [],
+    CONF_CONSOLE_APPS: {},
+    CONF_SCRIPTS: {},
 }
 
 
@@ -85,48 +85,25 @@ def app_tag(entry: ConfigEntry) -> str:
     return APP_TAG_FMT.format(entry_id=entry.entry_id.lower())
 
 
-def client_subentries(
-    entry: ConfigEntry, subentry_type: str | None = None
-) -> dict[str, ConfigSubentry]:
-    """Return the client subentries by subentry id, of one kind when given."""
-    types = CLIENT_SUBENTRY_TYPES if subentry_type is None else (subentry_type,)
-    return {sid: sub for sid, sub in entry.subentries.items() if sub.subentry_type in types}
+def console_clients(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
+    """Return the apps whose console takes a client id and secret, by id: each has an application."""
+    return {cid: dict(app) for cid, app in (entry.options.get(CONF_CONSOLE_APPS) or {}).items()}
 
 
-def self_registering_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the apps that register themselves at the gate."""
-    return client_subentries(entry, SUBENTRY_TYPE_SELF_REGISTERING)
-
-
-def console_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the apps whose console takes a client id and secret: each has an application."""
-    return client_subentries(entry, SUBENTRY_TYPE_CONSOLE)
-
-
-def script_clients(entry: ConfigEntry) -> dict[str, ConfigSubentry]:
-    """Return the clients that run on their own with a service token."""
-    return client_subentries(entry, SUBENTRY_TYPE_SCRIPT)
+def script_clients(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
+    """Return the scripts, by id: each has a service token."""
+    return {sid: dict(s) for sid, s in (entry.options.get(CONF_SCRIPTS) or {}).items()}
 
 
 def client_redirect_uris(entry: ConfigEntry) -> list[str]:
-    """Return the self-registering clients' callbacks: what the gate lets register."""
-    return sorted(
-        {
-            uri
-            for sub in self_registering_clients(entry).values()
-            for uri in sub.data[CONF_REDIRECT_URIS]
-        }
-    )
+    """Return the self-registering apps' callbacks: what the gate lets register."""
+    return sorted({u.strip() for u in entry.options.get(CONF_CLIENT_REDIRECT_URIS) or [] if u})
 
 
 def service_token_ids(entry: ConfigEntry) -> list[str]:
     """Return the script clients' service token ids: what the gate's Service Auth rule names."""
     return sorted(
-        {
-            sub.data[DATA_TOKEN_ID]
-            for sub in script_clients(entry).values()
-            if sub.data.get(DATA_TOKEN_ID)
-        }
+        {s[DATA_TOKEN_ID] for s in script_clients(entry).values() if s.get(DATA_TOKEN_ID)}
     )
 
 

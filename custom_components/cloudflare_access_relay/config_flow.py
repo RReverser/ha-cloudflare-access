@@ -9,12 +9,10 @@ from typing import Any
 
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
-    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlowResult,
     ConfigSubentryFlow,
     OptionsFlowWithReload,
-    SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
@@ -33,6 +31,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
+from homeassistant.util import ulid as ulid_util
 import voluptuous as vol
 
 from .application_credentials import async_register_project_client
@@ -47,12 +46,15 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_API_TOKEN,
     CONF_CLIENT_NAME,
+    CONF_CLIENT_REDIRECT_URIS,
+    CONF_CONSOLE_APPS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EXTRA_BYPASS_PATHS,
     CONF_GATE_ENABLED,
     CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
     CONF_REDIRECT_URIS,
+    CONF_SCRIPTS,
     CONF_SESSION_DURATION,
     DATA_CLIENT_APP_ID,
     DATA_CLIENT_ID,
@@ -65,22 +67,29 @@ from .const import (
     DEFAULT_GATE_ENABLED,
     DEFAULT_SESSION_DURATION,
     DOMAIN,
+    FIELD_NEW_NAME,
+    FIELD_NEW_REDIRECT_URIS,
+    FIELD_REDIRECT_URIS,
+    FIELD_RENEW,
+    FIELD_SHOW_CREDENTIALS,
     FORM_PLACEHOLDERS,
     KNOWN_REDIRECT_URIS,
     OPTION_APP_TAG,
     SECTION_BYPASS,
+    SECTION_CONSOLE_APPS,
     SECTION_PEOPLE,
+    SECTION_SCRIPTS,
+    SECTION_SELF_REGISTERING,
     SERVICE_TOKEN_NAME_FMT,
-    SUBENTRY_TYPE_CONSOLE,
-    SUBENTRY_TYPE_SCRIPT,
-    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 from .options import (
     api_for,
     async_provisioning_options,
+    console_clients,
     effective_options,
     external_hostname,
     provisioning_options,
+    script_clients,
 )
 from .provision import desired_client_app
 from .users import (
@@ -299,7 +308,7 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     VERSION = 1
     # 2: options and subentries of earlier versions are migrated; 3: the hostname is the
     # External URL, no longer an option (`async_migrate_entry`).
-    MINOR_VERSION = 5
+    MINOR_VERSION = 6
 
     def __init__(self) -> None:
         """Start with no credential."""
@@ -324,17 +333,13 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        """Return the subentry flows: one per client kind, so each row is labelled with it.
+        """Return no subentry flows: clients are sections of the options form.
 
-        The login e-mail rows have no flow of their own: a row is created per person by
-        the integration, filled in through a repair issue, and cleared by deleting it.
-        Listing the type here would put an "add" button on the page that has no use.
+        The login e-mail rows have no flow of their own either: a row is created per
+        person by the integration, filled in through a repair issue, and cleared by
+        deleting it. Listing a type here would put an "add" button on the page.
         """
-        return {
-            SUBENTRY_TYPE_SELF_REGISTERING: SelfRegisteringAppFlow,
-            SUBENTRY_TYPE_CONSOLE: ConsoleAppFlow,
-            SUBENTRY_TYPE_SCRIPT: ScriptFlow,
-        }
+        return {}
 
     # ----------------------------------------------------------------- credentials
 
@@ -521,13 +526,64 @@ class CloudflareAccessRelayConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         return await self.async_step_pick_implementation()
 
 
+def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
+    base = f"https://{team_domain}/cdn-cgi/access/sso/oidc/{client_id}"
+    return {
+        "authorization_url": f"{base}/authorization",
+        "token_url": f"{base}/token",
+        "userinfo_url": f"{base}/userinfo",
+    }
+
+
+def _console_app_block(team_domain: str, app: Mapping[str, Any]) -> str:
+    """One console app's credentials, as the credentials page shows them."""
+    endpoints = _client_endpoints(team_domain, app.get(DATA_CLIENT_ID) or "")
+    return (
+        f"**{app[CONF_CLIENT_NAME]}**\n\n"
+        f"Client ID: `{app.get(DATA_CLIENT_ID) or ''}`\n\n"
+        f"Client secret: `{app.get(DATA_CLIENT_SECRET) or '(unknown)'}`\n\n"
+        f"Authorization URL: `{endpoints['authorization_url']}`\n\n"
+        f"Token URL: `{endpoints['token_url']}`\n\n"
+        f"User info URL: `{endpoints['userinfo_url']}`\n\n"
+        "Scopes: `openid email profile`"
+    )
+
+
+def _script_block(script: Mapping[str, Any]) -> str:
+    """One script's credentials, as the credentials page shows them."""
+    return (
+        f"**{script[CONF_CLIENT_NAME]}** (valid until {_date_only(script.get(DATA_TOKEN_EXPIRES_AT))})"
+        f"\n\nClient ID: `{script.get(DATA_CLIENT_ID) or ''}`\n\n"
+        f"Client secret: `{script.get(DATA_CLIENT_SECRET) or '(unknown)'}`"
+    )
+
+
+def _validate_uris(values: list[str] | None, errors: dict[str, str], key: str) -> list[str]:
+    uris = _clean_list(values)
+    if any(not u.startswith("https://") for u in uris):
+        errors[key] = "invalid_redirect_uri"
+    return uris
+
+
 class OptionsFlowHandler(OptionsFlowWithReload):
-    """Everything but the credentials; saving reloads and re-provisions."""
+    """Everything but the credentials; saving reloads and re-provisions.
+
+    The clients are three sections of the one form: the self-registering apps' callback
+    list, one field per console app and per script, and fields for a new one. What
+    needs Cloudflare (a new console app's application, a new script's token, a renewal)
+    is done here, so the credentials can be shown on the page after Save; the rest is
+    reconciled by the reload.
+    """
 
     def __init__(self) -> None:
-        """Start with no people known."""
+        """Start with no people and no clients known."""
         super().__init__()
         self._people: dict[str, str] = {}
+        # field label (the client's name) to client id, per section
+        self._console: dict[str, str] = {}
+        self._scripts: dict[str, str] = {}
+        self._options: dict[str, Any] = {}
+        self._credentials: list[str] = []
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and process the options form."""
@@ -540,6 +596,11 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             if not errors and not await allowed_emails(self.hass, emails):
                 errors["base"] = "no_allowed_users"
             if not errors:
+                await self._async_apply_clients(user_input, options, errors)
+            if not errors:
+                self._options = options
+                if self._credentials:
+                    return await self.async_step_credentials()
                 return self.async_create_entry(data=options)
             current = {**current, **user_input}
         people, self._people = await _people_section(
@@ -553,6 +614,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 ): BooleanSelector(),
                 **people,
                 **await _advanced_schema(self.hass, current),
+                **self._client_sections(current),
             }
         )
         return self.async_show_form(
@@ -566,153 +628,182 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             },
         )
 
-
-# ------------------------------------------------------------------ OAuth clients
-
-
-def _client_endpoints(team_domain: str, client_id: str) -> dict[str, str]:
-    base = f"https://{team_domain}/cdn-cgi/access/sso/oidc/{client_id}"
-    return {
-        "authorization_url": f"{base}/authorization",
-        "token_url": f"{base}/token",
-        "userinfo_url": f"{base}/userinfo",
-    }
-
-
-class _ClientFlow(ConfigSubentryFlow):
-    """What the three client kinds share: a name, and how a finished client is stored."""
-
-    _data: dict[str, Any]
-
-    def _store(self, data: dict[str, Any]) -> SubentryFlowResult:
-        """Create or update the subentry."""
-        if self.source == SOURCE_RECONFIGURE:
-            entry = self._get_entry()
-            sub = self._get_reconfigure_subentry()
-            # Merge, skipping None: an updated console app's secret is not returned again
-            # and the stored one must stay.
-            return self.async_update_and_abort(
-                entry,
-                sub,
-                title=data[CONF_CLIENT_NAME],
-                data_updates={k: v for k, v in data.items() if v is not None},
-            )
-        return self.async_create_entry(title=data[CONF_CLIENT_NAME], data=data)
-
-
-class _AppFlow(_ClientFlow):
-    """An app that logs people in: a name and the callback URLs its own side shows."""
-
-    _selector: SelectSelector
-
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Add the app."""
-        return await self._async_handle("user", user_input, {})
-
-    async def async_step_reconfigure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Rename the app or change its callbacks."""
-        return await self._async_handle(
-            "reconfigure", user_input, self._get_reconfigure_subentry().data
-        )
-
-    async def _async_handle(
-        self, step_id: str, user_input: dict[str, Any] | None, current: Mapping[str, Any]
-    ) -> SubentryFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            uris = _clean_list(user_input.get(CONF_REDIRECT_URIS))
-            if not uris:
-                errors[CONF_REDIRECT_URIS] = "required"
-            elif any(not u.startswith("https://") for u in uris):
-                errors[CONF_REDIRECT_URIS] = "invalid_redirect_uri"
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            if not errors:
-                data = {**current, CONF_CLIENT_NAME: name, CONF_REDIRECT_URIS: uris}
-                result = await self._async_finish(data, errors)
-                if result is not None:
-                    return result
-        defaults = user_input or current
-        return self.async_show_form(
-            step_id=step_id,
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_CLIENT_NAME, default=defaults.get(CONF_CLIENT_NAME, "")): str,
-                    vol.Required(
-                        CONF_REDIRECT_URIS, default=list(defaults.get(CONF_REDIRECT_URIS) or [])
-                    ): self._selector,
-                }
-            ),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
-
-    async def _async_finish(
-        self, data: dict[str, Any], errors: dict[str, str]
-    ) -> SubentryFlowResult | None:
-        """Finish with a valid name and callbacks; None (with errors set) shows the form again."""
-        raise NotImplementedError
-
-
-class SelfRegisteringAppFlow(_AppFlow):
-    """An app that registers itself (Claude, ChatGPT).
-
-    Nothing is created: the callbacks reach the gate's allowed list at the next
-    reconcile, and that list is all Cloudflare keeps about such an app.
-    """
-
-    _selector = _PUBLISHED_REDIRECT_URIS
-
-    async def _async_finish(
-        self, data: dict[str, Any], errors: dict[str, str]
-    ) -> SubentryFlowResult | None:
-        return self._store(data)
-
-
-class ConsoleAppFlow(_AppFlow):
-    """An app whose console asks for a client ID and secret (Google Home, Alexa).
-
-    It gets an Access for SaaS application; the page after the form shows the
-    credentials the console takes.
-    """
-
-    _selector = _TYPED_REDIRECT_URIS
-
-    async def _async_finish(
-        self, data: dict[str, Any], errors: dict[str, str]
-    ) -> SubentryFlowResult | None:
-        registered = await self._async_register(data, errors, data.get(DATA_CLIENT_APP_ID))
-        if registered is None:
-            return None
-        self._data = registered
-        return self._credentials(registered)
-
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Store the app once its credentials were shown."""
+    ) -> ConfigFlowResult:
+        """Show the credentials of what was just created or asked for, then save."""
         if user_input is None:
-            return self._credentials(self._data)
-        return self._store(self._data)
+            return self.async_show_form(
+                step_id="credentials",
+                data_schema=vol.Schema({}),
+                description_placeholders={
+                    **FORM_PLACEHOLDERS,
+                    "credentials": "\n\n---\n\n".join(self._credentials),
+                },
+            )
+        return self.async_create_entry(data=self._options)
+
+    # ------------------------------------------------------------- the sections
+
+    def _client_sections(self, current: Mapping[str, Any]) -> dict[Any, Any]:
+        """Return the three client sections; a submitted form is shown again with its values."""
+        entered_sr = current.get(SECTION_SELF_REGISTERING) or {}
+        entered_console = current.get(SECTION_CONSOLE_APPS) or {}
+        entered_scripts = current.get(SECTION_SCRIPTS) or {}
+        console_fields: dict[Any, Any] = {}
+        self._console = {}
+        for cid, app in console_clients(self.config_entry).items():
+            # the key is the label: these fields have no translation, so the frontend
+            # shows it (as the People section does)
+            name = app[CONF_CLIENT_NAME]
+            self._console[name] = cid
+            console_fields[
+                vol.Optional(name, default=list(entered_console.get(name, app[CONF_REDIRECT_URIS])))
+            ] = _TYPED_REDIRECT_URIS
+        console_fields[
+            vol.Optional(FIELD_NEW_NAME, default=entered_console.get(FIELD_NEW_NAME, ""))
+        ] = str
+        console_fields[
+            vol.Optional(
+                FIELD_NEW_REDIRECT_URIS,
+                default=list(entered_console.get(FIELD_NEW_REDIRECT_URIS) or []),
+            )
+        ] = _TYPED_REDIRECT_URIS
+        if self._console:
+            console_fields[
+                vol.Optional(
+                    FIELD_SHOW_CREDENTIALS,
+                    default=list(entered_console.get(FIELD_SHOW_CREDENTIALS) or []),
+                )
+            ] = _names_selector(self._console)
+        script_fields: dict[Any, Any] = {}
+        self._scripts = {}
+        for sid, script in script_clients(self.config_entry).items():
+            name = script[CONF_CLIENT_NAME]
+            self._scripts[name] = sid
+            script_fields[vol.Optional(name, default=entered_scripts.get(name, name))] = str
+        script_fields[
+            vol.Optional(FIELD_NEW_NAME, default=entered_scripts.get(FIELD_NEW_NAME, ""))
+        ] = str
+        if self._scripts:
+            script_fields[
+                vol.Optional(FIELD_RENEW, default=list(entered_scripts.get(FIELD_RENEW) or []))
+            ] = _names_selector(self._scripts)
+        return {
+            vol.Optional(SECTION_SELF_REGISTERING, default={}): section(
+                vol.Schema(
+                    {
+                        vol.Optional(
+                            FIELD_REDIRECT_URIS,
+                            default=list(
+                                entered_sr.get(FIELD_REDIRECT_URIS)
+                                or current.get(CONF_CLIENT_REDIRECT_URIS)
+                                or []
+                            ),
+                        ): _PUBLISHED_REDIRECT_URIS
+                    }
+                ),
+                {"collapsed": True},
+            ),
+            vol.Optional(SECTION_CONSOLE_APPS, default={}): section(
+                vol.Schema(console_fields), {"collapsed": True}
+            ),
+            vol.Optional(SECTION_SCRIPTS, default={}): section(
+                vol.Schema(script_fields), {"collapsed": True}
+            ),
+        }
+
+    async def _async_apply_clients(
+        self, user_input: dict[str, Any], options: dict[str, Any], errors: dict[str, str]
+    ) -> None:
+        """Turn the three sections into options, doing at Cloudflare what needs doing now."""
+        entry = self.config_entry
+        sr = user_input.get(SECTION_SELF_REGISTERING) or {}
+        console_in = user_input.get(SECTION_CONSOLE_APPS) or {}
+        scripts_in = user_input.get(SECTION_SCRIPTS) or {}
+        for key in (SECTION_SELF_REGISTERING, SECTION_CONSOLE_APPS, SECTION_SCRIPTS):
+            options.pop(key, None)
+        options[CONF_CLIENT_REDIRECT_URIS] = sorted(
+            set(_validate_uris(sr.get(FIELD_REDIRECT_URIS), errors, FIELD_REDIRECT_URIS))
+        )
+        self._credentials = []
+
+        # console apps: a cleared field removes the app (its application goes at the
+        # reload), a changed one updates the application here
+        console: dict[str, dict[str, Any]] = {}
+        stored = console_clients(entry)
+        for name, cid in self._console.items():
+            uris = _validate_uris(console_in.get(name), errors, FIELD_NEW_REDIRECT_URIS)
+            if not uris or errors:
+                continue
+            app = {**stored[cid], CONF_REDIRECT_URIS: uris}
+            if uris != list(stored[cid][CONF_REDIRECT_URIS]):
+                app = await self._async_register(app, errors) or app
+            console[cid] = app
+        new_name = str(console_in.get(FIELD_NEW_NAME) or "").strip()
+        new_uris = _validate_uris(
+            console_in.get(FIELD_NEW_REDIRECT_URIS), errors, FIELD_NEW_REDIRECT_URIS
+        )
+        if new_name and not new_uris and not errors:
+            errors[FIELD_NEW_REDIRECT_URIS] = "required"
+        if new_name and new_uris and not errors:
+            registered = await self._async_register(
+                {CONF_CLIENT_NAME: new_name, CONF_REDIRECT_URIS: new_uris}, errors
+            )
+            if registered is not None:
+                cid = ulid_util.ulid_now()
+                console[cid] = registered
+                self._credentials.append(self._console_block(registered))
+        for name in console_in.get(FIELD_SHOW_CREDENTIALS) or []:
+            shown = self._console.get(name)
+            if shown is not None and shown in console:
+                self._credentials.append(self._console_block(console[shown]))
+        options[CONF_CONSOLE_APPS] = console
+
+        # scripts: a cleared name removes the script (its token goes at the reload), a
+        # changed one renames the token here; a renewal and a new script show their secret
+        scripts: dict[str, dict[str, Any]] = {}
+        stored_scripts = script_clients(entry)
+        renew = set(scripts_in.get(FIELD_RENEW) or [])
+        for name, sid in self._scripts.items():
+            new = str(scripts_in.get(name) or "").strip()
+            if not new or errors:
+                continue
+            script = {**stored_scripts[sid], CONF_CLIENT_NAME: new}
+            if new != name or name in renew:
+                script = await self._async_renew_token(script, name in renew, errors) or script
+                if name in renew and not errors:
+                    self._credentials.append(_script_block(script))
+            scripts[sid] = script
+        new_script = str(scripts_in.get(FIELD_NEW_NAME) or "").strip()
+        if new_script and not errors:
+            created = await self._async_create_token({CONF_CLIENT_NAME: new_script}, errors)
+            if created is not None:
+                scripts[ulid_util.ulid_now()] = created
+                self._credentials.append(_script_block(created))
+        options[CONF_SCRIPTS] = scripts
+
+    def _console_block(self, app: Mapping[str, Any]) -> str:
+        return _console_app_block(self.config_entry.data[DATA_TEAM_DOMAIN], app)
+
+    # --------------------------------------------------------------- Cloudflare
 
     async def _async_register(
-        self, data: dict[str, Any], errors: dict[str, str], app_id: str | None
+        self, app: dict[str, Any], errors: dict[str, str]
     ) -> dict[str, Any] | None:
-        """Create or update the app's Access application; return the data to store."""
-        entry = self._get_entry()
+        """Create or update a console app's Access application; return the record to store."""
+        entry = self.config_entry
         emails = await allowed_emails(self.hass, login_emails(entry))
         try:
             api = await api_for(self.hass, entry)
             options = await async_provisioning_options(self.hass, entry, api)
             desired = desired_client_app(
-                options, emails, data[CONF_CLIENT_NAME], data[CONF_REDIRECT_URIS]
+                options, emails, app[CONF_CLIENT_NAME], app[CONF_REDIRECT_URIS]
             )
             # ordering: the tag exists before the application that carries it is written
             await api.ensure_tag(options[OPTION_APP_TAG])
-            app = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
+            app_id = app.get(DATA_CLIENT_APP_ID)
+            created = await (api.update_app(app_id, desired) if app_id else api.create_app(desired))
         except CloudflareAuthError:
             errors["base"] = "invalid_auth"
         except CloudflareUnavailableError:
@@ -721,84 +812,24 @@ class ConsoleAppFlow(_AppFlow):
             _LOGGER.warning("Cloudflare rejected the client registration: %s", err)
             errors["base"] = "api_error"
         else:
-            saas = app.get("saas_app") or {}
-            # The secret comes back only when the application is created (docs/verified-cloudflare-behaviour.md); after an update it is None here.
+            saas = created.get("saas_app") or {}
+            # The secret comes back only when the application is created (docs/verified-cloudflare-behaviour.md); after an update the stored one stays.
             return {
-                **data,
-                DATA_CLIENT_APP_ID: app["id"],
+                **app,
+                DATA_CLIENT_APP_ID: created["id"],
                 DATA_CLIENT_ID: saas.get("client_id"),
-                DATA_CLIENT_SECRET: saas.get("client_secret"),
+                DATA_CLIENT_SECRET: saas.get("client_secret") or app.get(DATA_CLIENT_SECRET),
             }
         return None
 
-    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
-        team_domain = self._get_entry().data[DATA_TEAM_DOMAIN]
-        return self.async_show_form(
-            step_id="credentials",
-            data_schema=vol.Schema({}),
-            description_placeholders={
-                CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
-                DATA_CLIENT_ID: data[DATA_CLIENT_ID] or "",
-                # None after an update: Cloudflare returns the secret once, at creation
-                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unchanged)",
-                **_client_endpoints(team_domain, data[DATA_CLIENT_ID] or ""),
-            },
-        )
-
-
-class ScriptFlow(_ClientFlow):
-    """A script or service with nobody behind it: an Access service token."""
-
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        """Ask for the name, then create the token and show the credentials."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            else:
-                self._data = {CONF_CLIENT_NAME: name}
-                return await self._async_create_token(errors)
-        return self._form("user", (user_input or {}).get(CONF_CLIENT_NAME, ""), errors)
-
-    async def async_step_reconfigure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Rename the script; its token is renamed and its validity extended."""
-        current = self._get_reconfigure_subentry().data
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            name = user_input.get(CONF_CLIENT_NAME, "").strip()
-            if not name:
-                errors[CONF_CLIENT_NAME] = "required"
-            else:
-                self._data = {**current, CONF_CLIENT_NAME: name}
-                return await self._async_renew_token(errors)
-        defaults = user_input or current
-        return self._form("reconfigure", defaults.get(CONF_CLIENT_NAME, ""), errors)
-
-    async def async_step_credentials(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Store the script once its credentials were shown."""
-        if user_input is None:
-            return self._credentials(self._data)
-        return self._store(self._data)
-
-    def _form(self, step_id: str, name: str, errors: dict[str, str]) -> SubentryFlowResult:
-        return self.async_show_form(
-            step_id=step_id,
-            data_schema=vol.Schema({vol.Required(CONF_CLIENT_NAME, default=name): str}),
-            errors=errors,
-            description_placeholders=FORM_PLACEHOLDERS,
-        )
-
-    async def _async_create_token(self, errors: dict[str, str]) -> SubentryFlowResult:
-        """Create the service token and show its credentials."""
-        entry = self._get_entry()
+    async def _async_create_token(
+        self, script: dict[str, Any], errors: dict[str, str]
+    ) -> dict[str, Any] | None:
+        """Create a script's service token; return the record to store."""
+        entry = self.config_entry
         options = provisioning_options(self.hass, entry)
         name = SERVICE_TOKEN_NAME_FMT.format(
-            hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]
+            hostname=options[CONF_HOSTNAME], name=script[CONF_CLIENT_NAME]
         )
         try:
             api = await api_for(self.hass, entry)
@@ -815,68 +846,56 @@ class ScriptFlow(_ClientFlow):
             _LOGGER.warning("Cloudflare refused to create the service token: %s", err)
             errors["base"] = "api_error"
         else:
-            self._data.update(
-                {
-                    DATA_TOKEN_ID: token["id"],
-                    DATA_CLIENT_ID: token.get("client_id"),
-                    DATA_CLIENT_SECRET: token.get("client_secret"),
-                    DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
-                }
-            )
-            return self._credentials(self._data)
-        return self._form("user", self._data[CONF_CLIENT_NAME], errors)
+            return {
+                **script,
+                DATA_TOKEN_ID: token["id"],
+                DATA_CLIENT_ID: token.get("client_id"),
+                DATA_CLIENT_SECRET: token.get("client_secret"),
+                DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
+            }
+        return None
 
-    async def _async_renew_token(self, errors: dict[str, str]) -> SubentryFlowResult:
-        """Rename the token and extend its validity, then show the credentials again."""
-        entry = self._get_entry()
+    async def _async_renew_token(
+        self, script: dict[str, Any], renew: bool, errors: dict[str, str]
+    ) -> dict[str, Any] | None:
+        """Rename a script's token and, when asked, extend its validity; return the record."""
+        entry = self.config_entry
         options = provisioning_options(self.hass, entry)
-        token_id = self._data.get(DATA_TOKEN_ID)
+        token_id = script.get(DATA_TOKEN_ID)
         name = SERVICE_TOKEN_NAME_FMT.format(
-            hostname=options[CONF_HOSTNAME], name=self._data[CONF_CLIENT_NAME]
+            hostname=options[CONF_HOSTNAME], name=script[CONF_CLIENT_NAME]
         )
         try:
             api = await api_for(self.hass, entry)
             # a token deleted on Cloudflare is replaced, and the new secret shown
             if token_id and await api.get_service_token(token_id) is not None:
                 await api.rename_service_token(token_id, name)
-                token = await api.refresh_service_token(token_id)
-                self._data[DATA_TOKEN_EXPIRES_AT] = token.get("expires_at")
-            else:
-                token = await api.create_service_token(name)
-                self._data.update(
-                    {
-                        DATA_TOKEN_ID: token["id"],
-                        DATA_CLIENT_ID: token.get("client_id"),
-                        DATA_CLIENT_SECRET: token.get("client_secret"),
-                        DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
-                    }
-                )
+                if renew:
+                    token = await api.refresh_service_token(token_id)
+                    return {**script, DATA_TOKEN_EXPIRES_AT: token.get("expires_at")}
+                return script
+            return await self._async_create_token(script, errors)
         except CloudflareAuthError as err:
             _LOGGER.warning("The credential cannot manage service tokens: %s", err)
             errors["base"] = "missing_service_tokens_edit"
-            # as in `_async_create_token`: a new credential is needed
             entry.async_start_reauth(self.hass)
         except CloudflareUnavailableError:
             errors["base"] = "cannot_connect"
         except CloudflareApiError as err:
             _LOGGER.warning("Cloudflare refused to update the service token: %s", err)
             errors["base"] = "api_error"
-        else:
-            return self._credentials(self._data)
-        return self._form("reconfigure", self._data[CONF_CLIENT_NAME], errors)
+        return None
 
-    def _credentials(self, data: Mapping[str, Any]) -> SubentryFlowResult:
-        return self.async_show_form(
-            step_id="credentials",
-            data_schema=vol.Schema({}),
-            description_placeholders={
-                **FORM_PLACEHOLDERS,
-                CONF_CLIENT_NAME: data[CONF_CLIENT_NAME],
-                DATA_CLIENT_ID: data.get(DATA_CLIENT_ID) or "",
-                DATA_CLIENT_SECRET: data.get(DATA_CLIENT_SECRET) or "(unknown)",
-                DATA_TOKEN_EXPIRES_AT: _date_only(data.get(DATA_TOKEN_EXPIRES_AT)),
-            },
+
+def _names_selector(names: Mapping[str, str]) -> SelectSelector:
+    """Return a multi-select of the clients of a section, by name."""
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[SelectOptionDict(value=n, label=n) for n in names],
+            multiple=True,
+            mode=SelectSelectorMode.LIST,
         )
+    )
 
 
 def _date_only(value: Any) -> str:

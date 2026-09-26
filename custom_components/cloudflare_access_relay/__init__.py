@@ -11,9 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
-from types import MappingProxyType
 from typing import Any
-from urllib.parse import urlparse
 
 from homeassistant.auth import EVENT_USER_ADDED, EVENT_USER_REMOVED, EVENT_USER_UPDATED
 from homeassistant.config_entries import (
@@ -21,7 +19,6 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigEntryChange,
     ConfigEntryState,
-    ConfigSubentry,
 )
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, callback
@@ -37,6 +34,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import ulid as ulid_util
 
 from .application_credentials import async_register_project_client
 from .cloudflare_api import (
@@ -50,11 +48,13 @@ from .const import (
     CLIENT_APP_NAME_FMT,
     CONF_CLIENT_NAME,
     CONF_CLIENT_REDIRECT_URIS,
+    CONF_CONSOLE_APPS,
     CONF_DELETE_OBJECTS_ON_REMOVE,
     CONF_EMAIL,
     CONF_HOSTNAME,
     CONF_LOGIN_EMAILS,
     CONF_REDIRECT_URIS,
+    CONF_SCRIPTS,
     CONF_SERVICE_TOKEN_IDS,
     CONF_USER_ID,
     DATA_BYPASS_APP_ID,
@@ -74,17 +74,14 @@ from .const import (
     ISSUE_NO_EXTERNAL_URL,
     ISSUE_UPDATE_FAILED,
     KNOWN_REDIRECT_URIS,
+    LEGACY_CLIENT_SUBENTRY_TYPES,
     LEGACY_CONF_CLIENT_KIND,
     LEGACY_ISSUE_RESTART_REQUIRED,
-    LEGACY_SUBENTRY_TYPE_CLIENT,
     OPTION_APP_TAG,
     OPTION_IDP_IDS,
     RECONCILE_COOLDOWN_SECONDS,
     SERVICE_TOKEN_NAME_FMT,
-    SUBENTRY_TYPE_CONSOLE,
     SUBENTRY_TYPE_LOGIN_EMAIL,
-    SUBENTRY_TYPE_SCRIPT,
-    SUBENTRY_TYPE_SELF_REGISTERING,
 )
 from .edge_auth import async_install_middleware
 from .issues import issue_id
@@ -95,7 +92,6 @@ from .options import (
     api_for,
     app_tag,
     async_provisioning_options,
-    client_redirect_uris,
     console_clients,
     effective_options,
     provisioning_options,
@@ -172,9 +168,9 @@ class EntryData:
     policy_aud: str | None
     # The users' e-mail addresses on the allow policies, as last reconciled.
     emails: list[str]
-    # Login clients' Access applications, by subentry id, as last reconciled.
+    # Console apps' Access applications, by client id, as last reconciled.
     client_apps: dict[str, str]
-    # Script clients' service tokens, by subentry id, as last reconciled.
+    # Scripts' service tokens, by client id, as last reconciled.
     script_tokens: dict[str, str]
     logins: LoginCoordinator
 
@@ -200,74 +196,51 @@ def _async_migrate_login_email_rows(hass: HomeAssistant, entry: ConfigEntry) -> 
     )
 
 
-@callback
-def _async_migrate_redirect_uris(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Turn the former redirect-URL option into client subentries, one per URL."""
-    if not (uris := entry.options.get(CONF_CLIENT_REDIRECT_URIS)):
-        if CONF_CLIENT_REDIRECT_URIS in entry.options:
-            options = {k: v for k, v in entry.options.items() if k != CONF_CLIENT_REDIRECT_URIS}
-            hass.config_entries.async_update_entry(entry, options=options)
-        return
-    known = set(client_redirect_uris(entry))
-    for uri in uris:
-        if uri in known:
-            continue
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                data=MappingProxyType(
-                    {
-                        CONF_CLIENT_NAME: urlparse(uri).hostname or uri,
-                        CONF_REDIRECT_URIS: [uri],
-                    }
-                ),
-                subentry_type=SUBENTRY_TYPE_SELF_REGISTERING,
-                title=urlparse(uri).hostname or uri,
-                unique_id=None,
-            ),
-        )
-    options = {k: v for k, v in entry.options.items() if k != CONF_CLIENT_REDIRECT_URIS}
-    hass.config_entries.async_update_entry(entry, options=options)
+def _new_id() -> str:
+    return ulid_util.ulid_now()
 
 
 @callback
-def _async_migrate_client_types(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Give the clients of an earlier version the subentry type of their kind.
+def _async_migrate_client_subentries(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Move the clients of an earlier version from subentries into the options.
 
-    Until 0.3.0 every client was one subentry type with the kind in its data, and every
-    client that logged people in got an application. A subentry's type cannot change, so
-    each is replaced by one of the new type. A client whose callbacks are all published
-    ones of a self-registering app becomes that; its application, which such an app
-    cannot use, is dropped here and deleted at the next setup as an orphan. Anything else
-    that logged people in keeps its application as a console app.
+    Until 0.3.0 clients were subentries: one type with the kind in its data (and every
+    client that logged people in got an application), then briefly one type per kind.
+    A client whose kind is unknown becomes a self-registering app when its callbacks are
+    all published ones of such an app, else a console app. A self-registering app is
+    only its callbacks; its application, which such an app cannot use, is dropped and
+    deleted at the next setup as an orphan.
     """
     published = {uri for uri, _ in KNOWN_REDIRECT_URIS}
+    uris = list(entry.options.get(CONF_CLIENT_REDIRECT_URIS) or [])
+    console = dict(entry.options.get(CONF_CONSOLE_APPS) or {})
+    scripts = dict(entry.options.get(CONF_SCRIPTS) or {})
     for sub in list(entry.subentries.values()):
-        if sub.subentry_type != LEGACY_SUBENTRY_TYPE_CLIENT:
+        if sub.subentry_type not in LEGACY_CLIENT_SUBENTRY_TYPES:
             continue
         data = {k: v for k, v in sub.data.items() if k != LEGACY_CONF_CLIENT_KIND}
-        kind = sub.data.get(LEGACY_CONF_CLIENT_KIND)
-        uris = set(sub.data.get(CONF_REDIRECT_URIS) or [])
+        kind = sub.data.get(LEGACY_CONF_CLIENT_KIND) or sub.subentry_type
+        callbacks = set(data.get(CONF_REDIRECT_URIS) or [])
         if kind == "script":
-            subentry_type = SUBENTRY_TYPE_SCRIPT
-        elif kind == "console":
-            subentry_type = SUBENTRY_TYPE_CONSOLE
-        elif kind == "self_registering" or (uris and uris <= published):
-            subentry_type = SUBENTRY_TYPE_SELF_REGISTERING
-            for key in (DATA_CLIENT_APP_ID, DATA_CLIENT_ID, DATA_CLIENT_SECRET):
-                data.pop(key, None)
+            scripts[_new_id()] = data
+        elif kind in ("console", "console_app"):
+            console[_new_id()] = data
+        elif kind in ("self_registering", "self_registering_app") or (
+            callbacks and callbacks <= published
+        ):
+            uris.extend(sorted(callbacks))
         else:
-            subentry_type = SUBENTRY_TYPE_CONSOLE
+            console[_new_id()] = data
         hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                data=MappingProxyType(data),
-                subentry_type=subentry_type,
-                title=sub.title,
-                unique_id=None,
-            ),
-        )
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            **entry.options,
+            CONF_CLIENT_REDIRECT_URIS: sorted(set(uris)),
+            CONF_CONSOLE_APPS: console,
+            CONF_SCRIPTS: scripts,
+        },
+    )
 
 
 async def _async_migrate_service_token_option(
@@ -279,7 +252,8 @@ async def _async_migrate_service_token_option(
     """
     if CONF_SERVICE_TOKEN_IDS not in entry.options:
         return
-    known = {sub.data.get(DATA_TOKEN_ID) for sub in script_clients(entry).values()}
+    scripts = script_clients(entry)
+    known = {script.get(DATA_TOKEN_ID) for script in scripts.values()}
     for token_id in entry.options.get(CONF_SERVICE_TOKEN_IDS) or []:
         if token_id in known:
             continue
@@ -287,28 +261,26 @@ async def _async_migrate_service_token_option(
         if token is None:
             _LOGGER.warning("Service token %s no longer exists; it is dropped", token_id)
             continue
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                data=MappingProxyType(
-                    {
-                        CONF_CLIENT_NAME: token.get("name") or token_id,
-                        DATA_TOKEN_ID: token_id,
-                        DATA_CLIENT_ID: token.get("client_id"),
-                        # the earlier version never stored the secret and Cloudflare
-                        # cannot return it, so the client shows it as unknown until
-                        # the token is replaced
-                        DATA_CLIENT_SECRET: None,
-                        DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
-                    }
-                ),
-                subentry_type=SUBENTRY_TYPE_SCRIPT,
-                title=token.get("name") or token_id,
-                unique_id=None,
-            ),
-        )
+        scripts[_new_id()] = {
+            CONF_CLIENT_NAME: token.get("name") or token_id,
+            DATA_TOKEN_ID: token_id,
+            DATA_CLIENT_ID: token.get("client_id"),
+            # the earlier version never stored the secret and Cloudflare cannot return
+            # it, so the script shows it as unknown until the token is renewed
+            DATA_CLIENT_SECRET: None,
+            DATA_TOKEN_EXPIRES_AT: token.get("expires_at"),
+        }
     options = {k: v for k, v in entry.options.items() if k != CONF_SERVICE_TOKEN_IDS}
-    hass.config_entries.async_update_entry(entry, options=options)
+    hass.config_entries.async_update_entry(entry, options={**options, CONF_SCRIPTS: scripts})
+
+
+@callback
+def _async_store_client(
+    hass: HomeAssistant, entry: ConfigEntry, section: str, cid: str, data: dict[str, Any]
+) -> None:
+    """Write one client's record into the options (a section: console apps or scripts)."""
+    clients = {**(entry.options.get(section) or {}), cid: data}
+    hass.config_entries.async_update_entry(entry, options={**entry.options, section: clients})
 
 
 def _token_name(options: dict[str, Any], name: str) -> str:
@@ -318,32 +290,34 @@ def _token_name(options: dict[str, Any], name: str) -> str:
 async def _async_reconcile_scripts(
     hass: HomeAssistant, entry: ConfigEntry, api: CloudflareAccessApi, options: dict[str, Any]
 ) -> dict[str, str]:
-    """Bring the script clients' service tokens in line with the subentries.
+    """Bring the scripts' service tokens in line with the options.
 
-    Tokens of removed clients are left to `_async_delete_stale_tokens`, which runs
+    Tokens of removed scripts are left to `_async_delete_stale_tokens`, which runs
     once the gate no longer names them.
     """
     tokens: dict[str, str] = {}
-    for sid, sub in script_clients(entry).items():
-        token_id = sub.data.get(DATA_TOKEN_ID)
+    for sid, script in script_clients(entry).items():
+        token_id = script.get(DATA_TOKEN_ID)
         if token_id and (token := await api.get_service_token(token_id)) is not None:
             tokens[sid] = token_id
-            wanted = _token_name(options, sub.data[CONF_CLIENT_NAME])
-            if token.get("name") != wanted:  # the hostname or the client's name changed
+            wanted = _token_name(options, script[CONF_CLIENT_NAME])
+            if token.get("name") != wanted:  # the hostname or the script's name changed
                 await api.rename_service_token(token_id, wanted)
             continue
-        created = await api.create_service_token(_token_name(options, sub.data[CONF_CLIENT_NAME]))
+        created = await api.create_service_token(_token_name(options, script[CONF_CLIENT_NAME]))
         _LOGGER.warning(
-            "The service token of client %s was gone and has been replaced; give the script "
-            "the new Client ID and secret shown in the client's settings",
-            sub.title,
+            "The service token of script %s was gone and has been replaced; give the script "
+            "the new Client ID and secret, shown under the integration's options",
+            script[CONF_CLIENT_NAME],
         )
         tokens[sid] = created["id"]
-        hass.config_entries.async_update_subentry(
+        _async_store_client(
+            hass,
             entry,
-            sub,
-            data={
-                **sub.data,
+            CONF_SCRIPTS,
+            sid,
+            {
+                **script,
                 DATA_TOKEN_ID: created["id"],
                 DATA_CLIENT_ID: created.get("client_id"),
                 DATA_CLIENT_SECRET: created.get("client_secret"),
@@ -386,32 +360,32 @@ async def _async_reconcile_clients(
     options: dict[str, Any],
     emails: list[str],
 ) -> dict[str, str]:
-    """Bring the console clients' applications in line with the subentries.
+    """Bring the console apps' applications in line with the options.
 
-    Applications of removed clients are left to `_async_delete_stale_clients`, which
-    runs once the gate no longer names them.
+    Applications of removed apps are left to `_async_delete_stale_clients`, which runs
+    once the gate no longer names them.
     """
     apps: dict[str, str] = {}
-    for sid, sub in console_clients(entry).items():
+    for cid, client in console_clients(entry).items():
         desired = desired_client_app(
-            options, emails, sub.data[CONF_CLIENT_NAME], list(sub.data[CONF_REDIRECT_URIS])
+            options, emails, client[CONF_CLIENT_NAME], list(client[CONF_REDIRECT_URIS])
         )
         writes: list[str] = []
-        app = await reconcile_app(api, sub.data.get(DATA_CLIENT_APP_ID), desired, writes)
-        apps[sid] = app["id"]
+        app = await reconcile_app(api, client.get(DATA_CLIENT_APP_ID), desired, writes)
+        apps[cid] = app["id"]
         saas = app.get("saas_app") or {}
         derived = {DATA_CLIENT_APP_ID: app["id"], DATA_CLIENT_ID: saas.get("client_id")}
         # Cloudflare returns the secret only in the create response (docs/verified-cloudflare-behaviour.md), so its presence means the application was (re)created.
         if saas.get("client_secret"):
             derived[DATA_CLIENT_SECRET] = saas["client_secret"]
-            if sub.data.get(DATA_CLIENT_APP_ID):
+            if client.get(DATA_CLIENT_APP_ID):
                 _LOGGER.warning(
-                    "The Access application of client %s was recreated; give its console the "
-                    "new client id and secret shown in the client's settings",
-                    sub.title,
+                    "The Access application of app %s was recreated; give its console the "
+                    "new client id and secret, shown under the integration's options",
+                    client[CONF_CLIENT_NAME],
                 )
-        if any(sub.data.get(k) != v for k, v in derived.items()):
-            hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, **derived})
+        if any(client.get(k) != v for k, v in derived.items()):
+            _async_store_client(hass, entry, CONF_CONSOLE_APPS, cid, {**client, **derived})
         if writes:
             _LOGGER.info("Cloudflare Access objects written: %s", ", ".join(writes))
     return apps
@@ -522,7 +496,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version > 1:
         return False
     if entry.minor_version < 2:
-        _async_migrate_redirect_uris(hass, entry)
         _async_migrate_login_email_rows(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=2)
     if entry.minor_version < 3:
@@ -539,9 +512,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
             dev_reg.async_remove_device(device.id)
         hass.config_entries.async_update_entry(entry, minor_version=4)
-    if entry.minor_version < 5:
-        _async_migrate_client_types(hass, entry)
-        hass.config_entries.async_update_entry(entry, minor_version=5)
+    if entry.minor_version < 6:
+        _async_migrate_client_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, minor_version=6)
     return True
 
 
@@ -850,10 +823,10 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             app_tag(entry),
             entry.data.get(DATA_GATE_APP_ID),
             entry.data.get(DATA_BYPASS_APP_ID),
-            *(sub.data.get(DATA_CLIENT_APP_ID) for sub in console_clients(entry).values()),
+            *(app.get(DATA_CLIENT_APP_ID) for app in console_clients(entry).values()),
         )
-        for sub in script_clients(entry).values():
-            if sub.data.get(DATA_TOKEN_ID):
-                await api.delete_service_token(sub.data[DATA_TOKEN_ID])
+        for script in script_clients(entry).values():
+            if script.get(DATA_TOKEN_ID):
+                await api.delete_service_token(script[DATA_TOKEN_ID])
     except (CloudflareAuthError, CloudflareUnavailableError, CloudflareApiError) as err:
         _LOGGER.warning("Could not delete the Access objects; remove them by hand: %s", err)
