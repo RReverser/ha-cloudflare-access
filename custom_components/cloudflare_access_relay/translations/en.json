@@ -197,14 +197,14 @@
   },
   "config_subentries": {
     "self_registering_app": {
-      "entry_type": "App that registers itself",
+      "entry_type": "Self-registering app",
       "initiate_flow": {
-        "user": "Add an app that registers itself",
+        "user": "Add self-registering app",
         "reconfigure": "Change the app"
       },
       "step": {
         "user": {
-          "title": "An app that registers itself",
+          "title": "Self-registering app",
           "description": "e.g. Claude, ChatGPT. It finds the login on its own and registers with the gate ([managed OAuth]({docs_managed_oauth})); nothing is created for it, only its callback URL is allowed. Removing it stops new logins at once; a login it already holds lasts until the session duration runs out.",
           "data": {
             "name": "Name",
@@ -237,14 +237,14 @@
       }
     },
     "console_app": {
-      "entry_type": "App with a client ID and secret",
+      "entry_type": "App with client credentials",
       "initiate_flow": {
-        "user": "Add an app with a client ID and secret",
+        "user": "Add app with client credentials",
         "reconfigure": "Change the app"
       },
       "step": {
         "user": {
-          "title": "An app whose console asks for a client ID and secret",
+          "title": "App with client credentials",
           "description": "e.g. Google Home, Alexa. It gets [an Access login]({docs_saas_apps}) of its own; the next page shows the client ID, secret and URLs the console asks for. Removing it deletes that login.",
           "data": {
             "name": "Name",
@@ -286,12 +286,12 @@
     "script": {
       "entry_type": "Script",
       "initiate_flow": {
-        "user": "Add a script",
+        "user": "Add script",
         "reconfigure": "Change the script"
       },
       "step": {
         "user": {
-          "title": "A script or service with its own credentials",
+          "title": "Script",
           "description": "e.g. a backup job, a monitoring probe on another machine. It runs with nobody behind it and gets [an Access service token]({docs_service_tokens}) to send with every request; the next page shows it. Removing it deletes the token.",
           "data": {
             "name": "Name"
