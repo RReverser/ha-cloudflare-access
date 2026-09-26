@@ -151,7 +151,7 @@ OPTION_IDP_IDS: Final = "idp_ids"
 # Shown by Access to a person who logged in but is not on the allow list. Cloudflare
 # allows at most 75 characters and refuses punctuation (", . ! : @ ? -" by its own
 # message; a semicolon was refused too), so letters, digits and spaces only.
-DENY_MESSAGE: Final = "Not allowed in yet ask the Home Assistant owner to add you under People"
+DENY_MESSAGE: Final = "Not allowed in yet so ask the Home Assistant owner to add you under People"
 
 # Access application names: readable in the dashboard, and the way an application is
 # found again when the stored ids are lost (together with the tag).
